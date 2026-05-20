@@ -136,6 +136,25 @@ void Grammar::add_ignore(std::string parser_name) {
     auto it = parsers_.find(parser_name);
     assert(it != parsers_.end());
     ignore_.push_back(it->second.get());
+    ignore_names_.push_back(std::move(parser_name));
+}
+
+void Grammar::on_rule_complete(const std::string& rule_name, RuleCallback cb) {
+    auto it = named_rules_.find(rule_name);
+    assert(it != named_rules_.end() && "on_rule_complete: unknown rule");
+    callbacks_by_node_[it->second.value()].push_back(std::move(cb));
+}
+
+void Grammar::replace_parser(std::unique_ptr<Parser> p) const {
+    std::string name = p->name();
+    parsers_[name] = std::move(p);
+    // If this parser was on the ignore list, refresh the pointer so the
+    // driver's ignore loop picks up the new instance.
+    for (std::size_t i = 0; i < ignore_names_.size(); ++i) {
+        if (ignore_names_[i] == name) {
+            ignore_[i] = parsers_[name].get();
+        }
+    }
 }
 
 void Grammar::set_top(NodeId node) {
@@ -223,6 +242,57 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     ValuePtr result_value;
     bool parse_finished = false;   // true once the top frame pops successfully
 
+    // Rule-callback machinery -------------------------------------------
+    //
+    // pending_per_mark[i] is the queue of callbacks-to-fire that
+    // accumulated while stream mark #i was active. On sr.accept() we
+    // pop the back queue and either fire its contents (if no outer
+    // mark) or merge them into the new back queue (their fate now
+    // depends on the outer mark's resolution). On sr.reject() we pop
+    // and discard — callbacks in a rejected branch never fire.
+    struct PendingCallback {
+        RuleCallback cb;
+        ValuePtr     value;
+    };
+    std::vector<std::vector<PendingCallback>> pending_per_mark;
+
+    auto fire_or_queue = [&](const RuleCallback& cb, ValuePtr v) {
+        if (pending_per_mark.empty()) {
+            cb(v);
+        } else {
+            pending_per_mark.back().push_back({cb, std::move(v)});
+        }
+    };
+
+    auto fire_callbacks_for_frame = [&](Frame& popped) {
+        auto it = callbacks_by_node_.find(popped.node_id().value());
+        if (it == callbacks_by_node_.end()) return;
+        ValuePtr v = popped.result();
+        for (const auto& cb : it->second) {
+            fire_or_queue(cb, v);
+        }
+    };
+
+    auto on_mark_accept = [&]() {
+        sr.accept();
+        if (pending_per_mark.empty()) return;
+        auto popped_q = std::move(pending_per_mark.back());
+        pending_per_mark.pop_back();
+        if (pending_per_mark.empty()) {
+            for (auto& p : popped_q) p.cb(p.value);
+        } else {
+            auto& outer = pending_per_mark.back();
+            for (auto& p : popped_q) outer.push_back(std::move(p));
+        }
+    };
+
+    auto on_mark_reject = [&]() {
+        sr.reject();
+        if (!pending_per_mark.empty()) {
+            pending_per_mark.pop_back();
+        }
+    };
+
     // Advance after a child has just completed successfully. Pops frames
     // until we either find one with more work to do, or reach the top.
     auto advance_after_child = [&]() {
@@ -235,7 +305,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 // this Choice was backtracking and had marked the stream
                 // for the just-succeeded alternative, accept that mark.
                 if (top.has_mark()) {
-                    sr.accept();
+                    on_mark_accept();
                     top.set_has_mark(false);
                 }
                 more = false;
@@ -258,6 +328,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             Frame popped = std::move(stack.back());
             stack.pop_back();
             popped.finish(pool);
+            fire_callbacks_for_frame(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -288,6 +359,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             if (popped.kind() == NodeKind::Repeat) {
                 // Iteration ended -- accept what we collected so far.
                 popped.finish(pool);
+                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -304,7 +376,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 // Reject it now so the stream rewinds to the position
                 // before this alternative was tried.
                 if (popped.has_mark()) {
-                    sr.reject();
+                    on_mark_reject();
                     popped.set_has_mark(false);
                 }
                 if (popped.step_next()) {
@@ -341,6 +413,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
                     popped.finish(pool);
+                    fire_callbacks_for_frame(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -375,6 +448,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
                     popped.finish(pool);
+                    fire_callbacks_for_frame(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -395,6 +469,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             Frame popped = std::move(stack.back());
             stack.pop_back();
             popped.finish(pool);
+            fire_callbacks_for_frame(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -414,6 +489,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 // alternative failure) before we move on.
                 if (top.is_backtrack() && !top.has_mark()) {
                     sr.mark();
+                    pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
                 push_node(stack, *this, top.current_child());
@@ -421,6 +497,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
+                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -441,6 +518,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
+                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;

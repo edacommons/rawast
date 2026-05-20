@@ -59,8 +59,17 @@ public:
 // a grammar-design concern. Order grammar alternatives so any
 // reserved-word Key matches come before the catch-all Parse(identifier).
 class IdentifierParser final : public Parser {
+    std::string extra_lead_;    // additional chars valid at first position
+    std::string extra_cont_;    // additional chars valid in continuation
 public:
     IdentifierParser();
+    // Parameterised: extra characters that can appear in identifiers
+    // beyond the C-family default. Use to teach the parser about
+    // format-specific identifier chars discovered at parse time — e.g.
+    // LEF's DIVIDERCHAR "/" becomes an extra continuation char after
+    // the preamble parses (wired through Grammar::replace_parser from
+    // an on_rule_complete callback).
+    IdentifierParser(std::string extra_lead, std::string extra_cont);
     ParseResult parse(StreamReader& sr) override;
     SaveResult  unparse(const Value& value) const override;
 };

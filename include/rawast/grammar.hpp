@@ -8,6 +8,8 @@
 
 #include <tl/expected.hpp>
 
+#include <cstddef>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -62,6 +64,34 @@ public:
     void register_rule(std::string name, NodeId node);
     void register_parser(std::unique_ptr<Parser> p);
     void add_ignore(std::string parser_name);
+
+    // --- Mid-parse hooks: rule callbacks and parser replacement -------
+    //
+    // Some formats (LEF/DEF, Liberty, Verilog) have preambles that
+    // declare how later content should be tokenised — e.g. LEF's
+    //   DIVIDERCHAR "/" ;
+    //   BUSBITCHARS "[]" ;
+    // After parsing the declaration, the identifier terminal needs to
+    // accept those characters for the rest of the file. The callback +
+    // replace_parser pair lets a host program react to a completed rule
+    // and swap a parser in the registry; the driver picks up the new
+    // parser for subsequent input.
+    //
+    // Callbacks fire on COMMIT, not on tentative match. If a callback's
+    // rule completes inside a backtracking Choice that is later
+    // rejected, the callback never fires. The driver queues callbacks
+    // under active stream marks and flushes them on accept, discards on
+    // reject. This is what makes the mechanism safe: a parser swap in a
+    // rejected branch would otherwise corrupt the rest of the parse.
+    using RuleCallback = std::function<void(const ValuePtr&)>;
+    void on_rule_complete(const std::string& rule_name, RuleCallback cb);
+
+    // Add or replace a terminal parser by name. The new parser owns its
+    // own state; callers transferring lookup tables (char classes, etc.)
+    // do so via the parser's constructor. Marked const because the
+    // parser registry is mutable — replace_parser is intended to be
+    // called from within a rule callback during parse().
+    void replace_parser(std::unique_ptr<Parser> p) const;
 
     void set_top(NodeId node);
     NodeId top() const noexcept { return top_; }
@@ -125,8 +155,18 @@ public:
 private:
     std::vector<Node> nodes_;
     std::map<std::string, NodeId> named_rules_;
-    std::map<std::string, std::unique_ptr<Parser>> parsers_;
-    std::vector<Parser*> ignore_;
+    // mutable: replace_parser() swaps entries during parse, called from
+    // RuleCallbacks that fire inside the const parse() driver.
+    mutable std::map<std::string, std::unique_ptr<Parser>> parsers_;
+    // ignore_ is rebuilt from parsers_ on every replace_parser() call so
+    // a swap stays consistent if the swapped parser was on the ignore
+    // list. mutable for the same reason as parsers_.
+    mutable std::vector<Parser*> ignore_;
+    // Insertion order of ignore_ — replace_parser preserves it.
+    std::vector<std::string> ignore_names_;
+    // Rule-completion callbacks, keyed by the rule's body NodeId
+    // (the post-Ref-resolution arena id, which is also Frame::node_id()).
+    std::map<std::size_t, std::vector<RuleCallback>> callbacks_by_node_;
     NodeId top_;
 
     NodeId allocate_(NodeKind kind);

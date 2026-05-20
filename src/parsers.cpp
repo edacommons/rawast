@@ -320,13 +320,25 @@ SaveResult DoubleQuoteStringParser::unparse(const Value& value) const {
 
 IdentifierParser::IdentifierParser() : Parser("identifier") {}
 
+IdentifierParser::IdentifierParser(std::string extra_lead, std::string extra_cont)
+    : Parser("identifier"),
+      extra_lead_(std::move(extra_lead)),
+      extra_cont_(std::move(extra_cont)) {}
+
 ParseResult IdentifierParser::parse(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
     auto first = sr.peek();
-    if (!first ||
-        !(std::isalpha(static_cast<unsigned char>(*first)) || *first == '_')) {
+    auto is_lead = [&](char c) {
+        if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') return true;
+        return extra_lead_.find(c) != std::string::npos;
+    };
+    auto is_cont = [&](char c) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') return true;
+        return extra_cont_.find(c) != std::string::npos;
+    };
+    if (!first || !is_lead(*first)) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected identifier"});
     }
@@ -338,7 +350,7 @@ ParseResult IdentifierParser::parse(StreamReader& sr) {
     while (true) {
         auto c = sr.peek();
         if (!c) break;
-        if (std::isalnum(static_cast<unsigned char>(*c)) || *c == '_') {
+        if (is_cont(*c)) {
             out.push_back(*c);
             sr.get();
         } else {
