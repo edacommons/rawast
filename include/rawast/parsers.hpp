@@ -51,6 +51,20 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
+// Identifier in the C-family sense: starts with letter or underscore,
+// continues with letter / digit / underscore. Produces a StringValue
+// holding the matched identifier text.
+//
+// Note: this parser does NOT enforce "not a reserved keyword" — that's
+// a grammar-design concern. Order grammar alternatives so any
+// reserved-word Key matches come before the catch-all Parse(identifier).
+class IdentifierParser final : public Parser {
+public:
+    IdentifierParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Double-quoted string. Backslash escape sequences are preserved verbatim
 // in the output (this is the pass-through mode from the prototype — the
 // engine does not interpret escapes; higher-level code can if needed).

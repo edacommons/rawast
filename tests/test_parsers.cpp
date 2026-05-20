@@ -241,6 +241,64 @@ TEST_CASE("DoubleQuoteStringParser parses empty string") {
     CHECK(s->data().empty());
 }
 
+// IdentifierParser --------------------------------------------------------
+
+TEST_CASE("IdentifierParser matches alpha-start identifier") {
+    IdentifierParser p;
+    auto r = parse_text(p, "hello");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "hello");
+}
+
+TEST_CASE("IdentifierParser matches underscore-start identifier") {
+    IdentifierParser p;
+    auto r = parse_text(p, "_priv");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "_priv");
+}
+
+TEST_CASE("IdentifierParser accepts digits after first character") {
+    IdentifierParser p;
+    auto r = parse_text(p, "x1y2_z3");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "x1y2_z3");
+}
+
+TEST_CASE("IdentifierParser stops at non-identifier character") {
+    std::istringstream is{"abc-def"};
+    StreamReader sr{is};
+    IdentifierParser p;
+    auto r = p.parse(sr);
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "abc");
+    CHECK(sr.get() == '-');
+}
+
+TEST_CASE("IdentifierParser rejects leading digit") {
+    IdentifierParser p;
+    CHECK_FALSE(parse_text(p, "1abc"));
+}
+
+TEST_CASE("IdentifierParser rejects empty input") {
+    IdentifierParser p;
+    CHECK_FALSE(parse_text(p, ""));
+}
+
+TEST_CASE("IdentifierParser unparse round-trips a StringValue") {
+    IdentifierParser p;
+    auto r = p.unparse(*make_string("hello"));
+    REQUIRE(r);
+    CHECK(*r == "hello");
+}
+
 // LineCommentParser -------------------------------------------------------
 
 TEST_CASE("LineCommentParser matches // to end of line") {

@@ -2,21 +2,24 @@
 // grammars/rawast.json
 // JSON-form grammar definition for parsing .rawast source files.
 //
-// STATUS: draft. Some constructs require engine extensions before this
-// file can actually be loaded and used to parse .rawast files. See the
-// "TODO" comments inline and §8 of docs/rawast-format.md for the list:
+// STATUS: design draft. The engine has the required prerequisites in
+// place (IdentifierParser, Value+is_name flag honoured in the catcher,
+// {"type":"value"} in the JSON-grammar format), but this file does not
+// yet produce a JSON-grammar-format tree directly. The structural shape
+// of the produced tree must be such that the JSON-grammar loader can
+// consume it; the open issue is that the catcher absorbs all Value-kind
+// constants at construction time, which puts name markers before any
+// values when interleaved at the same Sequence level.
 //
-//   1. An `identifier` terminal parser ([a-zA-Z_][a-zA-Z0-9_]*) with
-//      not-followed-by-identifier-char lookahead so keywords like
-//      `sequence` don't match the start of `sequencing`.
-//   2. Value-kind nodes honouring the `is_name` flag in the catcher
-//      absorber (the `name=@` binding form depends on emitting fixed
-//      strings as dict-key names).
-//   3. JSON-grammar-format additions: a `{"type":"value",...}` node
-//      kind that emits a constant value (used for the `name=@` desugar).
+// Two ways to close the gap (planned, see docs/rawast-format.md §8):
+//   (a) refactor the Frame absorber so Value-kind frames are iterated
+//       rather than absorbed at construction, restoring positional
+//       interleaving with other children;
+//   (b) wrap each (name, value) pair in its own sub-Sequence so the
+//       absorption order matches the desired emission order.
 //
-// Until those land, this file documents the design and can be used as
-// a reference for the loader implementation.
+// Until one of those lands, this file documents the intended structure
+// and serves as the loader's reference target.
 // =========================================================================
 
 {

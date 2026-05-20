@@ -2,10 +2,10 @@
 
 Status: **Draft / pre-implementation.** This document specifies the source-text
 format that rawast grammars are written in. The engine bootstraps via JSON
-grammar files; `.rawast` is the future canonical hand-authoring format and the
-first proof point of the architectural property that the grammar source format
-is swappable without affecting the engine, the `.jast` container, or any
-consumer (§3.8(c) of the project proposal).
+grammar files; `.rawast` is the canonical hand-authoring format. The two
+serialisations describe the same in-memory grammar data; swapping between
+them is a loader-level concern that does not affect the engine, the `.jast`
+container, or any downstream consumer of parsed data.
 
 ## 1. Overview
 
@@ -304,9 +304,9 @@ choice_expr ::= 'choice' '{' items '}'
 ```
 
 Ordered alternation: the first alternative whose initial terminal
-accepts is selected (predictive PEG; see §2.4 of the proposal). All
-alternatives must be terminal-prefix-distinguishable; the grammar
-linter (planned, M1) flags violations.
+accepts is selected (predictive PEG; rawast does not backtrack at the
+structural level). All alternatives must be terminal-prefix-
+distinguishable; the grammar linter (planned) flags violations.
 
 ### 4.8 Repeat — `repeat expression [separator expression]`
 
@@ -469,7 +469,7 @@ This format spec is finalised at the design level. Implementing the
 1. **A `.rawast` grammar definition** (in JSON form initially, since the
    engine boostraps from JSON). The grammar produces an `AstValue` tree
    shaped identically to a JSON grammar file's parsed output.
-2. **The JSON-grammar loader** (planned M1 work) — walks an `AstValue`
+2. **The JSON-grammar loader** — walks an `AstValue`
    tree and constructs a `Grammar` via the builder API.
 3. **An `IdentifierParser` terminal** (`[a-zA-Z_][a-zA-Z0-9_]*`) with
    a "not followed by an identifier character" check, used to match

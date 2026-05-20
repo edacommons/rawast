@@ -316,6 +316,49 @@ SaveResult DoubleQuoteStringParser::unparse(const Value& value) const {
     return "\"" + sv->data() + "\"";
 }
 
+// IdentifierParser --------------------------------------------------------
+
+IdentifierParser::IdentifierParser() : Parser("identifier") {}
+
+ParseResult IdentifierParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto first = sr.peek();
+    if (!first ||
+        !(std::isalpha(static_cast<unsigned char>(*first)) || *first == '_')) {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected identifier"});
+    }
+
+    std::string out;
+    out.push_back(*first);
+    sr.get();
+
+    while (true) {
+        auto c = sr.peek();
+        if (!c) break;
+        if (std::isalnum(static_cast<unsigned char>(*c)) || *c == '_') {
+            out.push_back(*c);
+            sr.get();
+        } else {
+            break;
+        }
+    }
+
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult IdentifierParser::unparse(const Value& value) const {
+    auto sv = dynamic_cast<const StringValue*>(&value);
+    if (!sv) {
+        return tl::unexpected(SaveError{
+            "IdentifierParser::unparse expects StringValue"});
+    }
+    return sv->data();
+}
+
 // LineCommentParser -------------------------------------------------------
 
 LineCommentParser::LineCommentParser() : Parser("line_comment") {}
