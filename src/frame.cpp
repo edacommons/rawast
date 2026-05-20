@@ -15,20 +15,21 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     is_name_        = n.is_name;
     has_separator_  = n.has_separator;
 
-    // Absorb Value-kind children as constants directly into the catcher.
-    // Other children get iterated by the driver.
-    //
-    // The Value-kind Node's is_name flag is honoured here — that's what
-    // lets grammars emit fixed strings as dict-key names without going
-    // through a parser. Used by the .rawast `name=@` binding desugar.
+    // Value-kind frames pre-seed emitted_ with their own constant; the
+    // driver pops them immediately after construction, so the constant
+    // flows up to the parent at the correct positional moment in the
+    // child-iteration order (not at frame-construction time, which is
+    // what an absorber approach would do).
+    if (kind_ == NodeKind::Value && n.value) {
+        emitted_.push_back({n.value, is_name_});
+    }
+
+    // All children — including Value-kind — go into children_ for the
+    // driver to iterate. This preserves positional interleaving between
+    // Value-kind name markers and value-producing siblings within a
+    // dict-container Sequence (the .rawast `name=@` binding pattern).
     for (NodeId child_id : n.children) {
-        NodeId resolved = g.resolve_ref(child_id);
-        const Node& child = g.node(resolved);
-        if (child.kind == NodeKind::Value && child.value) {
-            emitted_.push_back({child.value, child.is_name});
-        } else {
-            children_.push_back(child_id);
-        }
+        children_.push_back(child_id);
     }
 
     // Repeat-with-separator: children_[0] is the separator. Start past it

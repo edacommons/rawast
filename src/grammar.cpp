@@ -231,6 +231,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 break;
             case NodeKind::Sequence:
             case NodeKind::Repeat:
+            case NodeKind::Key:
+            case NodeKind::Parse:
+                // Key and Parse iterate their (typically Value-kind)
+                // children after the terminal succeeds; same iteration
+                // model as Sequence.
                 more = top.step_next();
                 break;
             default:
@@ -306,18 +311,22 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             KeyParser p(sv->data());
             auto r = p.parse(sr);
             if (r) {
-                // Key matched. Don't push the literal as a value -- the
-                // Key node may have Value-kind children that already
-                // populated emitted_ with the constants to flow up.
-                Frame popped = std::move(stack.back());
-                stack.pop_back();
-                popped.finish(pool);
-                if (stack.empty()) {
-                    result_value = popped.result();
-                    break;
+                // Key matched. The literal itself is not emitted; any
+                // Value-kind children, however, contribute their
+                // constants when iterated.
+                if (top.has_current()) {
+                    push_node(stack, *this, top.current_child());
+                } else {
+                    Frame popped = std::move(stack.back());
+                    stack.pop_back();
+                    popped.finish(pool);
+                    if (stack.empty()) {
+                        result_value = popped.result();
+                        break;
+                    }
+                    popped.pass_values_to(stack.back());
+                    advance_after_child();
                 }
-                popped.pass_values_to(stack.back());
-                advance_after_child();
             } else {
                 handle_failure(r.error());
             }
@@ -338,18 +347,37 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 // ValuePtr across the entire parse.
                 ValuePtr canonical = pool.intern(*r);
                 top.add_value(canonical, top.is_name());
-                Frame popped = std::move(stack.back());
-                stack.pop_back();
-                popped.finish(pool);
-                if (stack.empty()) {
-                    result_value = popped.result();
-                    break;
+                if (top.has_current()) {
+                    push_node(stack, *this, top.current_child());
+                } else {
+                    Frame popped = std::move(stack.back());
+                    stack.pop_back();
+                    popped.finish(pool);
+                    if (stack.empty()) {
+                        result_value = popped.result();
+                        break;
+                    }
+                    popped.pass_values_to(stack.back());
+                    advance_after_child();
                 }
-                popped.pass_values_to(stack.back());
-                advance_after_child();
             } else {
                 handle_failure(r.error());
             }
+            break;
+        }
+
+        case NodeKind::Value: {
+            // Frame ctor already pre-seeded emitted_ with this node's
+            // constant (honouring is_name). Just pop and bubble up.
+            Frame popped = std::move(stack.back());
+            stack.pop_back();
+            popped.finish(pool);
+            if (stack.empty()) {
+                result_value = popped.result();
+                break;
+            }
+            popped.pass_values_to(stack.back());
+            advance_after_child();
             break;
         }
 
@@ -374,9 +402,8 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         }
 
         default:
-            // Ref absorbed by resolve_ref at push time; Value absorbed by
-            // Frame constructor. Neither should appear as a top frame.
-            assert(false && "unreachable: Ref or Value at top of parse stack");
+            // Ref resolved at push time; should never reach a top frame.
+            assert(false && "unreachable: Ref at top of parse stack");
             handle_failure(ParseError{sr.position(), "internal: unexpected node kind"});
             break;
         }
