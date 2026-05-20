@@ -20,6 +20,17 @@ add_executable(rawast_tests
     test_json.cpp
     test_pool.cpp
     test_save.cpp
+    test_loader.cpp
+)
+
+# Tests reference grammar files via relative path from the test working
+# directory; set the working directory so "grammars/json.json" resolves
+# from the project root regardless of where ctest is invoked from.
+set_target_properties(rawast_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+set_tests_properties(${doctest_tests} PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
 target_link_libraries(rawast_tests

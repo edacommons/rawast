@@ -158,6 +158,16 @@ NodeId Grammar::resolve_ref(NodeId id) const {
     return id;
 }
 
+bool Grammar::has_rule(const std::string& name) const noexcept {
+    return named_rules_.find(name) != named_rules_.end();
+}
+
+NodeId Grammar::rule_id(const std::string& name) const noexcept {
+    auto it = named_rules_.find(name);
+    if (it == named_rules_.end()) return NodeId{};
+    return it->second;
+}
+
 Parser* Grammar::parser(const std::string& name) const {
     auto it = parsers_.find(name);
     return it == parsers_.end() ? nullptr : it->second.get();

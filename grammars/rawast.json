@@ -1,0 +1,165 @@
+// =========================================================================
+// grammars/rawast.json
+// JSON-form grammar definition for parsing .rawast source files.
+//
+// STATUS: draft. Some constructs require engine extensions before this
+// file can actually be loaded and used to parse .rawast files. See the
+// "TODO" comments inline and §8 of docs/rawast-format.md for the list:
+//
+//   1. An `identifier` terminal parser ([a-zA-Z_][a-zA-Z0-9_]*) with
+//      not-followed-by-identifier-char lookahead so keywords like
+//      `sequence` don't match the start of `sequencing`.
+//   2. Value-kind nodes honouring the `is_name` flag in the catcher
+//      absorber (the `name=@` binding form depends on emitting fixed
+//      strings as dict-key names).
+//   3. JSON-grammar-format additions: a `{"type":"value",...}` node
+//      kind that emits a constant value (used for the `name=@` desugar).
+//
+// Until those land, this file documents the design and can be used as
+// a reference for the loader implementation.
+// =========================================================================
+
+{
+  "start": "FILE",
+
+  // A file is a top-level dict: rule_name -> rule_body.
+  // The bare repeat of RULE_DEF accumulates name/value pairs into the
+  // outer dict catcher.
+  "FILE": {
+    "type": "sequence",
+    "container": "dict",
+    "items": [
+      {"type": "repeat", "item": "RULE_DEF"}
+    ]
+  },
+
+  // A rule definition: identifier ":" body.
+  // The identifier is var=true so the dict catcher uses it as the name.
+  "RULE_DEF": {
+    "type": "sequence",
+    "items": [
+      {"type": "identifier", "var": true},  // TODO: identifier parser
+      ":",
+      "EXPR"
+    ]
+  },
+
+  // Top-level expression. Ordered for predictive PEG: the alternatives
+  // with distinctive initial terminals come first; the catch-all bare
+  // identifier (PARSE) comes last.
+  "EXPR": {
+    "type": "choice",
+    "items": [
+      "OPTIONAL_EXPR",
+      "REF",
+      "SEQUENCE_EXPR",
+      "CHOICE_EXPR",
+      "REPEAT_EXPR",
+      "KEY_EXPR",
+      "PARSE_EXPR"
+    ]
+  },
+
+  // <NAME> — reference to a named rule.
+  "REF": {
+    "type": "sequence",
+    "items": [
+      "<",
+      {"type": "identifier", "var": true},
+      ">"
+    ]
+  },
+
+  // "text" — literal token. Optionally followed by ":CONSTANT" to attach
+  // a Value-child constant emission (the null/true/false/@-as-self
+  // discriminator pattern).
+  // TODO: when KEY_VALUE_SUFFIX matches, emit a Value-kind child carrying
+  // the constant.
+  "KEY_EXPR": {
+    "type": "sequence",
+    "items": [
+      {"type": "string"},
+      "?KEY_VALUE_SUFFIX"  // TODO: this isn't valid syntax in JSON grammar
+                           // form yet — represents an optional sub-rule
+    ]
+  },
+
+  // ":" CONSTANT
+  // CONSTANT can be the keyword null/true/false (the constants), or @
+  // (meaning "the matched literal string itself as a value").
+  "KEY_VALUE_SUFFIX": {
+    "type": "sequence",
+    "items": [
+      ":",
+      "CONSTANT"
+    ]
+  },
+
+  "CONSTANT": {
+    "type": "choice",
+    "items": [
+      {"type": "key", "key": "null",  "value": null},
+      {"type": "key", "key": "true",  "value": true},
+      {"type": "key", "key": "false", "value": false},
+      {"type": "key", "key": "@"}   // emit-matched-literal sugar
+    ]
+  },
+
+  // bare identifier — invokes a terminal parser by name.
+  "PARSE_EXPR": {
+    "type": "sequence",
+    "items": [
+      {"type": "identifier"}
+    ]
+  },
+
+  // sequence [array|dict] { items }
+  "SEQUENCE_EXPR": {
+    "type": "sequence",
+    "items": [
+      "sequence",
+      // TODO: optional container annotation
+      "{",
+      "ITEMS",
+      "}"
+    ]
+  },
+
+  // choice { items }
+  "CHOICE_EXPR": {
+    "type": "sequence",
+    "items": [
+      "choice",
+      "{",
+      "ITEMS",
+      "}"
+    ]
+  },
+
+  // repeat EXPR [separator EXPR]
+  "REPEAT_EXPR": {
+    "type": "sequence",
+    "items": [
+      "repeat",
+      "EXPR"
+      // TODO: optional separator clause
+    ]
+  },
+
+  // ?EXPR — optional
+  "OPTIONAL_EXPR": {
+    "type": "sequence",
+    "items": [
+      "?",
+      "EXPR"
+    ]
+  },
+
+  // Comma-separated list of expressions (with optional binding suffix).
+  // TODO: bindings (":@", ":@=", ":name=@") attached to items.
+  "ITEMS": {
+    "type": "repeat",
+    "separator": ",",
+    "item": "EXPR"
+  }
+}

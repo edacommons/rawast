@@ -1,0 +1,46 @@
+{
+  "start": "VALUE",
+
+  "VALUE": {
+    "type": "choice",
+    "items": [
+      "STRUCT",
+      "LIST",
+      {"type": "string"},
+      {"type": "float"},
+      {"type": "int"},
+      {"type": "key", "key": "null",  "value": null},
+      {"type": "key", "key": "true",  "value": true},
+      {"type": "key", "key": "false", "value": false}
+    ]
+  },
+
+  "LIST": {
+    "type": "sequence",
+    "container": "array",
+    "items": [
+      "[",
+      {"type": "repeat", "separator": ",", "item": "VALUE"},
+      "]"
+    ]
+  },
+
+  "PAIR": {
+    "type": "sequence",
+    "items": [
+      {"type": "string", "var": true},
+      ":",
+      "VALUE"
+    ]
+  },
+
+  "STRUCT": {
+    "type": "sequence",
+    "container": "dict",
+    "items": [
+      "{",
+      {"type": "repeat", "separator": ",", "item": "PAIR"},
+      "}"
+    ]
+  }
+}

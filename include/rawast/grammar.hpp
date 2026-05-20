@@ -73,6 +73,10 @@ public:
     // Follow Ref chains and return the underlying non-Ref node id.
     NodeId resolve_ref(NodeId id) const;
 
+    // Rule registry access.
+    bool   has_rule(const std::string& name) const noexcept;
+    NodeId rule_id(const std::string& name) const noexcept;
+
     Parser* parser(const std::string& name) const;
     const std::vector<Parser*>& ignore() const noexcept { return ignore_; }
 

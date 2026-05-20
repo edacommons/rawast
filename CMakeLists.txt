@@ -45,6 +45,7 @@ add_library(rawast STATIC
     src/pool.cpp
     src/frame.cpp
     src/grammar.cpp
+    src/loader.cpp
 )
 add_library(rawast::rawast ALIAS rawast)
 
