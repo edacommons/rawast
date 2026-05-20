@@ -1,0 +1,42 @@
+# macOS
+.DS_Store
+
+# CMake build artifacts
+build/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+*.cmake.lock
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Editors / IDEs
+.vscode/
+.idea/
+.kdev4/
+*.kdev4
+*.swp
+*.swo
+*.bak
+*~
+
+# Python (for later: bindings, helper scripts)
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+dist/
+build-py/

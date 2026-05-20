@@ -1,0 +1,71 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(rawast
+    VERSION 0.1.0
+    DESCRIPTION "Data-driven predictive PEG parser engine and .jast container format"
+    LANGUAGES CXX
+)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Default build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
+option(RAWAST_BUILD_TESTS "Build tests" ON)
+option(RAWAST_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+# Some upstream dependencies (doctest, tl::expected) still declare very old
+# cmake_minimum_required values that modern CMake refuses outright. Tell CMake
+# to apply at least the 3.5 policy set when configuring those sub-projects.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+include(FetchContent)
+
+# tl::expected — header-only error type.
+FetchContent_Declare(tl-expected
+    GIT_REPOSITORY https://github.com/TartanLlama/expected.git
+    GIT_TAG v1.1.0
+    GIT_SHALLOW ON
+)
+set(EXPECTED_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tl-expected)
+
+# Library target.
+add_library(rawast STATIC
+    src/version.cpp
+)
+add_library(rawast::rawast ALIAS rawast)
+
+target_include_directories(rawast
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(rawast PUBLIC tl::expected)
+
+target_compile_features(rawast PUBLIC cxx_std_20)
+
+if(RAWAST_WARNINGS_AS_ERRORS)
+    if(MSVC)
+        target_compile_options(rawast PRIVATE /W4 /WX)
+    else()
+        target_compile_options(rawast PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+else()
+    if(MSVC)
+        target_compile_options(rawast PRIVATE /W4)
+    else()
+        target_compile_options(rawast PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
+if(RAWAST_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
