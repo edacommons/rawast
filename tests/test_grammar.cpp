@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 #include <rawast/grammar.hpp>
+#include <rawast/parsers.hpp>
+
+#include <memory>
+#include <sstream>
 
 using namespace rawast;
 
@@ -63,4 +67,45 @@ TEST_CASE("Grammar register_rule and resolve_ref follow chains") {
     NodeId ref1 = g.new_ref("VALUE");
     NodeId resolved = g.resolve_ref(ref1);
     CHECK(resolved == target);
+}
+
+TEST_CASE("Value-kind nodes honour is_name in the catcher absorber") {
+    // Build a grammar where a dict-container Sequence has Value-kind
+    // children with is_name set — they should emit fixed string names
+    // into the catcher, paired with values from sibling Parse children.
+    //
+    // Equivalent .rawast: a hand-desugared form of `int:value=@`,
+    // producing {"type":"integer", "value": <parsed int>}.
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+
+    NodeId top = g.new_sequence();
+    g.register_rule("TOP", top);
+    g.set_container(top, Container::Dict);
+
+    NodeId type_name = g.new_value(make_string("type"));
+    g.set_name(type_name);                                  // <- is_name=true on Value
+    g.node(top).children.push_back(type_name);
+
+    NodeId type_val = g.new_value(make_string("integer"));
+    g.node(top).children.push_back(type_val);
+
+    NodeId val_name = g.new_value(make_string("value"));
+    g.set_name(val_name);                                   // <- is_name=true on Value
+    g.node(top).children.push_back(val_name);
+
+    NodeId val_parse = g.new_parse("int");
+    g.node(top).children.push_back(val_parse);
+
+    g.set_top(g.new_ref("TOP"));
+
+    std::istringstream is{"42"};
+    StreamReader sr{is};
+    auto r = g.parse(sr);
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    REQUIRE(d->data().size() == 2);
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("type"))->data() == "integer");
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("value"))->data() == 42);
 }

@@ -153,3 +153,51 @@ TEST_CASE("Loader: file not found yields a useful error") {
     REQUIRE_FALSE(r);
     CHECK(r.error().find("cannot open") != std::string::npos);
 }
+
+TEST_CASE("Loader recognizes {type:value, var:true} for emitting names") {
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+
+    // A grammar whose dict-container Sequence uses Value-kind children
+    // with var:true to emit fixed string names. This is the JSON-form
+    // desugar of the .rawast `name=@` binding (§4.5 of the format spec).
+    const char* schema = R"({
+        "start": "TOP",
+        "TOP": {
+            "type": "sequence",
+            "container": "dict",
+            "items": [
+                {"type": "value", "value": "type",    "var": true},
+                {"type": "value", "value": "integer"},
+                {"type": "value", "value": "value",   "var": true},
+                {"type": "int"}
+            ]
+        }
+    })";
+    auto r = load_json_grammar_from_string(g, schema);
+    REQUIRE(r);
+
+    std::istringstream is{"42"};
+    StreamReader sr{is};
+    auto v = g.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    REQUIRE(d->data().size() == 2);
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("type"))->data() == "integer");
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("value"))->data() == 42);
+}
+
+TEST_CASE("Loader: {type:value, var:true} flags Node's is_name correctly") {
+    Grammar g;
+    const char* schema = R"({
+        "start": "TOP",
+        "TOP": {"type": "value", "value": "x", "var": true}
+    })";
+    auto r = load_json_grammar_from_string(g, schema);
+    REQUIRE(r);
+    NodeId top = g.rule_id("TOP");
+    REQUIRE(top.valid());
+    CHECK(g.node(top).kind == NodeKind::Value);
+    CHECK(g.node(top).is_name);
+}

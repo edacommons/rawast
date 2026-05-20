@@ -147,6 +147,22 @@ populate(Grammar& g, NodeId target, const Value& body) {
         return {};
     }
 
+    if (type == "value") {
+        // Constant value emission. Used by the .rawast `name=@` desugar
+        // to inject fixed dict-key names into a sequence's catcher.
+        // With "var": true, the constant is emitted as a name marker.
+        n.kind = NodeKind::Value;
+        if (auto val = dict_value(*dv, "value")) {
+            n.value = val;
+        } else {
+            return tl::unexpected("value: missing 'value' field");
+        }
+        if (dict_bool(*dv, "var")) {
+            g.set_name(target);
+        }
+        return {};
+    }
+
     // Otherwise: it's a parser-name reference.
     n.kind  = NodeKind::Parse;
     n.value = make_string(type);

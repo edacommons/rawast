@@ -17,11 +17,15 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
 
     // Absorb Value-kind children as constants directly into the catcher.
     // Other children get iterated by the driver.
+    //
+    // The Value-kind Node's is_name flag is honoured here — that's what
+    // lets grammars emit fixed strings as dict-key names without going
+    // through a parser. Used by the .rawast `name=@` binding desugar.
     for (NodeId child_id : n.children) {
         NodeId resolved = g.resolve_ref(child_id);
         const Node& child = g.node(resolved);
         if (child.kind == NodeKind::Value && child.value) {
-            emitted_.push_back({child.value, false});
+            emitted_.push_back({child.value, child.is_name});
         } else {
             children_.push_back(child_id);
         }
