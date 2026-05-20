@@ -201,3 +201,133 @@ TEST_CASE("Loader: {type:value, var:true} flags Node's is_name correctly") {
     CHECK(g.node(top).kind == NodeKind::Value);
     CHECK(g.node(top).is_name);
 }
+
+// Self-host: load the .rawast grammar JSON file ---------------------------
+
+namespace {
+
+// Build a Grammar with the parsers needed by the .rawast grammar.
+Grammar make_rawast_target() {
+    Grammar g;
+    g.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    g.register_parser(std::make_unique<IdentifierParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.register_parser(std::make_unique<LineCommentParser>());
+    g.register_parser(std::make_unique<BlockCommentParser>());
+    g.add_ignore("whitespace");
+    g.add_ignore("line_comment");
+    g.add_ignore("block_comment");
+    return g;
+}
+
+} // namespace
+
+TEST_CASE("grammars/rawast.json loads cleanly") {
+    auto g = make_rawast_target();
+    auto r = load_json_grammar_from_file(g, "grammars/rawast.json");
+    REQUIRE(r);
+    CHECK(g.has_rule("FILE"));
+    CHECK(g.has_rule("RULE_DEF"));
+    CHECK(g.has_rule("EXPR"));
+    CHECK(g.has_rule("SEQUENCE_EXPR"));
+}
+
+TEST_CASE("Loaded .rawast grammar parses a single ref rule") {
+    auto g = make_rawast_target();
+    REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
+
+    std::istringstream is{"start: <VALUE>"};
+    StreamReader sr{is};
+    auto r = g.parse(sr);
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    REQUIRE(d->data().count("start") == 1);
+    auto start_val = std::dynamic_pointer_cast<StringValue>(d->data().at("start"));
+    REQUIRE(start_val);
+    CHECK(start_val->data() == "VALUE");
+}
+
+TEST_CASE("Loaded .rawast grammar parses a choice of parser-name expressions") {
+    auto g = make_rawast_target();
+    REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
+
+    std::istringstream is{"VALUE: choice { int, float, string }"};
+    StreamReader sr{is};
+    auto r = g.parse(sr);
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    REQUIRE(d->data().count("VALUE") == 1);
+
+    auto choice_dict = std::dynamic_pointer_cast<DictValue>(d->data().at("VALUE"));
+    REQUIRE(choice_dict);
+    auto type_v = std::dynamic_pointer_cast<StringValue>(choice_dict->data().at("type"));
+    REQUIRE(type_v);
+    CHECK(type_v->data() == "choice");
+
+    auto items_v = std::dynamic_pointer_cast<ArrayValue>(choice_dict->data().at("items"));
+    REQUIRE(items_v);
+    CHECK(items_v->data().size() == 3);
+}
+
+TEST_CASE("Loaded .rawast grammar parses a sequence with array container") {
+    auto g = make_rawast_target();
+    REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
+
+    std::istringstream is{R"(LIST: sequence array { "[", repeat <VALUE> separator ",", "]" })"};
+    StreamReader sr{is};
+    auto r = g.parse(sr);
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    REQUIRE(d->data().count("LIST") == 1);
+
+    auto list_dict = std::dynamic_pointer_cast<DictValue>(d->data().at("LIST"));
+    REQUIRE(list_dict);
+    auto type_v = std::dynamic_pointer_cast<StringValue>(list_dict->data().at("type"));
+    REQUIRE(type_v);
+    CHECK(type_v->data() == "sequence");
+    auto cont_v = std::dynamic_pointer_cast<StringValue>(list_dict->data().at("container"));
+    REQUIRE(cont_v);
+    CHECK(cont_v->data() == "array");
+    REQUIRE(list_dict->data().count("items") == 1);
+}
+
+TEST_CASE("Loaded .rawast grammar parses a sequence without container") {
+    auto g = make_rawast_target();
+    REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
+
+    std::istringstream is{R"(PAIR: sequence { string, ":", <VALUE> })"};
+    StreamReader sr{is};
+    auto r = g.parse(sr);
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    auto pair_dict = std::dynamic_pointer_cast<DictValue>(d->data().at("PAIR"));
+    REQUIRE(pair_dict);
+    // container field should be absent.
+    CHECK(pair_dict->data().count("container") == 0);
+}
+
+TEST_CASE("Loaded .rawast grammar parses key-with-null discriminator") {
+    auto g = make_rawast_target();
+    REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
+
+    std::istringstream is{R"(NULL_KEY: "null":null)"};
+    StreamReader sr{is};
+    auto r = g.parse(sr);
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    auto key_dict = std::dynamic_pointer_cast<DictValue>(d->data().at("NULL_KEY"));
+    REQUIRE(key_dict);
+    auto type_v = std::dynamic_pointer_cast<StringValue>(key_dict->data().at("type"));
+    REQUIRE(type_v);
+    CHECK(type_v->data() == "key");
+    auto key_v = std::dynamic_pointer_cast<StringValue>(key_dict->data().at("key"));
+    REQUIRE(key_v);
+    CHECK(key_v->data() == "null");
+    REQUIRE(key_dict->data().count("value") == 1);
+    CHECK(key_dict->data().at("value").get() == null_value().get());
+}

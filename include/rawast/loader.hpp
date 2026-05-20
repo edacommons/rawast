@@ -27,19 +27,24 @@ namespace rawast {
 //   "X"                                  -- bare string: Ref if X is
 //                                           a registered rule name,
 //                                           otherwise Key with literal X.
-//   {"type":"sequence", ...}
-//   {"type":"choice",   ...}
-//   {"type":"repeat",   ...}
-//   {"type":"key", "key":"X", "value":?}
+//   {"type":"sequence",   ...}
+//   {"type":"choice",     ...}
+//   {"type":"repeat",     ...}
+//   {"type":"key",   "key":"X", "value":?}
+//   {"type":"value", "value": <constant>, "var": ?}
+//   {"type":"ref",   "name": "X"}        -- explicit form of bare-string Ref
+//   {"type":"optional", "expr": <expr>}  -- transparent wrapper that sets
+//                                           is_optional on the wrapped expr
 //   {"type":"<parser-name>", "var":?}    -- Parse using a registered parser.
 //
-// Optional fields:
-//   "container": "array" | "dict"  (on sequence / choice)
-//   "var":       true              (on parse)
-//   "value":     any constant      (on key)
-//   "separator": <item>            (on repeat)
-//   "item":      <item>            (required, on repeat)
-//   "items":     [ <item>, ... ]   (required, on sequence / choice)
+// Optional fields (apply to any node kind unless noted):
+//   "container":  "array" | "dict"   (on sequence / choice)
+//   "var":        true               (on parse / value)
+//   "value":      any constant       (on key / value)
+//   "separator":  <item>             (on repeat)
+//   "item":       <item>             (required, on repeat)
+//   "items":      [ <item>, ... ]    (required, on sequence / choice)
+//   "optional":   true               (any node)
 //
 // On success the Grammar is populated; on failure returns a human-
 // readable error message.

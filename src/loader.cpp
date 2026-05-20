@@ -1,4 +1,5 @@
 #include <rawast/loader.hpp>
+#include <rawast/parsers.hpp>
 
 #include <fstream>
 #include <memory>
@@ -102,7 +103,36 @@ populate(Grammar& g, NodeId target, const Value& body) {
     if (!type_r) return tl::unexpected(type_r.error());
     const std::string& type = *type_r;
 
+    // Optional wrapper: transparently sets is_optional on the wrapped expr.
+    // {"type":"optional", "expr": <inner-expr>}
+    if (type == "optional") {
+        auto inner_val = dict_value(*dv, "expr");
+        if (!inner_val) {
+            return tl::unexpected("optional: missing 'expr' field");
+        }
+        auto r = populate(g, target, *inner_val);
+        if (!r) return tl::unexpected(r.error());
+        g.set_optional(target);
+        return {};
+    }
+
+    // Explicit Ref form: {"type":"ref", "name":"RULE_NAME"}
+    if (type == "ref") {
+        auto name_r = dict_string(*dv, "name");
+        if (!name_r) return tl::unexpected(name_r.error());
+        Node& n = g.node(target);
+        n.kind = NodeKind::Ref;
+        n.value = make_string(*name_r);
+        if (dict_bool(*dv, "optional")) g.set_optional(target);
+        return {};
+    }
+
     Node& n = g.node(target);
+
+    // Universal "optional" field applies to any node kind from here on.
+    if (dict_bool(*dv, "optional")) {
+        g.set_optional(target);
+    }
 
     if (type == "sequence" || type == "choice" || type == "repeat") {
         if (type == "sequence") n.kind = NodeKind::Sequence;
@@ -172,9 +202,18 @@ populate(Grammar& g, NodeId target, const Value& body) {
     return {};
 }
 
-// Lazy-built JSON parser-grammar reused across multiple loader calls.
+// Lazy-built JSON+comments meta-grammar reused across loader calls.
+// JSONC tolerance (// line and /* block */ comments in the ignore list)
+// lets community grammar files in JSON form carry inline documentation.
 const Grammar& json_meta_grammar() {
-    static const Grammar g = make_json_grammar();
+    static const Grammar g = [] {
+        Grammar base = make_json_grammar();
+        base.register_parser(std::make_unique<LineCommentParser>());
+        base.register_parser(std::make_unique<BlockCommentParser>());
+        base.add_ignore("line_comment");
+        base.add_ignore("block_comment");
+        return base;
+    }();
     return g;
 }
 
