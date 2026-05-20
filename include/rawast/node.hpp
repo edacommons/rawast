@@ -5,6 +5,7 @@
 #include <compare>
 #include <cstddef>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace rawast {
@@ -68,6 +69,30 @@ public:
     //   Parse - StringValue holding the name of the terminal parser to invoke.
     //   Value - any Value, emitted directly when the surrounding branch fires.
     ValuePtr value;
+
+    // Save-direction pretty-print metadata. All ignored by parse.
+    //
+    // The save direction emits, for each Node entered:
+    //   [ if indent_emit:  depth × Grammar::indent_step() ]
+    //   [ recursive content ]
+    //   [ if tail.size():   tail ]
+    //   [ if space_after:   " " ]
+    //   [ if newline_after: "\n" ]
+    //
+    // and bumps depth by +1 around the recursive content if `depth_in`
+    // is set (popping on exit).
+    //
+    // Names map to the .rawast postfix keywords:
+    //   depth_in     <- `indent`
+    //   indent_emit  <- `tab`
+    //   space_after  <- `space`
+    //   newline_after<- `newline`
+    //   tail         <- `tail="..."`
+    bool        depth_in      = false;
+    bool        indent_emit   = false;
+    bool        space_after   = false;
+    bool        newline_after = false;
+    std::string tail;
 
     std::vector<NodeId> children;
 };

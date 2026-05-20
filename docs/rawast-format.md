@@ -114,7 +114,12 @@ as parser names or as bare-identifier expressions:
 
 ```
 sequence  choice  repeat  separator  array  dict  null  true  false
+indent    tab     space   newline    tail
 ```
+
+The first row are the structural keywords (§4.6–4.8 and §4.3
+constants). The second row are the **save-side pretty-print postfix
+attributes** (§4.6).
 
 A future revision may add `optional` and other keywords.
 
@@ -275,6 +280,83 @@ NREPEAT: sequence dict {
 In the JSON-grammar-format equivalent, the `name=@` binding desugars to
 inserting a Value-kind name marker plus the wrapped expression — a small
 engine extension required to support this form (see §8).
+
+### 4.5b Pretty-print attributes — postfix flags on items
+
+Each item in an `items` list may carry **zero or more pretty-print
+postfix attributes** after its expression (and after any binding). They
+are pure save-side metadata: the parse direction ignores them entirely.
+
+```
+postfix_attr  ::= 'indent'              -- depth+1 for this Node's scope
+              |   'tab'                 -- emit depth × indent_step before content
+              |   'space'               -- emit ' ' after content
+              |   'newline'             -- emit '\n' after content
+              |   'tail' '=' string     -- emit string after content (escape-interpreted)
+```
+
+Attributes are space-separated and may appear in any order. The save
+direction applies them in a fixed order, regardless of source order:
+
+```
+[ tab → depth × indent_step ] [ content ] [ tail ] [ space ] [ newline ]
+```
+
+**`indent`** bumps the save-time depth counter for the entire scope of
+the Node it sits on. Nested `indent` flags accumulate. The bump happens
+*before* `tab` fires, so an item with both `indent` and `tab` emits the
+indent at the new (bumped) depth — convenient for the common
+"indented-line" pattern.
+
+**`tab`** emits the current depth's indentation (`depth × indent_step`,
+where `indent_step` is a Grammar-level setting, default two spaces). It
+fires at the beginning of the Node's content. Place `tab` only where
+indentation should actually appear in the output — typically at the
+start of lines.
+
+**`space`** and **`newline`** emit `" "` and `"\n"` respectively after
+the content. They are the common-case sugars; for anything else (`;\n`,
+`\\\n`, `; `, custom separators) use `tail`.
+
+**`tail="..."`** emits the string after content, with C-style escape
+sequences interpreted at load: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
+Convention: use the bare `newline` flag for plain newlines; reserve
+`tail` for non-newline strings or for combinations like backslash-
+newline (`tail="\\" newline`).
+
+Examples:
+
+```
+"{" newline,                          // "{" then "\n"
+":" space,                            // ":" then " "
+"PIN" space,                          // "PIN" then " "
+",;" tail="; ",                       // (illegal — combining attrs needs space/newline keywords)
+"$\\" newline,                        // emit `$\` then "\n" — but use tail="\\" newline
+identifier tail=";" newline,          // identifier then "; then "\n"
+<PAIR> tab indent,                    // emit indent before PAIR; depth+1 inside
+repeat <PAIR> tab indent separator ",",  // each iteration indented at depth+1
+```
+
+The classic JSON-pretty pattern uses `indent` on the iterated item and
+puts a trailing empty-key + newline before the closing brace:
+
+```
+STRUCT: sequence dict {
+  "{" newline,
+  repeat <PAIR> tab indent separator "," newline,
+  "" newline,        // trailing newline before "}"
+  "}" tab            // close brace at outer depth (auto-indented)
+}
+```
+
+In the JSON-grammar-format equivalent, each pretty-print attribute is a
+field on the item dict: `{"type": "key", "key": "{", "newline": true}`,
+`{"type": "key", "key": "}", "tab": true}`, etc. The engine's `Node`
+data type stores all five attributes uniformly; the two surface
+serialisations are interchangeable.
+
+**`indent_step` is a Grammar-level setting** (default `"  "`). Switch to
+tabs via `Grammar::set_indent_step("\t")` in C++ before parsing.
 
 ### 4.6 Sequence — `sequence [container] { items }`
 
@@ -455,6 +537,11 @@ The mapping is direct:
 | `repeat X`                         | `Node{kind=Repeat}` + [X]                          |
 | `repeat X separator Y`             | `Node{kind=Repeat, has_separator=true}` + [Y, X]   |
 | `?X`                               | X with `is_optional=true`                          |
+| `X indent`                         | X with `depth_in=true` (depth+1 for its scope)    |
+| `X tab`                            | X with `indent_emit=true` (emit indent at content) |
+| `X space`                          | X with `space_after=true` (emit `" "` after)       |
+| `X newline`                        | X with `newline_after=true` (emit `"\n"` after)    |
+| `X tail="..."`                     | X with `tail` string (escape-interpreted)          |
 
 After loading, the in-memory grammar tree is indistinguishable from one
 loaded from an equivalent JSON file. The `.jast` container format does
@@ -501,3 +588,17 @@ The following were open during drafting and are now settled:
 - **Unterminated block comments are a parse error.** Reaching EOF
   inside a `/* …` comment fails the parse with a max-progress error
   pointing at the comment's opening position.
+- **Pretty-print postfix attributes (`indent`, `tab`, `space`,
+  `newline`, `tail="..."`) attach to the preceding expression with no
+  separator.** They are part of the same item; commas separate sibling
+  items (§4.5b). The save direction emits them in the fixed order tab
+  → content → tail → space → newline.
+- **`indent` bumps depth *before* `tab` fires** on the same Node, so
+  `<X> tab indent` emits the indent at the bumped depth — the natural
+  reading of "this item starts a deeper line."
+- **`tail` strings are escape-interpreted at load time.** `\n`, `\t`,
+  `\r`, `\\`, `\"`, `\0` are recognised; unknown escapes pass through
+  verbatim. Use the bare `newline` flag for plain newlines and reserve
+  `tail` for non-newline content (or for combinations like `tail="\\"
+  newline` which emits backslash-newline for line-continuation
+  grammars).

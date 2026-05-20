@@ -59,6 +59,18 @@ public:
     void set_separator(NodeId parent, NodeId sep);
     void set_backtrack(NodeId id);
 
+    // Save-side pretty-print modifiers; see Node fields for semantics.
+    void set_indent(NodeId id);    // depth+1 for this Node's scope
+    void set_tab(NodeId id);       // emit depth × indent_step before content
+    void set_space(NodeId id);     // emit " " after content
+    void set_newline(NodeId id);   // emit "\n" at the end
+    void set_tail(NodeId id, std::string s);  // emit s after content (escape-interpreted)
+
+    // Grammar-wide indent step. Default "  " (two spaces). Used by the
+    // save direction whenever a Node with `tab` (indent_emit) fires.
+    void set_indent_step(std::string s) { indent_step_ = std::move(s); }
+    const std::string& indent_step() const noexcept { return indent_step_; }
+
     // --- Registries -----------------------------------------------------
 
     void register_rule(std::string name, NodeId node);
@@ -167,6 +179,8 @@ private:
     // Rule-completion callbacks, keyed by the rule's body NodeId
     // (the post-Ref-resolution arena id, which is also Frame::node_id()).
     std::map<std::size_t, std::vector<RuleCallback>> callbacks_by_node_;
+    // Indent step for save-direction pretty-print (default two spaces).
+    std::string indent_step_ = "  ";
     NodeId top_;
 
     NodeId allocate_(NodeKind kind);

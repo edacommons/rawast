@@ -156,7 +156,9 @@
   },
 
   // ---------------------------------------------------------------------
-  // repeat EXPR [separator EXPR] -> {"type":"repeat", "item":..., ?sep}
+  // repeat ITEM [separator ITEM] -> {"type":"repeat", "item":..., ?sep}
+  // The inner item and separator each accept postfix attrs (tab, newline,
+  // etc.), so they go through the ITEM rule rather than bare EXPR.
   // ---------------------------------------------------------------------
   "REPEAT_EXPR": {
     "type": "sequence",
@@ -165,7 +167,7 @@
       {"type": "value", "value": "type", "var": true},
       {"type": "key", "key": "repeat", "value": "repeat"},
       {"type": "value", "value": "item", "var": true},
-      "EXPR",
+      "ITEM",
       "SEPARATOR_OPT"
     ]
   },
@@ -176,7 +178,7 @@
     "items": [
       "separator",
       {"type": "value", "value": "separator", "var": true},
-      "EXPR"
+      "ITEM"
     ]
   },
 
@@ -259,7 +261,79 @@
       "EXPR",
       {"type": "value", "value": "type", "var": true},
       {"type": "value", "value": "bare"},
-      "BIND_TAIL_OPT"
+      "BIND_TAIL_OPT",
+      {"type": "repeat", "item": "POSTFIX_ATTR"}
+    ]
+  },
+
+  // ---------------------------------------------------------------------
+  // Postfix pretty-print attrs on items:
+  //
+  //   indent             - depth+1 for this Node's scope
+  //   tab                - emit depth × indent_step before content
+  //   space              - emit " " after content
+  //   newline            - emit "\n" after content
+  //   tail="<string>"    - emit string after content (escape-interpreted)
+  //
+  // Each attr emits one name=value pair into the surrounding ITEM dict;
+  // the loader's apply_pretty_attrs picks them up and sets the
+  // corresponding Node fields. Multiple attrs can stack on one item, any
+  // order: `<EXPR> tab newline indent`.
+  // ---------------------------------------------------------------------
+  "POSTFIX_ATTR": {
+    "type": "choice",
+    "items": [
+      "INDENT_ATTR",
+      "TAB_ATTR",
+      "SPACE_ATTR",
+      "NEWLINE_ATTR",
+      "TAIL_ATTR"
+    ]
+  },
+
+  "INDENT_ATTR": {
+    "type": "sequence",
+    "items": [
+      "indent",
+      {"type": "value", "value": "indent", "var": true},
+      {"type": "value", "value": true}
+    ]
+  },
+
+  "TAB_ATTR": {
+    "type": "sequence",
+    "items": [
+      "tab",
+      {"type": "value", "value": "tab", "var": true},
+      {"type": "value", "value": true}
+    ]
+  },
+
+  "SPACE_ATTR": {
+    "type": "sequence",
+    "items": [
+      "space",
+      {"type": "value", "value": "space", "var": true},
+      {"type": "value", "value": true}
+    ]
+  },
+
+  "NEWLINE_ATTR": {
+    "type": "sequence",
+    "items": [
+      "newline",
+      {"type": "value", "value": "newline", "var": true},
+      {"type": "value", "value": true}
+    ]
+  },
+
+  "TAIL_ATTR": {
+    "type": "sequence",
+    "items": [
+      "tail",
+      "=",
+      {"type": "value", "value": "tail", "var": true},
+      {"type": "string"}
     ]
   },
 

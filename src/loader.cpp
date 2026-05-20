@@ -46,6 +46,56 @@ ValuePtr dict_value(const DictValue& d, const std::string& key) {
     return it->second;
 }
 
+// Interpret C-style escape sequences in a literal string. The grammar
+// loader uses this on `tail` strings (and any other text users embed in
+// the grammar file) because the engine's DoubleQuoteStringParser
+// preserves backslash sequences verbatim — \n is the two characters
+// \ + n, not a newline. We unescape at load time so the save direction
+// can emit the intended bytes.
+std::string unescape(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] != '\\' || i + 1 == raw.size()) {
+            out.push_back(raw[i]);
+            continue;
+        }
+        char next = raw[i + 1];
+        switch (next) {
+        case 'n':  out.push_back('\n'); ++i; break;
+        case 't':  out.push_back('\t'); ++i; break;
+        case 'r':  out.push_back('\r'); ++i; break;
+        case '0':  out.push_back('\0'); ++i; break;
+        case '\\': out.push_back('\\'); ++i; break;
+        case '"':  out.push_back('"');  ++i; break;
+        default:   out.push_back(raw[i]); break;   // unknown escape: pass through
+        }
+    }
+    return out;
+}
+
+// Apply pretty-print attributes (depth/indent flags + tail string) read
+// from a dict (either a top-level node body or an ITEM wrapper) to a
+// built Node. Universal — callable on any node kind.
+void apply_pretty_attrs(Grammar& g, NodeId target, const DictValue& d) {
+    auto bool_field = [&](const std::string& key) {
+        auto it = d.data().find(key);
+        if (it == d.data().end()) return false;
+        if (!it->second || it->second->type() != ValueType::Bool) return false;
+        return std::dynamic_pointer_cast<BoolValue>(it->second)->data();
+    };
+    if (bool_field("indent"))  g.set_indent(target);
+    if (bool_field("tab"))     g.set_tab(target);
+    if (bool_field("space"))   g.set_space(target);
+    if (bool_field("newline")) g.set_newline(target);
+    auto t = d.data().find("tail");
+    if (t != d.data().end()) {
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(t->second)) {
+            g.set_tail(target, unescape(sv->data()));
+        }
+    }
+}
+
 // Forward declaration: populate a placeholder Node (already allocated and
 // possibly already registered as a named rule) from a grammar body Value.
 tl::expected<void, std::string>
@@ -60,6 +110,43 @@ build_inline(Grammar& g, const Value& body) {
     auto r = populate(g, id, body);
     if (!r) return tl::unexpected(r.error());
     return id;
+}
+
+// Build a single child Node from either an ITEM-wrapper dict (the
+// .rawast loader emits `{"expr": <X>, "type": "bare"|"var", ...}` shapes
+// for postfix-attr-bearing items) or a direct grammar body (legacy JSON
+// form). Used for repeat-item and repeat-separator positions where only
+// one child is allowed (so the "binding" wrapper — which expands to
+// two children — is rejected here).
+tl::expected<NodeId, std::string>
+build_item(Grammar& g, const Value& val) {
+    if (auto dv = dynamic_cast<const DictValue*>(&val)) {
+        auto type_it = dv->data().find("type");
+        auto expr_it = dv->data().find("expr");
+        if (type_it != dv->data().end() && expr_it != dv->data().end()) {
+            auto type_sv = std::dynamic_pointer_cast<StringValue>(type_it->second);
+            if (type_sv) {
+                const std::string& t = type_sv->data();
+                if (t == "bare" || t == "var") {
+                    if (!expr_it->second) {
+                        return tl::unexpected(t + " wrapper: null expr");
+                    }
+                    auto child_r = build_inline(g, *expr_it->second);
+                    if (!child_r) return tl::unexpected(child_r.error());
+                    if (t == "var") g.set_name(*child_r);
+                    apply_pretty_attrs(g, *child_r, *dv);
+                    return *child_r;
+                }
+                if (t == "binding") {
+                    return tl::unexpected(
+                        "binding wrapper not allowed as repeat item or separator "
+                        "(would produce two children where one is required)");
+                }
+                // Other type values are normal grammar bodies; fall through.
+            }
+        }
+    }
+    return build_inline(g, val);
 }
 
 // Append each entry of an `items` array as a child of `target`. Recognises
@@ -101,6 +188,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         }
                         auto child_r = build_inline(g, *expr_it->second);
                         if (!child_r) return tl::unexpected(child_r.error());
+                        apply_pretty_attrs(g, *child_r, *item_dict);
                         g.node(target).children.push_back(*child_r);
                         continue;
                     }
@@ -111,6 +199,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         auto child_r = build_inline(g, *expr_it->second);
                         if (!child_r) return tl::unexpected(child_r.error());
                         g.set_name(*child_r);
+                        apply_pretty_attrs(g, *child_r, *item_dict);
                         g.node(target).children.push_back(*child_r);
                         continue;
                     }
@@ -131,9 +220,12 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         NodeId name_child = g.new_value(make_string(name_sv->data()));
                         g.set_name(name_child);
                         g.node(target).children.push_back(name_child);
-                        // (2) the wrapped expression.
+                        // (2) the wrapped expression. Pretty-print attrs
+                        // on the binding apply to the value side (not the
+                        // name marker).
                         auto child_r = build_inline(g, *expr_it->second);
                         if (!child_r) return tl::unexpected(child_r.error());
+                        apply_pretty_attrs(g, *child_r, *item_dict);
                         g.node(target).children.push_back(*child_r);
                         continue;
                     }
@@ -212,6 +304,10 @@ populate(Grammar& g, NodeId target, const Value& body) {
         g.set_backtrack(target);
     }
 
+    // Pretty-print attrs (indent/tab/space/newline/tail) — universal,
+    // apply to any node kind. Save-side only; parse ignores them.
+    apply_pretty_attrs(g, target, *dv);
+
     if (type == "sequence" || type == "choice" || type == "repeat") {
         if (type == "sequence") n.kind = NodeKind::Sequence;
         else if (type == "choice") n.kind = NodeKind::Choice;
@@ -231,13 +327,13 @@ populate(Grammar& g, NodeId target, const Value& body) {
 
     if (type == "repeat") {
         if (auto sep_val = dict_value(*dv, "separator")) {
-            auto sep_r = build_inline(g, *sep_val);
+            auto sep_r = build_item(g, *sep_val);
             if (!sep_r) return tl::unexpected(sep_r.error());
             g.set_separator(target, *sep_r);
         }
         auto item_val = dict_value(*dv, "item");
         if (!item_val) return tl::unexpected("repeat: missing 'item'");
-        auto item_r = build_inline(g, *item_val);
+        auto item_r = build_item(g, *item_val);
         if (!item_r) return tl::unexpected(item_r.error());
         g.node(target).children.push_back(*item_r);
         return {};
