@@ -78,6 +78,17 @@ public:
     bool   has_rule(const std::string& name) const noexcept;
     NodeId rule_id(const std::string& name) const noexcept;
 
+    // Arena introspection — every NodeId in [0, node_count()) refers to
+    // an allocated Node. Used by the grammar linter and other tooling
+    // that needs to walk every Node regardless of reachability from top.
+    std::size_t node_count() const noexcept { return nodes_.size(); }
+
+    // Iterate over named rules. Each entry is (rule_name, NodeId).
+    // The map is in insertion order — std::map sorts by name.
+    const std::map<std::string, NodeId>& named_rules() const noexcept {
+        return named_rules_;
+    }
+
     Parser* parser(const std::string& name) const;
     const std::vector<Parser*>& ignore() const noexcept { return ignore_; }
 

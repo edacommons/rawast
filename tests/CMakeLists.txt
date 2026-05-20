@@ -21,6 +21,7 @@ add_executable(rawast_tests
     test_pool.cpp
     test_save.cpp
     test_loader.cpp
+    test_linter.cpp
 )
 
 # Tests reference grammar files via relative path from the test working
