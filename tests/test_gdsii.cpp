@@ -239,3 +239,123 @@ TEST_CASE("GDSII: minimal library parses end-to-end via .rawast grammar") {
     // grammar children. Implementing name-keyed save for fixed-schema
     // dicts is a follow-on task. Parse direction is fully functional.
 }
+
+TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a boundary") {
+    // Load the standalone grammar file and parse a hand-crafted library
+    // containing one structure with one BOUNDARY element. Validates the
+    // full nested structure: LIBRARY -> structures[] -> STRUCTURE ->
+    //                       elements[] -> ELEMENT (boundary).
+    Grammar g;
+    register_gdsii_parsers(g);
+    REQUIRE(load_rawast_grammar_from_file(g, "grammars/gdsii.rawast"));
+
+    // Hand-craft a minimal but realistic GDSII byte stream.
+    std::string bytes;
+
+    // HEADER version=5
+    append_header(bytes, 6, 0x0002);
+    append_i16(bytes, 5);
+
+    // BGNLIB timestamp (12 INT16s)
+    append_header(bytes, 28, 0x0102);
+    for (int i = 0; i < 12; ++i) append_i16(bytes, static_cast<std::int16_t>(i + 1));
+
+    // LIBNAME "MYLIB"
+    append_header(bytes, 10, 0x0206);
+    bytes += "MYLIB";
+    bytes.push_back('\0');
+
+    // UNITS (user, db)
+    append_header(bytes, 20, 0x0305);
+    bytes += make_real64(0.001);
+    bytes += make_real64(1e-9);
+
+    // ---- STRUCTURE "TOP" ----
+    // BGNSTR timestamp
+    append_header(bytes, 28, 0x0502);
+    for (int i = 0; i < 12; ++i) append_i16(bytes, static_cast<std::int16_t>(i + 1));
+
+    // STRNAME "TOP"
+    append_header(bytes, 8, 0x0606);
+    bytes += "TOP";
+    bytes.push_back('\0');
+
+    // ---- BOUNDARY element ----
+    // BOUNDARY discriminator (NO_DATA)
+    append_header(bytes, 4, 0x0800);
+    // LAYER 1
+    append_header(bytes, 6, 0x0D02);
+    append_i16(bytes, 1);
+    // DATATYPE 0
+    append_header(bytes, 6, 0x0E02);
+    append_i16(bytes, 0);
+    // XY — 5 points (square), 10 INT32s = 40 bytes payload
+    append_header(bytes, 44, 0x1003);
+    const int square[][2] = {{0,0}, {100,0}, {100,100}, {0,100}, {0,0}};
+    for (auto& pt : square) {
+        std::uint32_t x = static_cast<std::uint32_t>(pt[0]);
+        std::uint32_t y = static_cast<std::uint32_t>(pt[1]);
+        bytes.push_back(static_cast<char>((x >> 24) & 0xFF));
+        bytes.push_back(static_cast<char>((x >> 16) & 0xFF));
+        bytes.push_back(static_cast<char>((x >>  8) & 0xFF));
+        bytes.push_back(static_cast<char>( x        & 0xFF));
+        bytes.push_back(static_cast<char>((y >> 24) & 0xFF));
+        bytes.push_back(static_cast<char>((y >> 16) & 0xFF));
+        bytes.push_back(static_cast<char>((y >>  8) & 0xFF));
+        bytes.push_back(static_cast<char>( y        & 0xFF));
+    }
+    // ENDEL
+    append_header(bytes, 4, 0x1100);
+
+    // ---- end STRUCTURE ----
+    append_header(bytes, 4, 0x0700);   // ENDSTR
+
+    // ---- end LIBRARY ----
+    append_header(bytes, 4, 0x0400);   // ENDLIB
+
+    // Parse.
+    std::istringstream is(bytes);
+    StreamReader sr(is);
+    auto r = g.parse(sr);
+    if (!r) {
+        FAIL("parse failed at byte " << r.error().position.bytes
+             << ": " << r.error().message);
+    }
+    REQUIRE(r);
+
+    auto lib = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(lib);
+
+    // Top-level fields.
+    CHECK(std::dynamic_pointer_cast<IntValue>(lib->data().at("version"))->data() == 5);
+    CHECK(std::dynamic_pointer_cast<StringValue>(lib->data().at("name"))->data() == "MYLIB");
+
+    // structures[0] = TOP
+    auto structures = std::dynamic_pointer_cast<ArrayValue>(lib->data().at("structures"));
+    REQUIRE(structures);
+    REQUIRE(structures->data().size() == 1);
+    auto top_struct = std::dynamic_pointer_cast<DictValue>(structures->data()[0]);
+    REQUIRE(top_struct);
+    CHECK(std::dynamic_pointer_cast<StringValue>(top_struct->data().at("name"))->data() == "TOP");
+
+    // structures[0].elements[0] = the boundary
+    auto elements = std::dynamic_pointer_cast<ArrayValue>(top_struct->data().at("elements"));
+    REQUIRE(elements);
+    REQUIRE(elements->data().size() == 1);
+    auto elem = std::dynamic_pointer_cast<DictValue>(elements->data()[0]);
+    REQUIRE(elem);
+    CHECK(std::dynamic_pointer_cast<StringValue>(elem->data().at("element"))->data() == "boundary");
+    CHECK(std::dynamic_pointer_cast<IntValue>(elem->data().at("layer"))->data() == 1);
+    CHECK(std::dynamic_pointer_cast<IntValue>(elem->data().at("datatype"))->data() == 0);
+
+    // xy: 10 INT32 values
+    auto xy = std::dynamic_pointer_cast<ArrayValue>(elem->data().at("xy"));
+    REQUIRE(xy);
+    REQUIRE(xy->data().size() == 10);
+    CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[0])->data() == 0);
+    CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[1])->data() == 0);
+    CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[2])->data() == 100);
+    CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[3])->data() == 0);
+    CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[4])->data() == 100);
+    CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[5])->data() == 100);
+}

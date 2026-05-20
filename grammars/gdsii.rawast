@@ -1,0 +1,229 @@
+// =========================================================================
+// grammars/gdsii.rawast
+//
+// GDSII binary stream format — full structural grammar.
+//
+// The 47 record-type terminals (gds_header, gds_bgnlib, ..., gds_endmasks)
+// are provided by C++ `register_gdsii_parsers(grammar)` — see
+// include/rawast/parsers_gdsii.hpp. Each is a binary-record parser that
+// matches its specific record-type byte and decodes the payload by data
+// type (INT16, INT32, REAL64, STR, NO_DATA, BIT_ARRAY).
+//
+// Structural patterns used below:
+//   `?` prefix                    optional rule / token
+//   `repeat <X>` inside `array`   array of X
+//   `choice { ... }`              record-type dispatch (predictive PEG;
+//                                 each branch starts with a unique
+//                                 discriminator record)
+//   `sequence` (no container)     fields flow into the surrounding
+//                                 dict catcher (§3.4 of the proposal —
+//                                 used for STRANS_GROUP, TEXTBODY,
+//                                 MASKS that act as field groups
+//                                 inlined into their parent)
+//   `<NAME>` reference            non-terminal reference
+//   `tag:field=@`                 emit (field, parsed value) into dict
+//   `tag:field="literal"`         emit (field, constant) — discriminator
+//                                 records use this to label the parent
+//
+// Example output for a minimal library with one boundary:
+//   {
+//     "version": 5,
+//     "timestamp": [...],
+//     "name": "MYLIB",
+//     "units": [0.001, 1e-9],
+//     "structures": [
+//       {
+//         "timestamp": [...],
+//         "name": "TOP",
+//         "elements": [
+//           {
+//             "element": "boundary",
+//             "layer": 1,
+//             "datatype": 0,
+//             "xy": [0, 0, 100, 0, 100, 100, 0, 100, 0, 0]
+//           }
+//         ]
+//       }
+//     ]
+//   }
+// =========================================================================
+
+start: <LIBRARY>
+
+// ---------------------------------------------------------------------
+// LIBRARY — the top-level GDSII container.
+// ---------------------------------------------------------------------
+
+LIBRARY: sequence dict {
+  gds_header:version=@,
+  gds_bgnlib:timestamp=@,
+  gds_libname:name=@,
+  ?gds_reflibs:reflibs=@,
+  ?gds_fonts:fonts=@,
+  ?gds_attrtable:attributes=@,
+  ?gds_generations:gens=@,
+  ?<FORMATTYPE>:format_type=@,
+  gds_units:units=@,
+  ?<STRUCTURES>:structures=@,
+  gds_endlib
+}
+
+STRUCTURES: sequence array {
+  repeat <STRUCTURE>
+}
+
+// ---------------------------------------------------------------------
+// FORMATTYPE / MASKS — optional file-format declaration.
+// ---------------------------------------------------------------------
+
+FORMATTYPE: sequence dict {
+  gds_format:format=@,
+  ?<MASKS>
+}
+
+// MASKS is container-less: its `masks` field flows into FORMATTYPE's
+// dict via the catcher mechanism.
+MASKS: sequence {
+  ?<MASK_ARRAY>:masks=@,
+  gds_endmasks
+}
+
+MASK_ARRAY: sequence array {
+  repeat gds_mask
+}
+
+// ---------------------------------------------------------------------
+// STRUCTURE — one cell definition.
+// ---------------------------------------------------------------------
+
+STRUCTURE: sequence dict {
+  gds_bgnstr:timestamp=@,
+  gds_strname:name=@,
+  ?gds_strclass:class=@,
+  ?<ELEMENTS>:elements=@,
+  gds_endstr
+}
+
+ELEMENTS: sequence array {
+  repeat <ELEMENT>
+}
+
+// ---------------------------------------------------------------------
+// ELEMENT — one geometric / hierarchical entity. The seven kinds are
+// distinguished by their leading discriminator record; each carries
+// the "element" label as a constant in its dict.
+// ---------------------------------------------------------------------
+
+ELEMENT: sequence dict {
+  choice {
+    <BOUNDARY_ELEM>,
+    <PATH_ELEM>,
+    <SREF_ELEM>,
+    <AREF_ELEM>,
+    <TEXT_ELEM>,
+    <NODE_ELEM>,
+    <BOX_ELEM>
+  },
+  ?<PROPERTIES>:properties=@,
+  gds_endel
+}
+
+PROPERTIES: sequence array {
+  repeat <PROPERTY>
+}
+
+PROPERTY: sequence dict {
+  gds_propattr:name=@,
+  gds_propvalue:value=@
+}
+
+// All *_ELEM rules are container-less sequences — their fields flow
+// into the surrounding ELEMENT dict via the catcher mechanism.
+
+BOUNDARY_ELEM: sequence {
+  gds_boundary:element="boundary",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_layer:layer=@,
+  gds_datatype:datatype=@,
+  gds_xy:xy=@
+}
+
+PATH_ELEM: sequence {
+  gds_path:element="path",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_layer:layer=@,
+  gds_datatype:datatype=@,
+  ?gds_pathtype:pathtype=@,
+  ?gds_width:width=@,
+  ?gds_bgnextn:begin_ext=@,
+  ?gds_endextn:end_ext=@,
+  gds_xy:xy=@
+}
+
+SREF_ELEM: sequence {
+  gds_sref:element="sref",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_sname:name=@,
+  ?<STRANS_GROUP>,
+  gds_xy:xy=@
+}
+
+AREF_ELEM: sequence {
+  gds_aref:element="aref",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_sname:name=@,
+  ?<STRANS_GROUP>,
+  gds_colrow:colrow=@,
+  gds_xy:xy=@
+}
+
+TEXT_ELEM: sequence {
+  gds_text:element="text",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_layer:layer=@,
+  <TEXTBODY>
+}
+
+NODE_ELEM: sequence {
+  gds_node:element="node",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_layer:layer=@,
+  gds_nodetype:datatype=@,
+  gds_xy:xy=@
+}
+
+BOX_ELEM: sequence {
+  gds_box:element="box",
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_layer:layer=@,
+  gds_boxtype:datatype=@,
+  gds_xy:xy=@
+}
+
+// ---------------------------------------------------------------------
+// STRANS_GROUP / TEXTBODY — container-less. Their fields flow into
+// the surrounding SREF/AREF/TEXT_ELEM dict via the catcher mechanism.
+// ---------------------------------------------------------------------
+
+STRANS_GROUP: sequence {
+  gds_strans:strans=@,
+  ?gds_mag:mag=@,
+  ?gds_angle:angle=@
+}
+
+TEXTBODY: sequence {
+  gds_texttype:datatype=@,
+  ?gds_presentation:presentation=@,
+  ?gds_pathtype:pathtype=@,
+  ?gds_width:width=@,
+  ?<STRANS_GROUP>,
+  gds_xy:xy=@,
+  gds_string:text=@
+}
