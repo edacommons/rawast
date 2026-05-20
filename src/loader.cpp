@@ -297,4 +297,64 @@ load_json_grammar_from_file(Grammar& g, const std::string& path) {
     return load_json_grammar_from_string(g, buf.str());
 }
 
+// -------------------------------------------------------------------------
+// .rawast meta-grammar (lazy-loaded from grammars/rawast.json) and
+// public end-to-end loaders that go .rawast text -> Grammar in one call.
+// -------------------------------------------------------------------------
+
+namespace {
+
+const tl::expected<Grammar, std::string>& rawast_meta_grammar() {
+    static const auto cached = []() -> tl::expected<Grammar, std::string> {
+        Grammar g;
+        g.register_parser(std::make_unique<DoubleQuoteStringParser>());
+        g.register_parser(std::make_unique<IdentifierParser>());
+        g.register_parser(std::make_unique<WhitespaceParser>());
+        g.register_parser(std::make_unique<LineCommentParser>());
+        g.register_parser(std::make_unique<BlockCommentParser>());
+        g.add_ignore("whitespace");
+        g.add_ignore("line_comment");
+        g.add_ignore("block_comment");
+        auto r = load_json_grammar_from_file(g, "grammars/rawast.json");
+        if (!r) {
+            return tl::unexpected("rawast meta-grammar load: " + r.error());
+        }
+        return g;
+    }();
+    return cached;
+}
+
+} // namespace
+
+tl::expected<void, std::string>
+load_rawast_grammar_from_string(Grammar& g, std::string_view content) {
+    const auto& meta = rawast_meta_grammar();
+    if (!meta) return tl::unexpected(meta.error());
+
+    std::istringstream is{std::string{content}};
+    StreamReader sr{is};
+    auto parsed = meta->parse(sr);
+    if (!parsed) {
+        return tl::unexpected(
+            "failed to parse .rawast text at byte " +
+            std::to_string(parsed.error().position.bytes) +
+            ", line " + std::to_string(parsed.error().position.line) +
+            ", column " + std::to_string(parsed.error().position.column) +
+            ": " + parsed.error().message);
+    }
+    if (!*parsed) return tl::unexpected(".rawast parse produced null tree");
+    return load_json_grammar_into(g, **parsed);
+}
+
+tl::expected<void, std::string>
+load_rawast_grammar_from_file(Grammar& g, const std::string& path) {
+    std::ifstream fs{path};
+    if (!fs) {
+        return tl::unexpected("cannot open .rawast file: " + path);
+    }
+    std::ostringstream buf;
+    buf << fs.rdbuf();
+    return load_rawast_grammar_from_string(g, buf.str());
+}
+
 } // namespace rawast

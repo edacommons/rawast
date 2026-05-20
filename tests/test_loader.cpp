@@ -310,6 +310,66 @@ TEST_CASE("Loaded .rawast grammar parses a sequence without container") {
     CHECK(pair_dict->data().count("container") == 0);
 }
 
+TEST_CASE("End-to-end: .rawast definition produces a working parser") {
+    // Build a target grammar with primitive parsers registered, then
+    // load a .rawast grammar definition into it. The loaded grammar
+    // should then be usable to parse input.
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<FloatParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <VALUE>
+        VALUE: choice { <LIST>, float, int, string }
+        LIST:  sequence array { "[", repeat <VALUE> separator ",", "]" }
+    )";
+
+    auto r = load_rawast_grammar_from_string(target, rawast_source);
+    REQUIRE(r);
+
+    std::istringstream is{"[1, 2, 3]"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(*v);
+    REQUIRE(arr);
+    CHECK(arr->data().size() == 3);
+    CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[0])->data() == 1);
+    CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[1])->data() == 2);
+    CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[2])->data() == 3);
+}
+
+TEST_CASE("End-to-end: .rawast-defined parser also handles mixed types") {
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<FloatParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <VALUE>
+        VALUE: choice { <LIST>, float, int, string }
+        LIST:  sequence array { "[", repeat <VALUE> separator ",", "]" }
+    )";
+
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    std::istringstream is{R"([1, 3.14, "hello"])"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(*v);
+    REQUIRE(arr);
+    REQUIRE(arr->data().size() == 3);
+    CHECK(arr->data()[0]->type() == ValueType::Int);
+    CHECK(arr->data()[1]->type() == ValueType::Real);
+    CHECK(arr->data()[2]->type() == ValueType::String);
+}
+
 TEST_CASE("Loaded .rawast grammar parses key-with-null discriminator") {
     auto g = make_rawast_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));

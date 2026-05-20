@@ -60,4 +60,17 @@ tl::expected<void, std::string> load_json_grammar_from_string(
 tl::expected<void, std::string> load_json_grammar_from_file(
     Grammar& g, const std::string& path);
 
+// Parse .rawast source text and load the resulting grammar definition
+// into `g`. Internally: parse the text using the .rawast meta-grammar
+// (lazily loaded from grammars/rawast.json on first call), then feed
+// the produced JSON-grammar-format tree to load_json_grammar_into.
+//
+// `g` must already have its terminal parsers registered (the loader
+// doesn't know which parsers the target grammar will use).
+tl::expected<void, std::string> load_rawast_grammar_from_string(
+    Grammar& g, std::string_view content);
+
+tl::expected<void, std::string> load_rawast_grammar_from_file(
+    Grammar& g, const std::string& path);
+
 } // namespace rawast
