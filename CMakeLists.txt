@@ -47,6 +47,7 @@ add_library(rawast STATIC
     src/grammar.cpp
     src/loader.cpp
     src/linter.cpp
+    src/parsers_gdsii.cpp
 )
 add_library(rawast::rawast ALIAS rawast)
 
