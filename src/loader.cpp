@@ -62,7 +62,18 @@ build_inline(Grammar& g, const Value& body) {
     return id;
 }
 
-// Append each entry of an `items` array as a child of `target`.
+// Append each entry of an `items` array as a child of `target`. Recognises
+// the .rawast binding-wrapper shapes:
+//   {"expr":<X>, "type":"bare"}          -> unwrap; build child from <X>
+//   {"expr":<X>, "type":"var"}           -> unwrap; build child; set_name
+//   {"expr":<X>, "type":"binding", "name":"N"}
+//                                         -> expand inline into two children:
+//                                            (1) a Value-kind Node holding
+//                                                the constant string "N",
+//                                                flagged is_name=true;
+//                                            (2) the build of <X>.
+// Other shapes (bare strings, "sequence"/"choice"/etc. dicts) flow through
+// to build_inline as before.
 tl::expected<void, std::string>
 append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                    const std::string& kind_label) {
@@ -73,6 +84,65 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
     if (!arr) return tl::unexpected(kind_label + ": 'items' is not an array");
     for (const auto& item : arr->data()) {
         if (!item) return tl::unexpected(kind_label + ": null item in 'items'");
+
+        // Detect binding-wrapper shape.
+        if (auto item_dict = std::dynamic_pointer_cast<DictValue>(item)) {
+            auto type_it = item_dict->data().find("type");
+            auto expr_it = item_dict->data().find("expr");
+            if (type_it != item_dict->data().end() &&
+                expr_it != item_dict->data().end()) {
+                auto type_sv = std::dynamic_pointer_cast<StringValue>(
+                    type_it->second);
+                if (type_sv) {
+                    const std::string& t = type_sv->data();
+                    if (t == "bare") {
+                        if (!expr_it->second) {
+                            return tl::unexpected("bare wrapper: null expr");
+                        }
+                        auto child_r = build_inline(g, *expr_it->second);
+                        if (!child_r) return tl::unexpected(child_r.error());
+                        g.node(target).children.push_back(*child_r);
+                        continue;
+                    }
+                    if (t == "var") {
+                        if (!expr_it->second) {
+                            return tl::unexpected("var wrapper: null expr");
+                        }
+                        auto child_r = build_inline(g, *expr_it->second);
+                        if (!child_r) return tl::unexpected(child_r.error());
+                        g.set_name(*child_r);
+                        g.node(target).children.push_back(*child_r);
+                        continue;
+                    }
+                    if (t == "binding") {
+                        auto name_it = item_dict->data().find("name");
+                        if (name_it == item_dict->data().end()) {
+                            return tl::unexpected("binding wrapper: missing 'name'");
+                        }
+                        auto name_sv = std::dynamic_pointer_cast<StringValue>(
+                            name_it->second);
+                        if (!name_sv) {
+                            return tl::unexpected("binding wrapper: 'name' must be string");
+                        }
+                        if (!expr_it->second) {
+                            return tl::unexpected("binding wrapper: null expr");
+                        }
+                        // (1) Value-kind name marker.
+                        NodeId name_child = g.new_value(make_string(name_sv->data()));
+                        g.set_name(name_child);
+                        g.node(target).children.push_back(name_child);
+                        // (2) the wrapped expression.
+                        auto child_r = build_inline(g, *expr_it->second);
+                        if (!child_r) return tl::unexpected(child_r.error());
+                        g.node(target).children.push_back(*child_r);
+                        continue;
+                    }
+                    // Other type values ("sequence", "choice", "key", ...)
+                    // fall through to build_inline below.
+                }
+            }
+        }
+
         auto child_r = build_inline(g, *item);
         if (!child_r) return tl::unexpected(child_r.error());
         g.node(target).children.push_back(*child_r);

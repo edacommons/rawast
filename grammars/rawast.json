@@ -228,15 +228,85 @@
   },
 
   // ---------------------------------------------------------------------
-  // ITEMS — the contents of a { ... } block. Comma-separated EXPR list
-  // materialised as an ArrayValue (matching the "items" field shape
-  // expected by the JSON-grammar loader).
+  // ITEMS — the contents of a { ... } block. Comma-separated list of
+  // ITEM wrappers, materialised as an ArrayValue. Each ITEM carries the
+  // bare EXPR plus optional binding annotation (var / named), which the
+  // JSON-grammar loader's append_items_array interprets.
   // ---------------------------------------------------------------------
   "ITEMS": {
     "type": "sequence",
     "container": "array",
     "items": [
-      {"type": "repeat", "separator": ",", "item": "EXPR"}
+      {"type": "repeat", "separator": ",", "item": "ITEM"}
+    ]
+  },
+
+  // Each ITEM produces a uniform wrapper dict around its EXPR:
+  //
+  //   bare:      {"expr": <X>, "type": "bare"}
+  //   X:@=       {"expr": <X>, "type": "var"}
+  //   X:name=@   {"expr": <X>, "type": "binding", "name": "name"}
+  //
+  // The dict-catcher's emit-order means that if BIND_TAIL_OPT matches,
+  // it appends a second "type" / "name" pair that overwrites the
+  // default "bare" set by the always-emitted Value-kind constants
+  // earlier in this sequence.
+  "ITEM": {
+    "type": "sequence",
+    "container": "dict",
+    "items": [
+      {"type": "value", "value": "expr", "var": true},
+      "EXPR",
+      {"type": "value", "value": "type", "var": true},
+      {"type": "value", "value": "bare"},
+      "BIND_TAIL_OPT"
+    ]
+  },
+
+  // Optional ":bind_target" suffix after an EXPR.
+  "BIND_TAIL_OPT": {
+    "type": "sequence",
+    "optional": true,
+    "items": [
+      ":",
+      "BIND_TARGET"
+    ]
+  },
+
+  // The two binding forms; predictive-PEG distinguishable by first token
+  // after ":" — `@` for var, identifier for named.
+  "BIND_TARGET": {
+    "type": "choice",
+    "items": [
+      "BIND_TARGET_VAR",
+      "BIND_TARGET_NAMED"
+    ]
+  },
+
+  // @= — emits "type" = "var" into the surrounding ITEM dict catcher,
+  // overriding the earlier "bare" default.
+  "BIND_TARGET_VAR": {
+    "type": "sequence",
+    "items": [
+      "@",
+      "=",
+      {"type": "value", "value": "type", "var": true},
+      {"type": "value", "value": "var"}
+    ]
+  },
+
+  // name=@ — emits "name" = "<identifier>" and "type" = "binding" into
+  // the surrounding ITEM dict catcher. The loader expands this wrapper
+  // into a (Value-kind name marker for "name") + the wrapped expr.
+  "BIND_TARGET_NAMED": {
+    "type": "sequence",
+    "items": [
+      {"type": "value", "value": "name", "var": true},
+      {"type": "identifier"},
+      "=",
+      "@",
+      {"type": "value", "value": "type", "var": true},
+      {"type": "value", "value": "binding"}
     ]
   }
 }

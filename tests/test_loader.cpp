@@ -342,6 +342,106 @@ TEST_CASE("End-to-end: .rawast definition produces a working parser") {
     CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[2])->data() == 3);
 }
 
+TEST_CASE("End-to-end: .rawast var-binding (X:@=) — string as dict key") {
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    // PAIR uses string:@= to mark the parsed string as the dict key.
+    // STRUCT then catches name/value pairs into a dict.
+    const char* rawast_source = R"(
+        start: <STRUCT>
+        STRUCT: sequence dict { "{", repeat <PAIR> separator ",", "}" }
+        PAIR:   sequence { string:@=, ":", int }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    std::istringstream is{R"({"a": 1, "b": 2, "c": 3})"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    REQUIRE(d->data().size() == 3);
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("a"))->data() == 1);
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("b"))->data() == 2);
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("c"))->data() == 3);
+}
+
+TEST_CASE("End-to-end: .rawast full JSON grammar — self-host through bindings") {
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<FloatParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    // The complete JSON grammar, written in .rawast, exercising both
+    // bindings (string:@= for the PAIR) and Key-with-constant
+    // discriminators (the null/true/false alternatives).
+    const char* json_in_rawast = R"(
+        start: <VALUE>
+        VALUE: choice {
+          <STRUCT>,
+          <LIST>,
+          string,
+          float,
+          int,
+          "null":null,
+          "true":true,
+          "false":false
+        }
+        LIST:   sequence array { "[", repeat <VALUE> separator ",", "]" }
+        PAIR:   sequence       { string:@=, ":", <VALUE> }
+        STRUCT: sequence dict  { "{", repeat <PAIR> separator ",", "}" }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, json_in_rawast));
+
+    // Smoke test: round-trip the JSON grammar's own torture input.
+    std::istringstream is{
+        R"({"items":[1, 2, {"k":"v"}], "flag": true, "none": null})"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    REQUIRE(d->data().size() == 3);
+    CHECK(d->data().at("flag").get()  == true_value().get());
+    CHECK(d->data().at("none").get()  == null_value().get());
+    auto items = std::dynamic_pointer_cast<ArrayValue>(d->data().at("items"));
+    REQUIRE(items);
+    CHECK(items->data().size() == 3);
+}
+
+TEST_CASE("End-to-end: .rawast named binding (X:name=@) — emits named field") {
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    // RECORD uses named bindings (n=@, v=@) to emit fixed field names
+    // into the surrounding dict catcher. Input "name 42" produces
+    // {"n": "name", "v": 42}.
+    const char* rawast_source = R"(
+        start: <RECORD>
+        RECORD: sequence dict { string:n=@, int:v=@ }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    std::istringstream is{R"("name" 42)"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    REQUIRE(d->data().size() == 2);
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("n"))->data() == "name");
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("v"))->data() == 42);
+}
+
 TEST_CASE("End-to-end: .rawast-defined parser also handles mixed types") {
     Grammar target;
     target.register_parser(std::make_unique<IntParser>());
