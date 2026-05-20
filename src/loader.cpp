@@ -1,5 +1,6 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
+#include <rawast/parsers_registry.hpp>
 
 #include <fstream>
 #include <memory>
@@ -441,19 +442,39 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
     auto root = dynamic_cast<const DictValue*>(&tree);
     if (!root) return tl::unexpected("top-level grammar must be a dict");
 
+    // Apply `use:` directives first. The grammar's terminal-parser
+    // references (gds_header, int, identifier, ...) need to be
+    // resolvable at parse time; registering the parser groups up front
+    // means a `use: gdsii` declaration alone is sufficient — no host
+    // C++ pre-registration required.
+    if (auto use_it = root->data().find("use"); use_it != root->data().end()) {
+        auto use_arr = std::dynamic_pointer_cast<ArrayValue>(use_it->second);
+        if (!use_arr) {
+            return tl::unexpected("'use' field must be an array of group names");
+        }
+        for (const auto& entry : use_arr->data()) {
+            auto sv = std::dynamic_pointer_cast<StringValue>(entry);
+            if (!sv) {
+                return tl::unexpected("'use' entries must be identifiers");
+            }
+            auto r = apply_parser_group(g, sv->data());
+            if (!r) return tl::unexpected("use: " + r.error());
+        }
+    }
+
     // Pass 1: allocate one Node per named rule and register the name. The
     // Node's kind/value/children are filled in pass 2; for now they're
     // placeholders so that build_inline() / populate() can correctly
     // disambiguate bare-string Ref vs. Key by checking has_rule().
     for (const auto& [name, body] : root->data()) {
-        if (name == "start") continue;
+        if (name == "start" || name == "use") continue;
         NodeId id = g.new_sequence();   // placeholder
         g.register_rule(name, id);
     }
 
     // Pass 2: populate each named rule's Node from its body.
     for (const auto& [name, body] : root->data()) {
-        if (name == "start") continue;
+        if (name == "start" || name == "use") continue;
         if (!body) {
             return tl::unexpected("rule '" + name + "' has null body");
         }

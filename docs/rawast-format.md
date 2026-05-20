@@ -114,7 +114,7 @@ as parser names or as bare-identifier expressions:
 
 ```
 sequence  choice  repeat  separator  array  dict  null  true  false
-indent    tab     space   newline    tail
+indent    tab     space   newline    tail   use
 ```
 
 The first row are the structural keywords (§4.6–4.8 and §4.3
@@ -133,6 +133,45 @@ surrounding catcher.
 dict key (equivalent to `is_name=true` on the producing node).
 
 Both are explained fully in §4.
+
+## 2.8 The `use:` directive
+
+A `.rawast` file may declare which **terminal-parser groups** it needs
+by listing them at the top of the file:
+
+```rawast
+use: gdsii
+use: standard
+
+start: <LIBRARY>
+LIBRARY: sequence dict { ... }
+```
+
+Multiple groups can be combined comma-separated:
+
+```rawast
+use: gdsii, standard
+```
+
+When the loader encounters a `use:` directive it looks up each named
+group in a process-wide registry of parser-group factories and applies
+each to the target Grammar before processing any rule definitions. If
+a referenced group has not been registered, the load fails with a clear
+diagnostic ("`use: parser group 'X' not registered`") — much friendlier
+than the cryptic parse-time failure that would otherwise occur when an
+unknown parser is referenced.
+
+Built-in groups (compile-time registered in `librawast`):
+
+| Group name | Provides |
+| :--- | :--- |
+| `gdsii` | All 47 GDSII binary record parsers (`gds_header`, `gds_bgnlib`, …) |
+
+Additional groups can be registered from host C++ code via
+`rawast::register_parser_group("name", register_fn)`; see
+`include/rawast/parsers_registry.hpp`. Runtime plugins loading
+.so/.dll files at startup is a potential M5+ extension; the static
+registry is sufficient for M1–M4 scope.
 
 ## 3. Rule definitions
 

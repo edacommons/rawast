@@ -1,5 +1,6 @@
 #include <rawast/parsers_gdsii.hpp>
 #include <rawast/grammar.hpp>
+#include <rawast/parsers_registry.hpp>
 #include <rawast/stream.hpp>
 #include <rawast/value.hpp>
 
@@ -405,6 +406,16 @@ void register_gdsii_parsers(Grammar& g) {
     add("gds_format",       0x36, DT_INT16);
     add("gds_mask",         0x37, DT_STR);
     add("gds_endmasks",     0x38, DT_NO_DATA);
+}
+
+// Auto-register the "gdsii" group so grammars can declare `use: gdsii`.
+namespace {
+    struct GdsiiAutoRegister {
+        GdsiiAutoRegister() {
+            register_parser_group("gdsii", register_gdsii_parsers);
+        }
+    };
+    GdsiiAutoRegister gdsii_auto_register_;
 }
 
 } // namespace rawast

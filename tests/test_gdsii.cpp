@@ -3,12 +3,15 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_gdsii.hpp>
+#include <rawast/parsers_registry.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace rawast;
 
@@ -245,8 +248,10 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     // containing one structure with one BOUNDARY element. Validates the
     // full nested structure: LIBRARY -> structures[] -> STRUCTURE ->
     //                       elements[] -> ELEMENT (boundary).
+    //
+    // No explicit register_gdsii_parsers() call — the grammar's
+    // `use: gdsii` directive triggers it automatically.
     Grammar g;
-    register_gdsii_parsers(g);
     REQUIRE(load_rawast_grammar_from_file(g, "grammars/gdsii.rawast"));
 
     // Hand-craft a minimal but realistic GDSII byte stream.
@@ -358,4 +363,39 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[3])->data() == 0);
     CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[4])->data() == 100);
     CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[5])->data() == 100);
+}
+
+TEST_CASE("Parser registry: gdsii group is registered and applicable") {
+    CHECK(parser_group_exists("gdsii"));
+
+    auto names = registered_parser_groups();
+    CHECK(std::find(names.begin(), names.end(), "gdsii") != names.end());
+
+    Grammar g;
+    auto r = apply_parser_group(g, "gdsii");
+    REQUIRE(r);
+    // After applying, the gds_header parser must be available.
+    CHECK(g.parser("gds_header") != nullptr);
+    CHECK(g.parser("gds_endlib") != nullptr);
+}
+
+TEST_CASE("Parser registry: unknown group name produces a clear error") {
+    Grammar g;
+    auto r = apply_parser_group(g, "definitely_not_a_real_group");
+    REQUIRE(!r);
+    CHECK(r.error().find("not registered") != std::string::npos);
+}
+
+TEST_CASE("Parser registry: .rawast use: of unknown group fails at load time") {
+    const char* src = R"RAWAST(
+        use: definitely_not_a_real_group
+
+        start: <X>
+        X: int
+    )RAWAST";
+
+    Grammar g;
+    auto r = load_rawast_grammar_from_string(g, src);
+    REQUIRE(!r);
+    CHECK(r.error().find("definitely_not_a_real_group") != std::string::npos);
 }

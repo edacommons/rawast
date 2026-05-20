@@ -32,13 +32,46 @@
   "start": "FILE",
 
   // ---------------------------------------------------------------------
-  // FILE: top-level. A dict of rule_name -> rule_body.
+  // FILE: top-level. A dict that holds rule definitions and optional
+  // `use:` directives. `use:` is matched first (predictive — its first
+  // token is the literal "use" keyword); identifiers other than "use"
+  // fall through to RULE_DEF.
   // ---------------------------------------------------------------------
   "FILE": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "repeat", "item": "RULE_DEF"}
+      {"type": "repeat", "item": "FILE_ENTRY"}
+    ]
+  },
+
+  "FILE_ENTRY": {
+    "type": "choice",
+    "items": [
+      "USE_DECL",
+      "RULE_DEF"
+    ]
+  },
+
+  // USE_DECL: "use" ":" identifier ("," identifier)* — emits "use" as
+  // a dict key whose value is an array of group-name strings. The
+  // loader's `load_json_grammar_into` picks them up and applies each
+  // via apply_parser_group() before processing rule definitions.
+  "USE_DECL": {
+    "type": "sequence",
+    "items": [
+      {"type": "value", "value": "use", "var": true},
+      "use",
+      ":",
+      "USE_LIST"
+    ]
+  },
+
+  "USE_LIST": {
+    "type": "sequence",
+    "container": "array",
+    "items": [
+      {"type": "repeat", "separator": ",", "item": {"type": "identifier"}}
     ]
   },
 
