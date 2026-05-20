@@ -375,6 +375,29 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[3])->data() == 0);
     CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[4])->data() == 100);
     CHECK(std::dynamic_pointer_cast<IntValue>(xy->data()[5])->data() == 100);
+
+    // Save round-trip: with choice-match save (discriminator dispatch
+    // on the ELEMENT inline `choice { <BOUNDARY_ELEM>, ... }`), the
+    // full library should re-emit byte-identical bytes.
+    std::ostringstream out;
+    REQUIRE(g.save(out, *r));
+    CHECK(out.str() == bytes);
+
+    // Re-parse the saved bytes; should produce an AST identical to
+    // the original.
+    std::istringstream is2(out.str());
+    StreamReader sr2(is2);
+    auto r2 = g.parse(sr2);
+    REQUIRE(r2);
+    auto lib2 = std::dynamic_pointer_cast<DictValue>(*r2);
+    REQUIRE(lib2);
+    auto structures2 = std::dynamic_pointer_cast<ArrayValue>(lib2->data().at("structures"));
+    REQUIRE(structures2);
+    auto top_struct2 = std::dynamic_pointer_cast<DictValue>(structures2->data()[0]);
+    auto elements2 = std::dynamic_pointer_cast<ArrayValue>(top_struct2->data().at("elements"));
+    auto elem2 = std::dynamic_pointer_cast<DictValue>(elements2->data()[0]);
+    CHECK(std::dynamic_pointer_cast<StringValue>(elem2->data().at("element"))->data() == "boundary");
+    CHECK(std::dynamic_pointer_cast<IntValue>(elem2->data().at("layer"))->data() == 1);
 }
 
 TEST_CASE("Parser registry: gdsii group is registered and applicable") {

@@ -674,12 +674,75 @@ NodeId choose_alternative(const Grammar& g, const Node& choice_node, const Value
     return NodeId{};
 }
 
+// Deep equality on typed Values — used by the discriminator match below
+// to compare a dict field's value against a constant captured at grammar-
+// load time (`gds_boundary:element="boundary"` etc.). For primitives the
+// pointers are usually different objects, so shared_ptr identity isn't
+// enough; for null/true/false the global singletons make identity work,
+// but the explicit fallback to type+payload comparison handles all cases.
+bool values_equal(const ValuePtr& a, const ValuePtr& b) {
+    if (a.get() == b.get()) return true;
+    if (!a || !b) return false;
+    if (a->type() != b->type()) return false;
+    switch (a->type()) {
+    case ValueType::Null:  return true;
+    case ValueType::Bool:
+        return std::dynamic_pointer_cast<BoolValue>(a)->data() ==
+               std::dynamic_pointer_cast<BoolValue>(b)->data();
+    case ValueType::Int:
+        return std::dynamic_pointer_cast<IntValue>(a)->data() ==
+               std::dynamic_pointer_cast<IntValue>(b)->data();
+    case ValueType::UInt:
+        return std::dynamic_pointer_cast<UIntValue>(a)->data() ==
+               std::dynamic_pointer_cast<UIntValue>(b)->data();
+    case ValueType::Real:
+        return std::dynamic_pointer_cast<RealValue>(a)->data() ==
+               std::dynamic_pointer_cast<RealValue>(b)->data();
+    case ValueType::String:
+        return std::dynamic_pointer_cast<StringValue>(a)->data() ==
+               std::dynamic_pointer_cast<StringValue>(b)->data();
+    default:
+        return false;
+    }
+}
+
+// A container-less Sequence whose first item carries a literal-binding
+// discriminator (`gds_X:element="boundary"`) desugars to children
+// starting with [Parse, Value-name-marker, Value-const]. This walks the
+// alternative's children looking for any (Value-name, Value-const)
+// adjacent pair; if dict[name] == const for any such pair, the
+// alternative matches.
+bool matches_discriminator(const Grammar& g, const Node& alt,
+                            const DictValue& dict) {
+    for (std::size_t i = 0; i + 1 < alt.children.size(); ++i) {
+        const Node& a = g.node(g.resolve_ref(alt.children[i]));
+        const Node& b = g.node(g.resolve_ref(alt.children[i + 1]));
+        if (a.kind != NodeKind::Value || !a.is_name) continue;
+        if (b.kind != NodeKind::Value ||  b.is_name) continue;
+        auto name_sv = std::dynamic_pointer_cast<StringValue>(a.value);
+        if (!name_sv) continue;
+        auto it = dict.data().find(name_sv->data());
+        if (it == dict.data().end()) continue;
+        if (!values_equal(it->second, b.value)) continue;
+        return true;
+    }
+    return false;
+}
+
 bool alternative_matches(const Grammar& g, const Node& alt, const Value& v) {
     const ValueType vt = v.type();
     switch (alt.kind) {
     case NodeKind::Sequence:
         if (alt.container == Container::Dict  && vt == ValueType::Dict)  return true;
         if (alt.container == Container::Array && vt == ValueType::Array) return true;
+        // Container-less Sequence + dict value: try the discriminator
+        // pattern (literal-binding pairs). Used by ELEMENT-style
+        // choices where each alt is `sequence { gds_X:kind="...", ... }`
+        // and we pick the alt whose kind matches the dict's field.
+        if (alt.container == Container::None && vt == ValueType::Dict) {
+            auto* dict = dynamic_cast<const DictValue*>(&v);
+            return dict ? matches_discriminator(g, alt, *dict) : false;
+        }
         return false;
 
     case NodeKind::Parse: {
@@ -918,11 +981,57 @@ tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
     return {};
 }
 
+// Expand each Choice child (whose picked alternative is a container-less
+// Sequence carrying a discriminator) by inlining the alt's children at
+// the Choice's position. Other children pass through unchanged. This
+// gives save_dict_fixed_schema a flat list of children whose name-marker
+// pairs can be looked up directly in the dict — turning ELEMENT-style
+// `choice { <BOUNDARY_ELEM>, <PATH_ELEM>, ... }` into the chosen kind's
+// fields inlined into ELEMENT's effective children.
+std::vector<NodeId> expand_dict_children(
+    const Grammar& g, const std::vector<NodeId>& children, const DictValue& dict
+) {
+    std::vector<NodeId> out;
+    out.reserve(children.size());
+    for (NodeId child_id : children) {
+        NodeId resolved = g.resolve_ref(child_id);
+        const Node& cn = g.node(resolved);
+        if (cn.kind != NodeKind::Choice) {
+            out.push_back(child_id);
+            continue;
+        }
+        NodeId picked = choose_alternative(g, cn, dict);
+        if (!picked.valid()) {
+            // No matching alternative — leave the Choice in place; the
+            // downstream save_node will surface a clear error.
+            out.push_back(child_id);
+            continue;
+        }
+        NodeId pr = g.resolve_ref(picked);
+        const Node& pn = g.node(pr);
+        if (pn.kind == NodeKind::Sequence && pn.container == Container::None) {
+            // Container-less — inline its children.
+            for (NodeId pc : pn.children) out.push_back(pc);
+        } else {
+            // Container alt, Parse alt, Key alt — keep as single id;
+            // save_node handles it.
+            out.push_back(picked);
+        }
+    }
+    return out;
+}
+
 tl::expected<void, SaveError> save_dict_fixed_schema(
     const Grammar& g, std::ostream& out, const Node& seq_node,
     const DictValue& dict, int depth, bool pretty
 ) {
-    // Walk the Sequence's children twice: first to build the inner
+    // First, expand any Choice children that select container-less
+    // discriminator alternatives. This inlines the picked alt's children
+    // at the Choice's position, turning ELEMENT-style choices into a
+    // flat field list whose name markers we can look up in the dict.
+    std::vector<NodeId> children = expand_dict_children(g, seq_node.children, dict);
+
+    // Walk the (expanded) children twice: first to build the inner
     // cursor and the skip-mask, then to emit each non-skipped child.
     //
     // Build pass — we walk left-to-right tracking a "pending name"
@@ -944,14 +1053,14 @@ tl::expected<void, SaveError> save_dict_fixed_schema(
     //   * Non-consuming children (Keys without Value-kind children,
     //     other Value markers): no cursor entry, no skip.
     std::vector<Frame::EmittedValue> entries;
-    std::vector<bool> skip(seq_node.children.size(), false);
+    std::vector<bool> skip(children.size(), false);
 
     std::string  pending_name;
     std::size_t  pending_idx = 0;
     bool         have_pending = false;
 
-    for (std::size_t i = 0; i < seq_node.children.size(); ++i) {
-        NodeId child_id = seq_node.children[i];
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        NodeId child_id = children[i];
         NodeId resolved = g.resolve_ref(child_id);
         const Node& cn  = g.node(resolved);
 
@@ -990,9 +1099,9 @@ tl::expected<void, SaveError> save_dict_fixed_schema(
     SaveCursor inner;
     inner.values = std::move(entries);
 
-    for (std::size_t i = 0; i < seq_node.children.size(); ++i) {
+    for (std::size_t i = 0; i < children.size(); ++i) {
         if (skip[i]) continue;
-        auto r = save_node(g, out, seq_node.children[i], inner, depth, pretty);
+        auto r = save_node(g, out, children[i], inner, depth, pretty);
         if (!r) return r;
     }
     return {};
