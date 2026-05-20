@@ -16,6 +16,8 @@ add_executable(rawast_tests
     test_node.cpp
     test_stream.cpp
     test_parsers.cpp
+    test_grammar.cpp
+    test_json.cpp
 )
 
 target_link_libraries(rawast_tests
