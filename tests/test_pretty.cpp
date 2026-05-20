@@ -259,6 +259,56 @@ TEST_CASE("Pretty: .rawast postfix attrs on repeat item (`repeat int tab indent`
     );
 }
 
+TEST_CASE("Pretty: pretty=false skips tab/indent/newline; keeps space and tail") {
+    const char* src = R"RAWAST(
+        start: <TOP>
+
+        TOP: sequence array {
+          "[" newline,
+          repeat int tab indent space separator "," newline,
+          "" newline,
+          "]" tab
+        }
+    )RAWAST";
+
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.add_ignore("whitespace");
+    REQUIRE(load_rawast_grammar_from_string(g, src));
+
+    std::istringstream input("[1, 2]");
+    StreamReader sr(input);
+    auto r = g.parse(sr);
+    REQUIRE(r);
+
+    // Pretty mode: emits all attrs.
+    std::ostringstream pretty_out;
+    REQUIRE(g.save(pretty_out, *r, /*pretty=*/true));
+    CHECK(pretty_out.str() ==
+        "[\n"
+        "  1 ,\n"
+        "  2 \n"
+        "]"
+    );
+
+    // Compact mode: skip tab, indent, newline. Keep space and tail (the
+    // `space` after each iteration is preserved so the output stays
+    // unambiguous for round-trip).
+    std::ostringstream compact_out;
+    REQUIRE(g.save(compact_out, *r, /*pretty=*/false));
+    CHECK(compact_out.str() == "[1 ,2 ]");
+
+    // Round-trip: re-parse compact output, get same AST.
+    std::istringstream compact_in(compact_out.str());
+    StreamReader compact_sr(compact_in);
+    auto compact_r = g.parse(compact_sr);
+    REQUIRE(compact_r);
+    std::ostringstream compact_out_2;
+    REQUIRE(g.save(compact_out_2, *compact_r, /*pretty=*/false));
+    CHECK(compact_out_2.str() == compact_out.str());
+}
+
 TEST_CASE("Pretty: full JSON pretty grammar in .rawast — round-trip") {
     // The textbook example: a JSON-style grammar written in .rawast
     // with postfix pretty-print hints. Parses compact JSON, emits pretty

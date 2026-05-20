@@ -358,6 +358,14 @@ serialisations are interchangeable.
 **`indent_step` is a Grammar-level setting** (default `"  "`). Switch to
 tabs via `Grammar::set_indent_step("\t")` in C++ before parsing.
 
+**Runtime compact/pretty toggle.** `Grammar::save(out, value, pretty)`
+takes a final `pretty` parameter (default `true`). When set to `false`,
+the save direction skips `tab`, `indent` (no depth bump), and `newline`
+emissions but still emits `space` and `tail` (since the grammar author
+may rely on them for round-trip parseability — e.g. a space between two
+adjacent identifiers). One grammar covers both pretty and compact
+output; no separate "compact grammar" is required.
+
 ### 4.6 Sequence — `sequence [container] { items }`
 
 ```

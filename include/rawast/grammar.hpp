@@ -153,16 +153,25 @@ public:
 
     // --- Driver: save direction ----------------------------------------
 
-    // Emit `value` as text to `out` using this grammar. Output is canonical
-    // compact form (no whitespace between tokens); pretty-printing is a
-    // future concern.
+    // Emit `value` as text to `out` using this grammar.
+    //
+    // `pretty` controls the save-side pretty-print attributes:
+    //   true  (default) — emit `tab` (indent), `newline`, and apply
+    //                     `indent` depth bumps. The grammar's full
+    //                     formatting takes effect.
+    //   false           — skip tab/indent/newline; keep `space` and
+    //                     `tail` (those may be required for round-trip
+    //                     parsing — e.g. space between two adjacent
+    //                     identifiers, or tail strings used as
+    //                     line-continuation markers).
     //
     // Choice dispatch is by value-shape: a DictValue picks the alternative
     // that produces a Container::Dict; an ArrayValue picks Container::Array;
     // a primitive picks the matching Parse alternative by parser-name
     // convention ("int" / "uint" / "float" / "string"); null/true/false
     // pick the Key alternative whose Value-child constant identity-matches.
-    tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value) const;
+    tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value,
+                                       bool pretty = true) const;
 
 private:
     std::vector<Node> nodes_;

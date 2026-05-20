@@ -624,11 +624,12 @@ bool alternative_matches(const Grammar& g, const Node& alt, const Value& v) {
 }
 
 tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
-                                        NodeId node_id, SaveCursor& cursor, int depth);
+                                        NodeId node_id, SaveCursor& cursor,
+                                        int depth, bool pretty);
 
 tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out,
                                               NodeId node_id, SaveCursor& cursor,
-                                              int depth) {
+                                              int depth, bool pretty) {
     const NodeId resolved = g.resolve_ref(node_id);
     const Node& n = g.node(resolved);
 
@@ -680,7 +681,7 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
     case NodeKind::Sequence: {
         if (n.container == Container::None) {
             for (NodeId child : n.children) {
-                auto r = save_node(g, out, child, cursor, depth);
+                auto r = save_node(g, out, child, cursor, depth, pretty);
                 if (!r) return r;
             }
             return {};
@@ -710,7 +711,7 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
             }
         }
         for (NodeId child : n.children) {
-            auto r = save_node(g, out, child, inner, depth);
+            auto r = save_node(g, out, child, inner, depth, pretty);
             if (!r) return r;
         }
         return {};
@@ -724,10 +725,10 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
         bool first = true;
         while (cursor.has_more()) {
             if (!first && sep_id.valid()) {
-                auto r = save_node(g, out, sep_id, cursor, depth);
+                auto r = save_node(g, out, sep_id, cursor, depth, pretty);
                 if (!r) return r;
             }
-            auto r = save_node(g, out, item_id, cursor, depth);
+            auto r = save_node(g, out, item_id, cursor, depth, pretty);
             if (!r) return r;
             first = false;
         }
@@ -745,7 +746,7 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
             return tl::unexpected(SaveError{
                 "no matching grammar alternative for value type"});
         }
-        return save_node(g, out, picked, cursor, depth);
+        return save_node(g, out, picked, cursor, depth, pretty);
     }
 
     case NodeKind::Ref:
@@ -768,32 +769,38 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
 // the new depth.
 tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
                                         NodeId node_id, SaveCursor& cursor,
-                                        int depth) {
+                                        int depth, bool pretty) {
     if (!node_id.valid()) return {};
     const NodeId resolved = g.resolve_ref(node_id);
     const Node& orig = g.node(node_id);
     const Node& n    = g.node(resolved);
     const bool ref_diff = (resolved.value() != node_id.value());
 
+    // In compact mode, suppress depth bumps so tab × depth is always 0
+    // (and the indent layer collapses). `space` and `tail` still emit —
+    // they may be required for parse round-trip.
     int body_depth = depth;
-    if (orig.depth_in) ++body_depth;
-    if (ref_diff && n.depth_in) ++body_depth;
+    if (pretty) {
+        if (orig.depth_in) ++body_depth;
+        if (ref_diff && n.depth_in) ++body_depth;
+    }
 
     auto emit_tab = [&](const Node& node) {
+        if (!pretty) return;
         if (node.indent_emit) {
             for (int i = 0; i < body_depth; ++i) out << g.indent_step();
         }
     };
     auto emit_post = [&](const Node& node) {
-        if (!node.tail.empty()) out << node.tail;
-        if (node.space_after)   out << ' ';
-        if (node.newline_after) out << '\n';
+        if (!node.tail.empty())            out << node.tail;
+        if (node.space_after)              out << ' ';
+        if (pretty && node.newline_after)  out << '\n';
     };
 
     emit_tab(orig);
     if (ref_diff) emit_tab(n);
 
-    auto r = save_node_body(g, out, node_id, cursor, body_depth);
+    auto r = save_node_body(g, out, node_id, cursor, body_depth, pretty);
     if (!r) return r;
 
     if (ref_diff) emit_post(n);
@@ -803,11 +810,12 @@ tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
 
 } // namespace
 
-tl::expected<void, SaveError> Grammar::save(std::ostream& out, ValuePtr value) const {
+tl::expected<void, SaveError> Grammar::save(std::ostream& out, ValuePtr value,
+                                            bool pretty) const {
     if (!value) return tl::unexpected(SaveError{"save: null root value"});
     SaveCursor cursor;
     cursor.values.push_back({std::move(value), false});
-    return save_node(*this, out, top_, cursor, 0);
+    return save_node(*this, out, top_, cursor, 0, pretty);
 }
 
 // -------------------------------------------------------------------------
