@@ -224,10 +224,25 @@ void run_ignore(const Grammar& g, StreamReader& sr) {
     }
 }
 
-// Push a NodeId onto the stack, resolving Ref chains.
+// Push a NodeId onto the stack, resolving Ref chains. If any Ref along
+// the chain has is_optional=true (the `?<RULE>` site pattern), propagate
+// that flag to the pushed Frame — without it the optional fails-as-
+// empty handling in handle_failure would never fire for ref-site
+// optionals.
 void push_node(std::vector<Frame>& stack, const Grammar& g, NodeId id) {
     NodeId resolved = g.resolve_ref(id);
     stack.emplace_back(g, resolved);
+    NodeId cur = id;
+    while (cur.valid() && cur.value() != resolved.value()
+                       && g.node(cur).kind == NodeKind::Ref) {
+        if (g.node(cur).is_optional) {
+            stack.back().force_optional();
+            break;
+        }
+        auto sv = std::dynamic_pointer_cast<StringValue>(g.node(cur).value);
+        if (!sv) break;
+        cur = g.rule_id(sv->data());
+    }
 }
 
 // Update max_progress if the new error is further along.

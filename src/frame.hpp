@@ -40,6 +40,12 @@ public:
     bool has_mark() const noexcept { return has_mark_; }
     void set_has_mark(bool v) noexcept { has_mark_ = v; }
 
+    // Force the Frame's is_optional flag on. Used by push_node when a
+    // Ref in the resolution chain carried is_optional=true that the
+    // resolved Node itself doesn't have (so `?<RULE>` correctly makes
+    // that one ref-site optional without mutating the rule).
+    void force_optional() noexcept { is_optional_ = true; }
+
     void add_value(ValuePtr v, bool is_name);
 
     bool has_current() const noexcept;
