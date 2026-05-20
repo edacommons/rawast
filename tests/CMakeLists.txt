@@ -14,6 +14,8 @@ add_executable(rawast_tests
     test_version.cpp
     test_value.cpp
     test_node.cpp
+    test_stream.cpp
+    test_parsers.cpp
 )
 
 target_link_libraries(rawast_tests

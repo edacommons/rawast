@@ -40,6 +40,8 @@ add_library(rawast STATIC
     src/version.cpp
     src/value.cpp
     src/node.cpp
+    src/stream.cpp
+    src/parsers.cpp
 )
 add_library(rawast::rawast ALIAS rawast)
 
