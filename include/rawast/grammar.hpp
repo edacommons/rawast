@@ -93,6 +93,19 @@ public:
     tl::expected<ValuePtr, ParseError> parse(StreamReader& sr) const;
     tl::expected<ValuePtr, ParseError> parse(StreamReader& sr, ValuePool& pool) const;
 
+    // --- Driver: save direction ----------------------------------------
+
+    // Emit `value` as text to `out` using this grammar. Output is canonical
+    // compact form (no whitespace between tokens); pretty-printing is a
+    // future concern.
+    //
+    // Choice dispatch is by value-shape: a DictValue picks the alternative
+    // that produces a Container::Dict; an ArrayValue picks Container::Array;
+    // a primitive picks the matching Parse alternative by parser-name
+    // convention ("int" / "uint" / "float" / "string"); null/true/false
+    // pick the Key alternative whose Value-child constant identity-matches.
+    tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value) const;
+
 private:
     std::vector<Node> nodes_;
     std::map<std::string, NodeId> named_rules_;

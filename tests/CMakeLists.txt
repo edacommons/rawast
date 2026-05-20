@@ -19,6 +19,7 @@ add_executable(rawast_tests
     test_grammar.cpp
     test_json.cpp
     test_pool.cpp
+    test_save.cpp
 )
 
 target_link_libraries(rawast_tests

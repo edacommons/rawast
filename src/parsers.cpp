@@ -1,5 +1,6 @@
 #include <rawast/parsers.hpp>
 
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <string>
@@ -27,6 +28,11 @@ ParseResult KeyParser::parse(StreamReader& sr) {
     }
     sr.accept();
     return make_string(token_);
+}
+
+SaveResult KeyParser::unparse(const Value& /*value*/) const {
+    // Literal is fixed; the input value (if any) is ignored.
+    return token_;
 }
 
 // IntParser ---------------------------------------------------------
@@ -69,6 +75,14 @@ ParseResult IntParser::parse(StreamReader& sr) {
     return make_int(result);
 }
 
+SaveResult IntParser::unparse(const Value& value) const {
+    auto iv = dynamic_cast<const IntValue*>(&value);
+    if (!iv) {
+        return tl::unexpected(SaveError{"IntParser::unparse expects IntValue"});
+    }
+    return std::to_string(iv->data());
+}
+
 // UIntParser --------------------------------------------------------------
 
 UIntParser::UIntParser() : Parser("uint") {}
@@ -99,6 +113,14 @@ ParseResult UIntParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "unsigned integer out of range"});
     }
     return make_uint(result);
+}
+
+SaveResult UIntParser::unparse(const Value& value) const {
+    auto uv = dynamic_cast<const UIntValue*>(&value);
+    if (!uv) {
+        return tl::unexpected(SaveError{"UIntParser::unparse expects UIntValue"});
+    }
+    return std::to_string(uv->data());
 }
 
 // FloatParser -------------------------------------------------------------
@@ -197,6 +219,28 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     return make_real(result);
 }
 
+SaveResult FloatParser::unparse(const Value& value) const {
+    auto rv = dynamic_cast<const RealValue*>(&value);
+    if (!rv) {
+        return tl::unexpected(SaveError{"FloatParser::unparse expects RealValue"});
+    }
+    // std::to_chars gives the shortest round-trippable representation.
+    std::array<char, 32> buf{};
+    auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), rv->data());
+    if (ec != std::errc{}) {
+        return tl::unexpected(SaveError{"float formatting failed"});
+    }
+    std::string out{buf.data(), ptr};
+    // The FloatParser rejects integer-looking inputs (no '.' or 'e'); make
+    // sure the output also satisfies that, by appending ".0" if needed.
+    bool has_dot_or_exp = false;
+    for (char c : out) {
+        if (c == '.' || c == 'e' || c == 'E') { has_dot_or_exp = true; break; }
+    }
+    if (!has_dot_or_exp) out += ".0";
+    return out;
+}
+
 // WhitespaceParser --------------------------------------------------------
 
 WhitespaceParser::WhitespaceParser() : Parser("whitespace") {}
@@ -259,6 +303,17 @@ ParseResult DoubleQuoteStringParser::parse(StreamReader& sr) {
 
     sr.accept();
     return make_string(std::move(contents));
+}
+
+SaveResult DoubleQuoteStringParser::unparse(const Value& value) const {
+    auto sv = dynamic_cast<const StringValue*>(&value);
+    if (!sv) {
+        return tl::unexpected(SaveError{
+            "DoubleQuoteStringParser::unparse expects StringValue"});
+    }
+    // Contents already include any backslash escapes from parse (pass-
+    // through mode); wrap in quotes.
+    return "\"" + sv->data() + "\"";
 }
 
 // LineCommentParser -------------------------------------------------------

@@ -5,8 +5,10 @@
 
 #include <cassert>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace rawast {
 
@@ -374,6 +376,214 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         return result_value;
     }
     return tl::unexpected(max_progress);
+}
+
+// -------------------------------------------------------------------------
+// Save driver — structural mirror of the load driver
+// -------------------------------------------------------------------------
+
+namespace {
+
+// A cursor into a sequence of values that flow downward during save.
+// Container-Sequences split their value into a child cursor (array
+// elements, or dict name-value pairs); Repeat iterates a cursor;
+// terminals consume from the cursor.
+struct SaveCursor {
+    std::vector<Frame::EmittedValue> values;
+    std::size_t idx = 0;
+
+    bool has_more() const noexcept { return idx < values.size(); }
+    const Frame::EmittedValue& peek() const { return values[idx]; }
+    const Frame::EmittedValue& next() { return values[idx++]; }
+};
+
+bool alternative_matches(const Grammar& g, const Node& alt, const Value& v);
+
+// Choose the Choice alternative whose grammar shape matches the value.
+NodeId choose_alternative(const Grammar& g, const Node& choice_node, const Value& v) {
+    for (NodeId child_id : choice_node.children) {
+        NodeId resolved = g.resolve_ref(child_id);
+        const Node& alt = g.node(resolved);
+        if (alternative_matches(g, alt, v)) {
+            return child_id;
+        }
+    }
+    return NodeId{};
+}
+
+bool alternative_matches(const Grammar& g, const Node& alt, const Value& v) {
+    const ValueType vt = v.type();
+    switch (alt.kind) {
+    case NodeKind::Sequence:
+        if (alt.container == Container::Dict  && vt == ValueType::Dict)  return true;
+        if (alt.container == Container::Array && vt == ValueType::Array) return true;
+        return false;
+
+    case NodeKind::Parse: {
+        auto sv = std::dynamic_pointer_cast<StringValue>(alt.value);
+        if (!sv) return false;
+        const std::string& pn = sv->data();
+        if (vt == ValueType::Int    && pn == "int")    return true;
+        if (vt == ValueType::UInt   && pn == "uint")   return true;
+        if (vt == ValueType::Real   && pn == "float")  return true;
+        if (vt == ValueType::String && pn == "string") return true;
+        return false;
+    }
+
+    case NodeKind::Key: {
+        // Match if any Value-kind child has an identity-equal constant.
+        // For Phase 5 this covers the JSON null/true/false case where the
+        // Value children hold the global singletons.
+        for (NodeId child_id : alt.children) {
+            NodeId resolved = g.resolve_ref(child_id);
+            const Node& vc = g.node(resolved);
+            if (vc.kind == NodeKind::Value && vc.value && vc.value.get() == &v) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    default:
+        return false;
+    }
+}
+
+tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
+                                        NodeId node_id, SaveCursor& cursor) {
+    const NodeId resolved = g.resolve_ref(node_id);
+    const Node& n = g.node(resolved);
+
+    switch (n.kind) {
+    case NodeKind::Key: {
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv) return tl::unexpected(SaveError{"Key without literal token"});
+        // A Key with Value-kind children is being used as a discriminator
+        // (e.g., the null/true/false alternatives in a JSON-value Choice).
+        // It consumes the matched value from the cursor on save so that
+        // the enclosing Repeat / Sequence advances correctly. A Key
+        // without Value-kind children is purely structural ("{", ":")
+        // and consumes nothing.
+        bool is_discriminator = false;
+        for (NodeId child_id : n.children) {
+            NodeId rc = g.resolve_ref(child_id);
+            if (g.node(rc).kind == NodeKind::Value) {
+                is_discriminator = true;
+                break;
+            }
+        }
+        if (is_discriminator && cursor.has_more()) {
+            cursor.next();
+        }
+        out << sv->data();
+        return {};
+    }
+
+    case NodeKind::Value:
+        // Discriminator only. No text emitted.
+        return {};
+
+    case NodeKind::Parse: {
+        if (!cursor.has_more()) {
+            return tl::unexpected(SaveError{"Parse node with no value to consume"});
+        }
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv) return tl::unexpected(SaveError{"Parse node without parser name"});
+        Parser* p = g.parser(sv->data());
+        if (!p) return tl::unexpected(SaveError{"unknown parser: " + sv->data()});
+        const auto& ev = cursor.next();
+        if (!ev.value) return tl::unexpected(SaveError{"null value to Parse"});
+        auto r = p->unparse(*ev.value);
+        if (!r) return tl::unexpected(r.error());
+        out << *r;
+        return {};
+    }
+
+    case NodeKind::Sequence: {
+        if (n.container == Container::None) {
+            for (NodeId child : n.children) {
+                auto r = save_node(g, out, child, cursor);
+                if (!r) return r;
+            }
+            return {};
+        }
+        // Container-Sequence: consume one value, split into an inner stream.
+        if (!cursor.has_more()) {
+            return tl::unexpected(SaveError{"container Sequence with no value"});
+        }
+        const auto& ev = cursor.next();
+        SaveCursor inner;
+        if (n.container == Container::Array) {
+            auto arr = std::dynamic_pointer_cast<ArrayValue>(ev.value);
+            if (!arr) return tl::unexpected(SaveError{
+                "expected ArrayValue for container=Array sequence"});
+            inner.values.reserve(arr->data().size());
+            for (const auto& elem : arr->data()) {
+                inner.values.push_back({elem, false});
+            }
+        } else if (n.container == Container::Dict) {
+            auto dict = std::dynamic_pointer_cast<DictValue>(ev.value);
+            if (!dict) return tl::unexpected(SaveError{
+                "expected DictValue for container=Dict sequence"});
+            inner.values.reserve(dict->data().size() * 2);
+            for (const auto& [name, val] : dict->data()) {
+                inner.values.push_back({make_string(name), true});
+                inner.values.push_back({val, false});
+            }
+        }
+        for (NodeId child : n.children) {
+            auto r = save_node(g, out, child, inner);
+            if (!r) return r;
+        }
+        return {};
+    }
+
+    case NodeKind::Repeat: {
+        const bool has_sep = n.has_separator && n.children.size() >= 2;
+        NodeId sep_id  = has_sep ? n.children[0] : NodeId{};
+        NodeId item_id = has_sep ? n.children[1] : (n.children.empty() ? NodeId{} : n.children[0]);
+        if (!item_id.valid()) return {};  // empty repeat — nothing to emit
+        bool first = true;
+        while (cursor.has_more()) {
+            if (!first && sep_id.valid()) {
+                auto r = save_node(g, out, sep_id, cursor);
+                if (!r) return r;
+            }
+            auto r = save_node(g, out, item_id, cursor);
+            if (!r) return r;
+            first = false;
+        }
+        return {};
+    }
+
+    case NodeKind::Choice: {
+        if (!cursor.has_more()) {
+            return tl::unexpected(SaveError{"Choice with no value to dispatch on"});
+        }
+        const auto& ev = cursor.peek();
+        if (!ev.value) return tl::unexpected(SaveError{"null value at Choice"});
+        NodeId picked = choose_alternative(g, n, *ev.value);
+        if (!picked.valid()) {
+            return tl::unexpected(SaveError{
+                "no matching grammar alternative for value type"});
+        }
+        return save_node(g, out, picked, cursor);
+    }
+
+    case NodeKind::Ref:
+        // Already resolved at entry; unreachable.
+        return tl::unexpected(SaveError{"internal: unresolved Ref at save"});
+    }
+    return {};
+}
+
+} // namespace
+
+tl::expected<void, SaveError> Grammar::save(std::ostream& out, ValuePtr value) const {
+    if (!value) return tl::unexpected(SaveError{"save: null root value"});
+    SaveCursor cursor;
+    cursor.values.push_back({std::move(value), false});
+    return save_node(*this, out, top_, cursor);
 }
 
 // -------------------------------------------------------------------------

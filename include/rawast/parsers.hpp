@@ -14,6 +14,7 @@ class KeyParser final : public Parser {
 public:
     explicit KeyParser(std::string token);
     ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
 };
 
 // Optional leading '-' followed by one or more digits. Produces an IntValue.
@@ -21,6 +22,7 @@ class IntParser final : public Parser {
 public:
     IntParser();
     ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
 };
 
 // One or more digits. Produces a UIntValue.
@@ -28,6 +30,7 @@ class UIntParser final : public Parser {
 public:
     UIntParser();
     ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
 };
 
 // Floating-point with optional sign, optional fractional part, optional
@@ -37,6 +40,7 @@ class FloatParser final : public Parser {
 public:
     FloatParser();
     ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
 };
 
 // One or more consecutive whitespace characters. Produces a StringValue
@@ -56,6 +60,7 @@ class DoubleQuoteStringParser final : public Parser {
 public:
     DoubleQuoteStringParser();
     ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
 };
 
 // `//` line comment, consumed up to but not including the line terminator
