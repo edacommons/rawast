@@ -229,6 +229,49 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         g.node(target).children.push_back(*child_r);
                         continue;
                     }
+                    if (t == "binding_const") {
+                        // EXPR:name=<literal> form. The EXPR is parsed
+                        // (input is consumed, its side effect matters —
+                        // matching a discriminator record etc.), but its
+                        // produced value is discarded. The literal
+                        // becomes the value-side of the (name, literal)
+                        // pair emitted into the surrounding dict catcher.
+                        auto name_it  = item_dict->data().find("name");
+                        auto value_it = item_dict->data().find("value");
+                        if (name_it == item_dict->data().end()) {
+                            return tl::unexpected("binding_const: missing 'name'");
+                        }
+                        if (value_it == item_dict->data().end()) {
+                            return tl::unexpected("binding_const: missing 'value'");
+                        }
+                        auto name_sv = std::dynamic_pointer_cast<StringValue>(
+                            name_it->second);
+                        if (!name_sv) {
+                            return tl::unexpected("binding_const: 'name' must be string");
+                        }
+                        if (!value_it->second) {
+                            return tl::unexpected("binding_const: null 'value'");
+                        }
+                        if (!expr_it->second) {
+                            return tl::unexpected("binding_const: null expr");
+                        }
+                        // (1) Build the EXPR — input parsing still
+                        // happens (discriminator record gets matched);
+                        // the produced Value is dropped at the
+                        // dict-catcher stage by the trailing constant.
+                        auto child_r = build_inline(g, *expr_it->second);
+                        if (!child_r) return tl::unexpected(child_r.error());
+                        apply_pretty_attrs(g, *child_r, *item_dict);
+                        g.node(target).children.push_back(*child_r);
+                        // (2) Value-kind name marker.
+                        NodeId name_child = g.new_value(make_string(name_sv->data()));
+                        g.set_name(name_child);
+                        g.node(target).children.push_back(name_child);
+                        // (3) Value-kind constant value.
+                        NodeId value_child = g.new_value(value_it->second);
+                        g.node(target).children.push_back(value_child);
+                        continue;
+                    }
                     // Other type values ("sequence", "choice", "key", ...)
                     // fall through to build_inline below.
                 }
@@ -483,6 +526,9 @@ const tl::expected<Grammar, std::string>& rawast_meta_grammar() {
         Grammar g;
         g.register_parser(std::make_unique<DoubleQuoteStringParser>());
         g.register_parser(std::make_unique<IdentifierParser>());
+        // int/float are needed by BIND_VALUE_LITERAL (Tier-2 binding RHS).
+        g.register_parser(std::make_unique<IntParser>());
+        g.register_parser(std::make_unique<FloatParser>());
         g.register_parser(std::make_unique<WhitespaceParser>());
         g.register_parser(std::make_unique<LineCommentParser>());
         g.register_parser(std::make_unique<BlockCommentParser>());

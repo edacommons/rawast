@@ -442,6 +442,86 @@ TEST_CASE("End-to-end: .rawast named binding (X:name=@) — emits named field") 
     CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("v"))->data() == 42);
 }
 
+TEST_CASE("End-to-end: .rawast literal binding (X:name=\"literal\") — string constant") {
+    // Tier-2 binding RHS: X:name="literal" emits a constant kv pair into
+    // the surrounding dict catcher, regardless of X's parsed value. The
+    // idiom for discriminator records (e.g. GDS_BOUNDARY whose payload
+    // is empty but whose presence labels the surrounding element).
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <RECORD>
+        RECORD: sequence dict {
+          string:element="boundary",
+          int:layer=@
+        }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    std::istringstream is{R"("ignored" 5)"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    REQUIRE(d->data().size() == 2);
+    // The parsed "ignored" string is discarded; "boundary" is emitted instead.
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("element"))->data() == "boundary");
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("layer"))->data() == 5);
+}
+
+TEST_CASE("End-to-end: .rawast literal binding — int / float / bool / null") {
+    Grammar target;
+    target.register_parser(std::make_unique<IntParser>());
+    target.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <REC>
+        REC: sequence dict {
+          string:version=5,
+          string:scale=3.14,
+          string:active=true,
+          string:archived=false,
+          string:next_id=null,
+          int:layer=@
+        }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    std::istringstream is{R"("a" "b" "c" "d" "e" 7)"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+
+    // Int literal.
+    auto iv = std::dynamic_pointer_cast<IntValue>(d->data().at("version"));
+    REQUIRE(iv);
+    CHECK(iv->data() == 5);
+
+    // Float literal.
+    auto fv = std::dynamic_pointer_cast<RealValue>(d->data().at("scale"));
+    REQUIRE(fv);
+    CHECK(fv->data() == doctest::Approx(3.14));
+
+    // Bool literals — global singletons.
+    CHECK(d->data().at("active")    == true_value());
+    CHECK(d->data().at("archived")  == false_value());
+
+    // Null literal.
+    CHECK(d->data().at("next_id")   == null_value());
+
+    // Plain parsed binding still works alongside.
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("layer"))->data() == 7);
+}
+
 TEST_CASE("End-to-end: .rawast-defined parser also handles mixed types") {
     Grammar target;
     target.register_parser(std::make_unique<IntParser>());

@@ -240,10 +240,13 @@ when the grammar is loaded.
 ### 4.5 Binding — `expression:bind_target`
 
 ```
-binding     ::= expression ':' bind_target
-bind_target ::= '@'                              -- pass value through (default)
-             |  '@='                             -- emit value as dict key
-             |  identifier '=' '@'              -- emit (identifier, value) pair into dict
+binding      ::= expression ':' bind_target
+bind_target  ::= '@'                              -- pass value through (default)
+              |  '@='                             -- emit value as dict key
+              |  identifier '=' bind_rhs          -- emit (identifier, rhs) pair into dict
+bind_rhs     ::= '@'                              -- parsed expression's value
+              |  literal                          -- constant value
+literal      ::= string | int | float | 'true' | 'false' | 'null'
 ```
 
 The binding suffix wraps an expression and controls how its produced
@@ -265,9 +268,8 @@ PAIR: sequence {
 }
 ```
 
-**`X:name=@`** is sugar for "emit the pair (constant string `name`,
-value-of-X) into the surrounding dict catcher." This avoids needing a
-separate name-marker terminal for fixed field names:
+**`X:name=@`** emits the pair (constant string `name`, value-of-X) into
+the surrounding dict catcher. Useful for fixed field names:
 
 ```
 NREPEAT: sequence dict {
@@ -277,9 +279,32 @@ NREPEAT: sequence dict {
 }
 ```
 
-In the JSON-grammar-format equivalent, the `name=@` binding desugars to
-inserting a Value-kind name marker plus the wrapped expression — a small
-engine extension required to support this form (see §8).
+**`X:name=<literal>`** emits the pair (constant string `name`,
+*literal-value*) into the surrounding dict catcher, *discarding* X's
+parsed value. The literal can be a string, int, float, `true`, `false`,
+or `null`. The expression X is still parsed (its side effect — typically
+matching a discriminator token — is what makes the surrounding rule
+fire); only its produced value is discarded.
+
+This is the **discriminator-with-constant-emit idiom**, the natural
+pattern for binary formats whose record types are zero-payload markers
+that label the surrounding element. Example from GDSII:
+
+```
+BOUNDARY: sequence dict {
+  gds_boundary:element="boundary",        // match the discriminator; emit ("element","boundary")
+  ?gds_elflags:flags=@,
+  ?gds_plex:plex=@,
+  gds_layer:layer=@,
+  gds_datatype:datatype=@,
+  gds_xy:xy=@
+}
+```
+
+In the JSON-grammar-format equivalent, the binding desugars to a
+wrapper dict carrying `"type": "binding"` (for `name=@`) or
+`"type": "binding_const"` (for `name=<literal>`); the loader expands
+either into the appropriate Value-kind children. See §8.
 
 ### 4.5b Pretty-print attributes — postfix flags on items
 
@@ -538,6 +563,7 @@ The mapping is direct:
 | `identifier`                       | `Node{kind=Parse, value="identifier"}`             |
 | `X:@=`                             | X with `is_name=true`                              |
 | `X:name=@`                         | A sub-Sequence emitting (name-marker `name`, X)    |
+| `X:name=<literal>`                 | (X parser, name-marker `name`, Value-kind literal) — X still parses, its value discarded; literal emitted instead |
 | `sequence { items }`               | `Node{kind=Sequence, container=None}` + children   |
 | `sequence array { items }`         | `Node{kind=Sequence, container=Array}` + children  |
 | `sequence dict { items }`          | `Node{kind=Sequence, container=Dict}` + children   |

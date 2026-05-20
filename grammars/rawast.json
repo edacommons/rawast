@@ -369,18 +369,67 @@
     ]
   },
 
-  // name=@ — emits "name" = "<identifier>" and "type" = "binding" into
-  // the surrounding ITEM dict catcher. The loader expands this wrapper
-  // into a (Value-kind name marker for "name") + the wrapped expr.
+  // name=<rhs> — RHS is either `@` (the parsed expression's value, the
+  // original binding form) or a literal value (string, int, float, true,
+  // false, null). The literal form emits the constant kv pair into the
+  // surrounding dict catcher regardless of what EXPR parsed — useful as
+  // a discriminator+constant idiom (e.g. GDS_BOUNDARY:element="boundary"
+  // for binary discriminator records that have no payload).
   "BIND_TARGET_NAMED": {
     "type": "sequence",
     "items": [
       {"type": "value", "value": "name", "var": true},
       {"type": "identifier"},
       "=",
+      "BIND_VALUE"
+    ]
+  },
+
+  "BIND_VALUE": {
+    "type": "choice",
+    "items": [
+      "BIND_VALUE_PARSE",
+      "BIND_VALUE_LITERAL"
+    ]
+  },
+
+  // @ — the original parsed-value binding: type=binding.
+  "BIND_VALUE_PARSE": {
+    "type": "sequence",
+    "items": [
       "@",
       {"type": "value", "value": "type", "var": true},
       {"type": "value", "value": "binding"}
+    ]
+  },
+
+  // Literal constant — type=binding_const + the constant under "value".
+  // The loader picks up "value" and emits a (name, literal) pair into
+  // the surrounding dict catcher. The EXPR is still parsed (its parse
+  // side effect — typically matching a discriminator record — is what
+  // we want), only its produced value is discarded.
+  "BIND_VALUE_LITERAL": {
+    "type": "sequence",
+    "items": [
+      {"type": "value", "value": "type", "var": true},
+      {"type": "value", "value": "binding_const"},
+      {"type": "value", "value": "value", "var": true},
+      "BIND_LITERAL"
+    ]
+  },
+
+  // Constant value: string / float / int / true / false / null.
+  // float comes before int so "3.14" matches float (predictive PEG —
+  // same ordering rule as in the JSON grammar's VALUE choice).
+  "BIND_LITERAL": {
+    "type": "choice",
+    "items": [
+      {"type": "string"},
+      {"type": "float"},
+      {"type": "int"},
+      {"type": "key", "key": "true",  "value": true},
+      {"type": "key", "key": "false", "value": false},
+      {"type": "key", "key": "null",  "value": null}
     ]
   }
 }
