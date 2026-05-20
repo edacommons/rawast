@@ -588,6 +588,80 @@ struct SaveCursor {
 
 bool alternative_matches(const Grammar& g, const Node& alt, const Value& v);
 
+// Save-direction helpers used by the dict-container code path to
+// distinguish fixed-schema dicts (LIBRARY, STRUCTURE in GDSII; any
+// rule whose grammar lists specific named fields) from open-schema
+// dicts (JSON's STRUCT: just `repeat <PAIR>` over arbitrary keys).
+//
+// Fixed-schema needs name-keyed cursor build: the dict is looked up
+// by the grammar's declared field names IN GRAMMAR ORDER so each
+// downstream parser receives the value bound to its name marker.
+// Open-schema keeps the existing alphabetical flatten — the Repeat
+// iterates whatever (name, value) pairs come out of std::map order.
+
+// Walk a Ref chain (resolving via named_rules_) checking is_optional
+// on each node along the way. Used to detect ref-site optional
+// patterns like `?<RULE>` where the resolved node itself doesn't
+// have the flag.
+bool save_is_optional_chain(const Grammar& g, NodeId id) {
+    NodeId cur = id;
+    while (cur.valid()) {
+        const Node& cn = g.node(cur);
+        if (cn.is_optional) return true;
+        if (cn.kind != NodeKind::Ref) break;
+        auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
+        if (!sv) break;
+        cur = g.rule_id(sv->data());
+    }
+    return false;
+}
+
+// Does this child Node, when entered during save, consume exactly one
+// value from the surrounding cursor? Used to decide whether to push
+// a corresponding value into the inner cursor when building it from
+// grammar order. Approximation:
+//   Parse                      -> yes (always consumes one)
+//   Sequence (container != None) -> yes (consumes one container value)
+//   Choice                     -> yes (picked alt consumes one)
+//   Repeat                     -> yes (in single-cursor context)
+//   Key (with Value-kind child) -> yes (discriminator)
+//   Key (purely structural)    -> no
+//   Value, Ref                 -> no (Ref resolves to one of the above)
+bool save_consumes_one(const Grammar& g, NodeId id) {
+    NodeId resolved = g.resolve_ref(id);
+    const Node& cn = g.node(resolved);
+    switch (cn.kind) {
+    case NodeKind::Parse:
+        return true;
+    case NodeKind::Sequence:
+        return cn.container != Container::None;
+    case NodeKind::Choice:
+    case NodeKind::Repeat:
+        return true;
+    case NodeKind::Key:
+        for (NodeId c : cn.children) {
+            const Node& cc = g.node(g.resolve_ref(c));
+            if (cc.kind == NodeKind::Value) return true;
+        }
+        return false;
+    case NodeKind::Value:
+    case NodeKind::Ref:
+        return false;
+    }
+    return false;
+}
+
+// Does this Sequence have any direct Value-kind name-marker children?
+// If yes, treat it as fixed-schema (build cursor in grammar order).
+// If no, treat as open-schema (existing flatten behaviour).
+bool has_name_markers(const Grammar& g, const Node& seq) {
+    for (NodeId c : seq.children) {
+        const Node& cn = g.node(g.resolve_ref(c));
+        if (cn.kind == NodeKind::Value && cn.is_name) return true;
+    }
+    return false;
+}
+
 // Choose the Choice alternative whose grammar shape matches the value.
 NodeId choose_alternative(const Grammar& g, const Node& choice_node, const Value& v) {
     for (NodeId child_id : choice_node.children) {
@@ -642,6 +716,15 @@ tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
                                         NodeId node_id, SaveCursor& cursor,
                                         int depth, bool pretty);
 
+// Name-keyed save for fixed-schema dicts (Sequences with Value-kind
+// name-marker children). Builds the inner cursor in grammar order by
+// looking up each name in the dict; optional-and-absent fields cause
+// both the name marker and the associated consumer child to be
+// skipped during the walk.
+tl::expected<void, SaveError> save_dict_fixed_schema(
+    const Grammar& g, std::ostream& out, const Node& seq_node,
+    const DictValue& dict, int depth, bool pretty);
+
 tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out,
                                               NodeId node_id, SaveCursor& cursor,
                                               int depth, bool pretty) {
@@ -686,8 +769,13 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
         Parser* p = g.parser(sv->data());
         if (!p) return tl::unexpected(SaveError{"unknown parser: " + sv->data()});
         const auto& ev = cursor.next();
-        if (!ev.value) return tl::unexpected(SaveError{"null value to Parse"});
-        auto r = p->unparse(*ev.value);
+        // Substitute null_value() for a null entry so the parser's
+        // unparse decides whether null is acceptable. GDSII NO_DATA
+        // discriminator records (gds_boundary, gds_endel, gds_endlib,
+        // ...) ignore the value entirely; passing null lets fixed-
+        // schema save emit them without a meaningful payload.
+        ValuePtr v = ev.value ? ev.value : null_value();
+        auto r = p->unparse(*v);
         if (!r) return tl::unexpected(r.error());
         out << *r;
         return {};
@@ -719,6 +807,13 @@ tl::expected<void, SaveError> save_node_body(const Grammar& g, std::ostream& out
             auto dict = std::dynamic_pointer_cast<DictValue>(ev.value);
             if (!dict) return tl::unexpected(SaveError{
                 "expected DictValue for container=Dict sequence"});
+            if (has_name_markers(g, n)) {
+                // Fixed-schema dict: build cursor in grammar order with
+                // name-based lookup; optional-and-absent fields skipped.
+                return save_dict_fixed_schema(g, out, n, *dict, depth, pretty);
+            }
+            // Open-schema dict (e.g. JSON's STRUCT with a Repeat over
+            // PAIR): flatten alphabetically as before.
             inner.values.reserve(dict->data().size() * 2);
             for (const auto& [name, val] : dict->data()) {
                 inner.values.push_back({make_string(name), true});
@@ -820,6 +915,86 @@ tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
 
     if (ref_diff) emit_post(n);
     emit_post(orig);
+    return {};
+}
+
+tl::expected<void, SaveError> save_dict_fixed_schema(
+    const Grammar& g, std::ostream& out, const Node& seq_node,
+    const DictValue& dict, int depth, bool pretty
+) {
+    // Walk the Sequence's children twice: first to build the inner
+    // cursor and the skip-mask, then to emit each non-skipped child.
+    //
+    // Build pass — we walk left-to-right tracking a "pending name"
+    // (set when we see a Value-kind name marker, cleared when the
+    // next consuming child uses it):
+    //   * Value-kind name marker -> remember its string; this child
+    //     emits nothing itself (it's structural metadata for the
+    //     downstream parser/Ref).
+    //   * A consuming child (Parse / container-Sequence / Choice /
+    //     Repeat / discriminator Key — see save_consumes_one):
+    //       if a pending name is set:
+    //         - dict has the key -> push (value, false) to cursor
+    //         - dict missing the key, child is optional -> skip
+    //           both this child and the name-marker child
+    //         - dict missing the key, required -> error
+    //       else (no pending name, e.g. a Parse for a NO_DATA
+    //       discriminator record like gds_endlib): push null;
+    //       the Parse case will substitute null_value() in unparse.
+    //   * Non-consuming children (Keys without Value-kind children,
+    //     other Value markers): no cursor entry, no skip.
+    std::vector<Frame::EmittedValue> entries;
+    std::vector<bool> skip(seq_node.children.size(), false);
+
+    std::string  pending_name;
+    std::size_t  pending_idx = 0;
+    bool         have_pending = false;
+
+    for (std::size_t i = 0; i < seq_node.children.size(); ++i) {
+        NodeId child_id = seq_node.children[i];
+        NodeId resolved = g.resolve_ref(child_id);
+        const Node& cn  = g.node(resolved);
+
+        if (cn.kind == NodeKind::Value && cn.is_name) {
+            auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
+            if (sv) {
+                pending_name = sv->data();
+                pending_idx  = i;
+                have_pending = true;
+            }
+            continue;
+        }
+
+        if (!save_consumes_one(g, child_id)) continue;
+
+        if (have_pending) {
+            auto it = dict.data().find(pending_name);
+            if (it != dict.data().end()) {
+                entries.push_back({it->second, false});
+            } else if (save_is_optional_chain(g, child_id)) {
+                skip[i]            = true;
+                skip[pending_idx]  = true;
+            } else {
+                return tl::unexpected(SaveError{
+                    "fixed-schema dict missing required field '" +
+                    pending_name + "'"});
+            }
+            have_pending = false;
+        } else {
+            // Non-name consumer (e.g. NO_DATA discriminator record).
+            // Push null; downstream Parse substitutes null_value().
+            entries.push_back({nullptr, false});
+        }
+    }
+
+    SaveCursor inner;
+    inner.values = std::move(entries);
+
+    for (std::size_t i = 0; i < seq_node.children.size(); ++i) {
+        if (skip[i]) continue;
+        auto r = save_node(g, out, seq_node.children[i], inner, depth, pretty);
+        if (!r) return r;
+    }
     return {};
 }
 

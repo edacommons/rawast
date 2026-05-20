@@ -236,11 +236,23 @@ TEST_CASE("GDSII: minimal library parses end-to-end via .rawast grammar") {
     CHECK(std::dynamic_pointer_cast<RealValue>(units->data()[1])->data()
           == doctest::Approx(1e-9));
 
-    // NOTE: Save round-trip for fixed-schema dicts has a known
-    // limitation — the save direction iterates the dict in std::map's
-    // alphabetical order, which doesn't match the source-ordered
-    // grammar children. Implementing name-keyed save for fixed-schema
-    // dicts is a follow-on task. Parse direction is fully functional.
+    // Save round-trip: with name-keyed save for fixed-schema dicts,
+    // the LIBRARY dict re-emits in grammar order (version, timestamp,
+    // name, units, ENDLIB), not std::map's alphabetical order. The
+    // re-parsed AST should match the original.
+    std::ostringstream out;
+    REQUIRE(g.save(out, *r));
+    std::istringstream is2(out.str());
+    StreamReader sr2(is2);
+    auto r2 = g.parse(sr2);
+    REQUIRE(r2);
+    auto dict2 = std::dynamic_pointer_cast<DictValue>(*r2);
+    REQUIRE(dict2);
+    CHECK(std::dynamic_pointer_cast<IntValue>(dict2->data().at("version"))->data() == 5);
+    CHECK(std::dynamic_pointer_cast<StringValue>(dict2->data().at("name"))->data() == "MYLIB");
+    // Byte-identical round-trip for the minimum library (no element-
+    // type Choice, so the name-keyed save covers every field).
+    CHECK(out.str() == bytes);
 }
 
 TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a boundary") {

@@ -309,6 +309,96 @@ TEST_CASE("Pretty: pretty=false skips tab/indent/newline; keeps space and tail")
     CHECK(compact_out_2.str() == compact_out.str());
 }
 
+TEST_CASE("Save: fixed-schema dict round-trips in grammar order, not alphabetical") {
+    // A small fixed-schema dict — two named-field parsers in source
+    // order. std::map sorts keys alphabetically (age, name) but the
+    // grammar declares them in a different order (name, age).
+    // Name-keyed save must emit in GRAMMAR order so the output
+    // re-parses to the same AST.
+    const char* src = R"RAWAST(
+        start: <REC>
+
+        REC: sequence dict {
+          string:name=@,
+          int:age=@
+        }
+    )RAWAST";
+
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+    g.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.add_ignore("whitespace");
+    REQUIRE(load_rawast_grammar_from_string(g, src));
+
+    std::istringstream input(R"("alice" 30)");
+    StreamReader sr(input);
+    auto parsed = g.parse(sr);
+    REQUIRE(parsed);
+    auto dict = std::dynamic_pointer_cast<DictValue>(*parsed);
+    REQUIRE(dict);
+    REQUIRE(dict->data().size() == 2);
+
+    std::ostringstream out;
+    REQUIRE(g.save(out, *parsed));
+    // Grammar order: name first ("alice"), then age (30) — NOT
+    // std::map's alphabetical order which would put age first.
+    CHECK(out.str() == R"("alice"30)");
+
+    // Round-trip — the saved output reparses to the same dict.
+    std::istringstream input2(out.str());
+    StreamReader sr2(input2);
+    auto reparsed = g.parse(sr2);
+    REQUIRE(reparsed);
+    auto dict2 = std::dynamic_pointer_cast<DictValue>(*reparsed);
+    REQUIRE(dict2);
+    CHECK(std::dynamic_pointer_cast<StringValue>(dict2->data().at("name"))->data() == "alice");
+    CHECK(std::dynamic_pointer_cast<IntValue>(dict2->data().at("age"))->data() == 30);
+}
+
+TEST_CASE("Save: fixed-schema dict with optional field — present and absent") {
+    // A record with an optional field. When the dict has it, save emits
+    // it; when missing, save skips both the name marker and the bound
+    // parser (skip-mask machinery).
+    const char* src = R"RAWAST(
+        start: <REC>
+
+        REC: sequence dict {
+          string:name=@,
+          ?int:age=@
+        }
+    )RAWAST";
+
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+    g.register_parser(std::make_unique<DoubleQuoteStringParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.add_ignore("whitespace");
+    REQUIRE(load_rawast_grammar_from_string(g, src));
+
+    // With age present.
+    {
+        std::istringstream input(R"("alice" 30)");
+        StreamReader sr(input);
+        auto parsed = g.parse(sr);
+        REQUIRE(parsed);
+        std::ostringstream out;
+        REQUIRE(g.save(out, *parsed));
+        CHECK(out.str() == R"("alice"30)");
+    }
+
+    // With age absent — save should skip the int parser entirely.
+    {
+        std::istringstream input(R"("alice")");
+        StreamReader sr(input);
+        auto parsed = g.parse(sr);
+        REQUIRE(parsed);
+        std::ostringstream out;
+        REQUIRE(g.save(out, *parsed));
+        CHECK(out.str() == R"("alice")");
+    }
+}
+
 TEST_CASE("Pretty: full JSON pretty grammar in .rawast — round-trip") {
     // The textbook example: a JSON-style grammar written in .rawast
     // with postfix pretty-print hints. Parses compact JSON, emits pretty
