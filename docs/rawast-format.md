@@ -485,19 +485,19 @@ engine self-hosts: future grammars are written in `.rawast` syntax,
 parsed via the JSON-loaded `.rawast` grammar, and contribute to the
 community grammar repository.
 
-## 9. Open design questions
+## 9. Confirmed design decisions
 
-A few small details deferred to the implementation phase:
+The following were open during drafting and are now settled:
 
-- **Trailing commas:** allowed (current draft) or rejected? Allowing
-  them simplifies editing.
-- **Block comment behaviour at file boundaries:** unterminated block
-  comments are currently a parse error per `BlockCommentParser`. Could
-  be relaxed if useful.
-- **`start:` placement:** must it be the first rule definition, or
-  may it appear anywhere in the file?
-- **Multi-line strings:** currently strings cannot contain literal
-  newlines. Worth allowing?
-
-These have sensible defaults assumed in the draft above; they're listed
-here for explicit decision before the loader is implemented.
+- **Trailing commas inside `{ items }` lists are allowed.** Improves
+  editor ergonomics; doesn't introduce ambiguity.
+- **`start:` may appear anywhere in the file.** Not required to be the
+  first rule definition. Convention: place at the top for readability,
+  but the loader doesn't enforce it.
+- **String literals are single-line.** Embedded literal newlines are
+  rejected. Newlines inside strings can be expressed via escape
+  passthrough — `"\n"` is the two characters backslash-`n`, the
+  intended payload for higher-level escape interpretation.
+- **Unterminated block comments are a parse error.** Reaching EOF
+  inside a `/* …` comment fails the parse with a max-progress error
+  pointing at the comment's opening position.
