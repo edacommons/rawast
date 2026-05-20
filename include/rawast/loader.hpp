@@ -10,7 +10,7 @@
 
 namespace rawast {
 
-// Load grammar rules from a JSON-grammar AstValue tree into an existing
+// Load grammar rules from a JSON-grammar Value tree into an existing
 // Grammar. The Grammar must already have its terminal parsers registered
 // (the loader doesn't know which parsers the target grammar will need).
 //
@@ -46,7 +46,7 @@ namespace rawast {
 tl::expected<void, std::string> load_json_grammar_into(
     Grammar& g, const Value& tree);
 
-// Convenience: parse JSON-grammar text into an AstValue tree using a
+// Convenience: parse JSON-grammar text into an Value tree using a
 // fresh internal JSON grammar, then load that tree into `g`.
 tl::expected<void, std::string> load_json_grammar_from_string(
     Grammar& g, std::string_view content);

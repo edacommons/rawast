@@ -467,9 +467,9 @@ This format spec is finalised at the design level. Implementing the
 `.rawast` loader requires:
 
 1. **A `.rawast` grammar definition** (in JSON form initially, since the
-   engine boostraps from JSON). The grammar produces an `AstValue` tree
+   engine boostraps from JSON). The grammar produces an `Value` tree
    shaped identically to a JSON grammar file's parsed output.
-2. **The JSON-grammar loader** — walks an `AstValue`
+2. **The JSON-grammar loader** — walks an `Value`
    tree and constructs a `Grammar` via the builder API.
 3. **An `IdentifierParser` terminal** (`[a-zA-Z_][a-zA-Z0-9_]*`) with
    a "not followed by an identifier character" check, used to match
