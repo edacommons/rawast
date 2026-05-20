@@ -38,6 +38,8 @@ FetchContent_MakeAvailable(tl-expected)
 # Library target.
 add_library(rawast STATIC
     src/version.cpp
+    src/value.cpp
+    src/node.cpp
 )
 add_library(rawast::rawast ALIAS rawast)
 

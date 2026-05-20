@@ -10,7 +10,10 @@ set(DOCTEST_WITH_MAIN_IN_STATIC_LIB OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(doctest)
 
 add_executable(rawast_tests
+    test_main.cpp
     test_version.cpp
+    test_value.cpp
+    test_node.cpp
 )
 
 target_link_libraries(rawast_tests
