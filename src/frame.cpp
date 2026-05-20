@@ -14,6 +14,7 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     is_optional_    = n.is_optional;
     is_name_        = n.is_name;
     has_separator_  = n.has_separator;
+    is_backtrack_   = n.backtrack;
 
     // Value-kind frames pre-seed emitted_ with their own constant; the
     // driver pops them immediately after construction, so the constant

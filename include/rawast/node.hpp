@@ -57,6 +57,12 @@ public:
     bool is_optional   = false;
     bool has_separator = false;  // If true, children[0] is the separator.
 
+    // Opt-in structural backtracking. Currently only meaningful on Choice
+    // nodes: each alternative attempt is wrapped in StreamReader::mark()
+    // / reject() so that alternatives can share a leading-terminal prefix
+    // (the EDA `+ FOO / + BAR / + BAZ` pattern). Off by default.
+    bool backtrack     = false;
+
     // Carried for Key, Parse, Value kinds.
     //   Key   - StringValue holding the literal token to match.
     //   Parse - StringValue holding the name of the terminal parser to invoke.

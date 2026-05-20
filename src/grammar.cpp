@@ -115,6 +115,10 @@ void Grammar::set_separator(NodeId parent, NodeId sep) {
     }
 }
 
+void Grammar::set_backtrack(NodeId id) {
+    nodes_[id.value()].backtrack = true;
+}
+
 // -------------------------------------------------------------------------
 // Registries and accessors
 // -------------------------------------------------------------------------
@@ -217,6 +221,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
     ValuePtr result_value;
+    bool parse_finished = false;   // true once the top frame pops successfully
 
     // Advance after a child has just completed successfully. Pops frames
     // until we either find one with more work to do, or reach the top.
@@ -226,7 +231,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             bool more = false;
             switch (top.kind()) {
             case NodeKind::Choice:
-                // Choice's child succeeded -> choice itself is done.
+                // Choice's child succeeded -> choice itself is done. If
+                // this Choice was backtracking and had marked the stream
+                // for the just-succeeded alternative, accept that mark.
+                if (top.has_mark()) {
+                    sr.accept();
+                    top.set_has_mark(false);
+                }
                 more = false;
                 break;
             case NodeKind::Sequence:
@@ -249,6 +260,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             popped.finish(pool);
             if (stack.empty()) {
                 result_value = popped.result();
+                parse_finished = true;
                 return;
             }
             popped.pass_values_to(stack.back());
@@ -278,6 +290,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 popped.finish(pool);
                 if (stack.empty()) {
                     result_value = popped.result();
+                    parse_finished = true;
                     return;
                 }
                 popped.pass_values_to(stack.back());
@@ -286,6 +299,14 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             }
 
             if (popped.kind() == NodeKind::Choice) {
+                // The just-failed alternative was wrapped in a mark by
+                // the entry-side code below (only if backtrack was on).
+                // Reject it now so the stream rewinds to the position
+                // before this alternative was tried.
+                if (popped.has_mark()) {
+                    sr.reject();
+                    popped.set_has_mark(false);
+                }
                 if (popped.step_next()) {
                     stack.push_back(std::move(popped));
                     return;
@@ -299,7 +320,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
 
     push_node(stack, *this, top_);
 
-    while (!stack.empty() && !result_value) {
+    while (!stack.empty() && !parse_finished) {
         Frame& top = stack.back();
         switch (top.kind()) {
 
@@ -322,6 +343,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                     popped.finish(pool);
                     if (stack.empty()) {
                         result_value = popped.result();
+                        parse_finished = true;
                         break;
                     }
                     popped.pass_values_to(stack.back());
@@ -355,6 +377,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                     popped.finish(pool);
                     if (stack.empty()) {
                         result_value = popped.result();
+                        parse_finished = true;
                         break;
                     }
                     popped.pass_values_to(stack.back());
@@ -374,6 +397,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             popped.finish(pool);
             if (stack.empty()) {
                 result_value = popped.result();
+                parse_finished = true;
                 break;
             }
             popped.pass_values_to(stack.back());
@@ -381,7 +405,33 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             break;
         }
 
-        case NodeKind::Choice:
+        case NodeKind::Choice: {
+            if (top.has_current()) {
+                // Opt-in: if this Choice is marked as backtracking and we
+                // haven't yet issued a stream mark for the current
+                // alternative attempt, mark now. The mark will be
+                // accepted (on alternative success) or rejected (on
+                // alternative failure) before we move on.
+                if (top.is_backtrack() && !top.has_mark()) {
+                    sr.mark();
+                    top.set_has_mark(true);
+                }
+                push_node(stack, *this, top.current_child());
+            } else {
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                popped.finish(pool);
+                if (stack.empty()) {
+                    result_value = popped.result();
+                    parse_finished = true;
+                    break;
+                }
+                popped.pass_values_to(stack.back());
+                advance_after_child();
+            }
+            break;
+        }
+
         case NodeKind::Sequence:
         case NodeKind::Repeat: {
             if (top.has_current()) {
@@ -393,6 +443,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 popped.finish(pool);
                 if (stack.empty()) {
                     result_value = popped.result();
+                    parse_finished = true;
                     break;
                 }
                 popped.pass_values_to(stack.back());
@@ -409,7 +460,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         }
     }
 
-    if (result_value) {
+    if (parse_finished) {
         return result_value;
     }
     return tl::unexpected(max_progress);

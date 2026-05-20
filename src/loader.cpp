@@ -134,6 +134,14 @@ populate(Grammar& g, NodeId target, const Value& body) {
         g.set_optional(target);
     }
 
+    // "backtrack" field — opt-in structural rewind, currently only
+    // meaningful on Choice. Reading it on other kinds is harmless: the
+    // flag is set on the Node but the driver only consults it for
+    // NodeKind::Choice.
+    if (dict_bool(*dv, "backtrack")) {
+        g.set_backtrack(target);
+    }
+
     if (type == "sequence" || type == "choice" || type == "repeat") {
         if (type == "sequence") n.kind = NodeKind::Sequence;
         else if (type == "choice") n.kind = NodeKind::Choice;

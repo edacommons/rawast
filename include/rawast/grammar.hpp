@@ -55,6 +55,7 @@ public:
     void set_name(NodeId id);
     void set_container(NodeId id, Container c);
     void set_separator(NodeId parent, NodeId sep);
+    void set_backtrack(NodeId id);
 
     // --- Registries -----------------------------------------------------
 
