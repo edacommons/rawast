@@ -9,6 +9,7 @@
 namespace rawast {
 
 class Grammar;
+class ValuePool;
 
 // Internal per-level state for the trampolined load driver. Snapshots the
 // configuration of one Node and accumulates emitted values from descendant
@@ -42,8 +43,10 @@ public:
     bool step_next();
 
     // Materialise array/dict container from accumulated values; no-op for
-    // Container::None.
-    void finish();
+    // Container::None. Registers container→child back-references on the
+    // pool so post-parse value search can resolve "which containers hold
+    // this value?" in O(1) lookup time.
+    void finish(ValuePool& pool);
 
     // Move accumulated values into the parent frame's accumulator.
     void pass_values_to(Frame& parent);

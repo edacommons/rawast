@@ -191,6 +191,11 @@ void note_progress(ParseError& max_progress, const ParseError& err) {
 } // namespace
 
 tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
+    ValuePool pool;
+    return parse(sr, pool);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& pool) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
     ValuePtr result_value;
@@ -218,7 +223,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
             // Pop this frame, finish, pass values up.
             Frame popped = std::move(stack.back());
             stack.pop_back();
-            popped.finish();
+            popped.finish(pool);
             if (stack.empty()) {
                 result_value = popped.result();
                 return;
@@ -247,7 +252,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
 
             if (popped.kind() == NodeKind::Repeat) {
                 // Iteration ended -- accept what we collected so far.
-                popped.finish();
+                popped.finish(pool);
                 if (stack.empty()) {
                     result_value = popped.result();
                     return;
@@ -288,7 +293,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
                 // populated emitted_ with the constants to flow up.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish();
+                popped.finish(pool);
                 if (stack.empty()) {
                     result_value = popped.result();
                     break;
@@ -310,10 +315,14 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
             assert(p);
             auto r = p->parse(sr);
             if (r) {
-                top.add_value(*r, top.is_name());
+                // Intern the produced primitive so identical content
+                // (same string, same int, etc.) shares a canonical
+                // ValuePtr across the entire parse.
+                ValuePtr canonical = pool.intern(*r);
+                top.add_value(canonical, top.is_name());
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish();
+                popped.finish(pool);
                 if (stack.empty()) {
                     result_value = popped.result();
                     break;
@@ -335,7 +344,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish();
+                popped.finish(pool);
                 if (stack.empty()) {
                     result_value = popped.result();
                     break;

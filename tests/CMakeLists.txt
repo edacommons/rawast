@@ -18,6 +18,7 @@ add_executable(rawast_tests
     test_parsers.cpp
     test_grammar.cpp
     test_json.cpp
+    test_pool.cpp
 )
 
 target_link_libraries(rawast_tests

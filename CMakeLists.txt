@@ -42,6 +42,7 @@ add_library(rawast STATIC
     src/node.cpp
     src/stream.cpp
     src/parsers.cpp
+    src/pool.cpp
     src/frame.cpp
     src/grammar.cpp
 )

@@ -2,6 +2,7 @@
 
 #include <rawast/node.hpp>
 #include <rawast/parser.hpp>
+#include <rawast/pool.hpp>
 #include <rawast/stream.hpp>
 #include <rawast/value.hpp>
 
@@ -81,7 +82,16 @@ public:
     // root ValuePtr of the resulting tree. On failure returns the
     // max-progress ParseError (the deepest position the parser reached
     // before giving up — the most informative failure for diagnostics).
+    //
+    // The no-pool overload creates an internal pool that lives for the
+    // duration of the parse and is discarded on return; primitive
+    // interning happens but is not visible to the caller.
+    //
+    // The pool-aware overload uses the caller-provided pool. After parse
+    // returns, the caller owns the pool and can query its back-references
+    // (find_containers_of) to do value search across the produced tree.
     tl::expected<ValuePtr, ParseError> parse(StreamReader& sr) const;
+    tl::expected<ValuePtr, ParseError> parse(StreamReader& sr, ValuePool& pool) const;
 
 private:
     std::vector<Node> nodes_;

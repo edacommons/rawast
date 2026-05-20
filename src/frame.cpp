@@ -1,5 +1,6 @@
 #include "frame.hpp"
 #include <rawast/grammar.hpp>
+#include <rawast/pool.hpp>
 
 #include <cassert>
 #include <utility>
@@ -60,7 +61,7 @@ bool Frame::step_next() {
     return true;
 }
 
-void Frame::finish() {
+void Frame::finish(ValuePool& pool) {
     switch (container_) {
     case Container::None:
         return;
@@ -69,8 +70,10 @@ void Frame::finish() {
         auto arr = std::make_shared<ArrayValue>();
         auto& data = arr->data();
         data.reserve(emitted_.size());
+        ValuePtr container_ptr = arr;
         for (auto& ev : emitted_) {
-            data.push_back(std::move(ev.value));
+            data.push_back(ev.value);
+            pool.register_usage(ev.value, container_ptr);
         }
         emitted_.clear();
         emitted_.push_back({arr, false});
@@ -80,6 +83,7 @@ void Frame::finish() {
     case Container::Dict: {
         auto dict = std::make_shared<DictValue>();
         auto& map = dict->data();
+        ValuePtr container_ptr = dict;
         std::string current_name;
         bool have_name = false;
         for (auto& ev : emitted_) {
@@ -90,7 +94,8 @@ void Frame::finish() {
                     have_name = true;
                 }
             } else if (have_name) {
-                map[current_name] = std::move(ev.value);
+                map[current_name] = ev.value;
+                pool.register_usage(ev.value, container_ptr);
                 have_name = false;
             }
         }
