@@ -261,4 +261,71 @@ ParseResult DoubleQuoteStringParser::parse(StreamReader& sr) {
     return make_string(std::move(contents));
 }
 
+// LineCommentParser -------------------------------------------------------
+
+LineCommentParser::LineCommentParser() : Parser("line_comment") {}
+
+ParseResult LineCommentParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto c1 = sr.get();
+    if (!c1 || *c1 != '/') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '//'"});
+    }
+    auto c2 = sr.get();
+    if (!c2 || *c2 != '/') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '//'"});
+    }
+
+    std::string body = "//";
+    while (true) {
+        auto c = sr.peek();
+        if (!c || *c == '\n' || *c == '\r') break;
+        body.push_back(*c);
+        sr.get();
+    }
+
+    sr.accept();
+    return make_string(std::move(body));
+}
+
+// BlockCommentParser ------------------------------------------------------
+
+BlockCommentParser::BlockCommentParser() : Parser("block_comment") {}
+
+ParseResult BlockCommentParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto c1 = sr.get();
+    if (!c1 || *c1 != '/') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '/*'"});
+    }
+    auto c2 = sr.get();
+    if (!c2 || *c2 != '*') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '/*'"});
+    }
+
+    std::string body = "/*";
+    char prev = '\0';
+    while (true) {
+        auto c = sr.get();
+        if (!c) {
+            sr.reject();
+            return tl::unexpected(ParseError{start, "unterminated block comment"});
+        }
+        body.push_back(*c);
+        if (prev == '*' && *c == '/') break;
+        prev = *c;
+    }
+
+    sr.accept();
+    return make_string(std::move(body));
+}
+
 } // namespace rawast

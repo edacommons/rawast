@@ -240,3 +240,86 @@ TEST_CASE("DoubleQuoteStringParser parses empty string") {
     REQUIRE(s);
     CHECK(s->data().empty());
 }
+
+// LineCommentParser -------------------------------------------------------
+
+TEST_CASE("LineCommentParser matches // to end of line") {
+    LineCommentParser p;
+    auto r = parse_text(p, "// hello\nnext");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "// hello");
+}
+
+TEST_CASE("LineCommentParser matches // to EOF") {
+    LineCommentParser p;
+    auto r = parse_text(p, "// no newline at end");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "// no newline at end");
+}
+
+TEST_CASE("LineCommentParser matches empty body") {
+    LineCommentParser p;
+    auto r = parse_text(p, "//\n");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "//");
+}
+
+TEST_CASE("LineCommentParser fails on single slash") {
+    LineCommentParser p;
+    CHECK_FALSE(parse_text(p, "/x"));
+}
+
+TEST_CASE("LineCommentParser fails on no slash") {
+    LineCommentParser p;
+    CHECK_FALSE(parse_text(p, "xxx"));
+}
+
+// BlockCommentParser ------------------------------------------------------
+
+TEST_CASE("BlockCommentParser matches /* ... */") {
+    BlockCommentParser p;
+    auto r = parse_text(p, "/* hello */");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "/* hello */");
+}
+
+TEST_CASE("BlockCommentParser spans multiple lines") {
+    BlockCommentParser p;
+    auto r = parse_text(p, "/* line1\nline2\nline3 */rest");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "/* line1\nline2\nline3 */");
+}
+
+TEST_CASE("BlockCommentParser matches empty body") {
+    BlockCommentParser p;
+    auto r = parse_text(p, "/**/");
+    REQUIRE(r);
+    auto s = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(s);
+    CHECK(s->data() == "/**/");
+}
+
+TEST_CASE("BlockCommentParser fails on unterminated") {
+    BlockCommentParser p;
+    CHECK_FALSE(parse_text(p, "/* no end"));
+}
+
+TEST_CASE("BlockCommentParser fails on missing star") {
+    BlockCommentParser p;
+    CHECK_FALSE(parse_text(p, "// not block"));
+}
+
+TEST_CASE("BlockCommentParser fails on no opening slash") {
+    BlockCommentParser p;
+    CHECK_FALSE(parse_text(p, "* alone"));
+}

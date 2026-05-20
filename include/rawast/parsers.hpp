@@ -58,4 +58,30 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
+// `//` line comment, consumed up to but not including the line terminator
+// (so the trailing newline survives for the line-tracking machinery).
+// Produces a StringValue containing the full comment text including the
+// leading `//`.
+//
+// Adding this parser to a grammar's ignore list turns the grammar into
+// one that tolerates `//` line comments anywhere whitespace would be
+// allowed — the JSON-with-comments (JSONC) pattern, with zero changes to
+// the grammar tree.
+class LineCommentParser final : public Parser {
+public:
+    LineCommentParser();
+    ParseResult parse(StreamReader& sr) override;
+};
+
+// `/* ... */` block comment. Spans multiple lines. Produces a StringValue
+// containing the full comment text including the `/*` and `*/` delimiters.
+//
+// Same usage pattern as LineCommentParser: add to the ignore list to
+// enable block comments wherever whitespace would be tolerated.
+class BlockCommentParser final : public Parser {
+public:
+    BlockCommentParser();
+    ParseResult parse(StreamReader& sr) override;
+};
+
 } // namespace rawast

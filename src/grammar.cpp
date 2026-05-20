@@ -168,10 +168,16 @@ Parser* Grammar::parser(const std::string& name) const {
 namespace {
 
 void run_ignore(const Grammar& g, StreamReader& sr) {
-    for (Parser* p : g.ignore()) {
-        // Discard result; the ignore list is allowed to fail (no whitespace
-        // is fine). We just consume whatever matches.
-        (void)p->parse(sr);
+    // Loop until a full pass through the ignore list consumes nothing.
+    // This handles arbitrary interleaving of whitespace and comments —
+    // e.g. "  // line\n  /* block */\n  " requires multiple cycles
+    // because each ignore parser only consumes one contiguous run.
+    while (true) {
+        const std::size_t before = sr.position().bytes;
+        for (Parser* p : g.ignore()) {
+            (void)p->parse(sr);
+        }
+        if (sr.position().bytes == before) break;
     }
 }
 

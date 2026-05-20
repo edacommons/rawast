@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <rawast/grammar.hpp>
+#include <rawast/parsers.hpp>
 
 #include <memory>
 #include <sstream>
@@ -210,4 +211,69 @@ TEST_CASE("JSON grammar parses the astrw prototype's smoke-test input") {
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*r);
     REQUIRE(arr);
     CHECK(arr->data().size() == 10);
+}
+
+// JSON-with-comments — modularity demonstration --------------------------
+//
+// The engine treats comment-handling as an orthogonal concern: same JSON
+// grammar tree, plus comment parsers in the ignore list, equals JSONC
+// support with zero grammar changes. This is the §3.8 "different
+// applications of the same single mechanism" property in action.
+
+TEST_CASE("JSONC: adding LineCommentParser to ignore list enables // comments") {
+    auto g = make_json_grammar();
+    g.register_parser(std::make_unique<LineCommentParser>());
+    g.add_ignore("line_comment");
+
+    auto r = parse_json(g,
+        "// header comment\n"
+        "{\n"
+        "  \"name\": \"clk\", // inline comment\n"
+        "  \"frequency\": 100\n"
+        "}\n");
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    CHECK(d->data().size() == 2);
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("name"))->data() == "clk");
+    CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("frequency"))->data() == 100);
+}
+
+TEST_CASE("JSONC: adding BlockCommentParser enables /* */ comments") {
+    auto g = make_json_grammar();
+    g.register_parser(std::make_unique<BlockCommentParser>());
+    g.add_ignore("block_comment");
+
+    auto r = parse_json(g,
+        "/* top-level\n"
+        "   block comment */\n"
+        "{ \"a\": /* between */ 1, \"b\": 2 /* trailing */ }");
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    CHECK(d->data().size() == 2);
+}
+
+TEST_CASE("JSONC: both comment styles together") {
+    auto g = make_json_grammar();
+    g.register_parser(std::make_unique<LineCommentParser>());
+    g.register_parser(std::make_unique<BlockCommentParser>());
+    g.add_ignore("line_comment");
+    g.add_ignore("block_comment");
+
+    auto r = parse_json(g,
+        "// file header\n"
+        "{\n"
+        "  /* multi-line\n"
+        "     block comment */\n"
+        "  \"name\": \"clk\",  // trailing line comment\n"
+        "  \"items\": [1, 2 /* inline */, 3]\n"
+        "}");
+    REQUIRE(r);
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    CHECK(d->data().size() == 2);
+    auto items = std::dynamic_pointer_cast<ArrayValue>(d->data().at("items"));
+    REQUIRE(items);
+    CHECK(items->data().size() == 3);
 }
