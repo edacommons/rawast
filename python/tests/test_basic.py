@@ -90,12 +90,12 @@ def test_json_format_browses_json_grammar_file_as_dict():
     data = g.parse_file(rawast.grammar_path("json.json"))
     # The grammar definition itself comes through as a Python dict —
     # we can walk it like any other parsed value. Items use the
-    # wrapper form ({"expr": <X>, "type": "bare"|"binding"|...})
-    # for symmetry with the .rawast meta-grammar's parse output.
+    # multi-binding wrapper form ({"expr": <X>, "bindings": {...}?}).
+    # The `bindings` field is omitted on bare items.
     assert "VALUE" in data
     assert data["VALUE"]["type"] == "choice"
     items = data["VALUE"]["items"]
-    expr_refs = [it["expr"] for it in items if it.get("type") == "bare"]
+    expr_refs = [it["expr"] for it in items if "bindings" not in it]
     assert "STRUCT" in expr_refs
 
 

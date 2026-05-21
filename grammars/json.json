@@ -11,23 +11,23 @@
   // (or qualify as "std.line_comment" / "std.block_comment").
   "ignore": ["whitespace"],
 
-  // The items arrays use the wrapper form (ITEM-style dicts with
-  // "expr" / "type" / optional "name" / "value"). This is the same
-  // shape the .rawast meta-grammar produces when parsing equivalent
-  // .rawast source — letting JSON-form and .rawast-form grammars
-  // round-trip through each other via parse-and-save.
+  // Items use the multi-binding wrapper form ({expr, bindings?}). The
+  // `bindings` field is OMITTED when empty — bare items collapse to
+  // just `{"expr": <X>}`. This matches what the .rawast meta-grammar
+  // produces, letting JSON and .rawast forms round-trip cleanly.
+  // Var binding (parsed value becomes dict key) is `{"bindings": {"": "@"}}`.
 
   "VALUE": {
     "type": "choice",
     "items": [
-      {"expr": "STRUCT", "type": "bare"},
-      {"expr": "LIST",   "type": "bare"},
-      {"expr": {"type": "string"}, "type": "bare"},
-      {"expr": {"type": "float"},  "type": "bare"},
-      {"expr": {"type": "int"},    "type": "bare"},
-      {"expr": {"type": "key", "key": "null",  "value": null},  "type": "bare"},
-      {"expr": {"type": "key", "key": "true",  "value": true},  "type": "bare"},
-      {"expr": {"type": "key", "key": "false", "value": false}, "type": "bare"}
+      {"expr": "STRUCT"},
+      {"expr": "LIST"},
+      {"expr": {"type": "string"}},
+      {"expr": {"type": "float"}},
+      {"expr": {"type": "int"}},
+      {"expr": {"type": "key", "key": "null",  "value": null}},
+      {"expr": {"type": "key", "key": "true",  "value": true}},
+      {"expr": {"type": "key", "key": "false", "value": false}}
     ]
   },
 
@@ -35,22 +35,22 @@
     "type": "sequence",
     "container": "array",
     "items": [
-      {"expr": {"type": "key", "key": "["}, "type": "bare"},
+      {"expr": {"type": "key", "key": "["}},
       {"expr": {
         "type": "repeat",
-        "separator": {"expr": {"type": "key", "key": ","}, "type": "bare"},
-        "item":      {"expr": "VALUE", "type": "bare"}
-      }, "type": "bare"},
-      {"expr": {"type": "key", "key": "]"}, "type": "bare"}
+        "separator": {"expr": {"type": "key", "key": ","}},
+        "item":      {"expr": "VALUE"}
+      }},
+      {"expr": {"type": "key", "key": "]"}}
     ]
   },
 
   "PAIR": {
     "type": "sequence",
     "items": [
-      {"expr": {"type": "string"}, "type": "var"},
-      {"expr": {"type": "key", "key": ":"}, "type": "bare"},
-      {"expr": "VALUE", "type": "bare"}
+      {"expr": {"type": "string"}, "bindings": {"": "@"}},
+      {"expr": {"type": "key", "key": ":"}},
+      {"expr": "VALUE"}
     ]
   },
 
@@ -58,13 +58,13 @@
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"expr": {"type": "key", "key": "{"}, "type": "bare"},
+      {"expr": {"type": "key", "key": "{"}},
       {"expr": {
         "type": "repeat",
-        "separator": {"expr": {"type": "key", "key": ","}, "type": "bare"},
-        "item":      {"expr": "PAIR", "type": "bare"}
-      }, "type": "bare"},
-      {"expr": {"type": "key", "key": "}"}, "type": "bare"}
+        "separator": {"expr": {"type": "key", "key": ","}},
+        "item":      {"expr": "PAIR"}
+      }},
+      {"expr": {"type": "key", "key": "}"}}
     ]
   }
 }
