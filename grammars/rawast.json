@@ -406,13 +406,24 @@
   // Materialised as a dict catcher so each (name, value) pair is keyed
   // by name. The dict ends up under ITEM's `bindings` field.
   //
-  // Predictive: the outer ITEM commits to BINDINGS unconditionally; the
-  // repeat inside iterates until the next token isn't ":" (zero items
-  // yields the empty bindings dict).
+  // Two-rule structure: BINDINGS (outer, optional) skips entirely when
+  // no `:` follows; BINDINGS_NONEMPTY (inner, requires at least one
+  // BIND_ENTRY) provides the dict catcher. Net effect: ITEM's
+  // `bindings` field is OMITTED from the parsed value tree when the
+  // item has no bindings, instead of being present as `{}`.
   "BINDINGS": {
+    "type": "sequence",
+    "optional": true,
+    "items": [
+      "BINDINGS_NONEMPTY"
+    ]
+  },
+
+  "BINDINGS_NONEMPTY": {
     "type": "sequence",
     "container": "dict",
     "items": [
+      "BIND_ENTRY",
       {"type": "repeat", "item": "BIND_ENTRY"}
     ]
   },

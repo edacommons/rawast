@@ -129,32 +129,43 @@ build_item(Grammar& g, const Value& val) {
     if (auto dv = dynamic_cast<const DictValue*>(&val)) {
         auto expr_it = dv->data().find("expr");
 
-        // New multi-binding form: {expr:<X>, bindings:{...}}.
-        // For a repeat-item / repeat-separator position only ONE child
-        // is allowed, so non-empty bindings (which would emit name
-        // markers around the expr) aren't representable here. Allow:
-        //   * empty bindings (equivalent to "bare")
-        //   * just {type: "var"} (equivalent to "var")
-        // Anything else: reject with a clear message.
-        if (auto bindings_it = dv->data().find("bindings");
-            bindings_it != dv->data().end()
-            && expr_it != dv->data().end()) {
-            auto bindings_dict = std::dynamic_pointer_cast<DictValue>(
-                bindings_it->second);
-            if (!bindings_dict) {
-                return tl::unexpected("multi-binding: 'bindings' must be a dict");
+        // New multi-binding form: {expr:<X>, bindings:{...}?}. Bindings
+        // field is optional (defaults to empty). Only ONE child is
+        // allowed at a repeat-item / repeat-separator position, so
+        // non-empty bindings (which would emit name markers as siblings)
+        // are rejected here unless they only set is_name (var sentinel
+        // or legacy {type:"var"}).
+        //
+        // Skip this path if the dict has a recognised legacy `type`
+        // field — the legacy handler below owns it.
+        bool has_legacy_type = false;
+        if (auto type_it = dv->data().find("type");
+            type_it != dv->data().end()) {
+            if (auto sv = std::dynamic_pointer_cast<StringValue>(type_it->second)) {
+                const std::string& t = sv->data();
+                if (t == "bare" || t == "var" || t == "binding"
+                    || t == "binding_const") {
+                    has_legacy_type = true;
+                }
+            }
+        }
+        if (expr_it != dv->data().end() && !has_legacy_type) {
+            std::shared_ptr<DictValue> bindings_dict;
+            if (auto bit = dv->data().find("bindings");
+                bit != dv->data().end()) {
+                bindings_dict = std::dynamic_pointer_cast<DictValue>(bit->second);
+                if (!bindings_dict) {
+                    return tl::unexpected("multi-binding: 'bindings' must be a dict");
+                }
             }
             if (!expr_it->second) {
                 return tl::unexpected("multi-binding: null expr");
             }
             bool only_var = false;
-            std::size_t total = bindings_dict->data().size();
+            std::size_t total = bindings_dict ? bindings_dict->data().size() : 0;
             if (total == 0) {
                 // bare
             } else if (total == 1) {
-                // Either the empty-name sentinel (":=@") or the legacy
-                // {type:"var"} encoding sets is_name on expr without
-                // emitting siblings — both are allowed here.
                 if (bindings_dict->data().count("")) {
                     only_var = true;
                 } else if (auto it = bindings_dict->data().find("type");
@@ -235,20 +246,38 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
         if (auto item_dict = std::dynamic_pointer_cast<DictValue>(item)) {
             auto expr_it = item_dict->data().find("expr");
 
-            // New multi-binding form: ITEM dict with a `bindings` dict
-            // field. Expand into Value-name markers + Value-const
-            // constants around the expr. Special empty-name key (""
-            // → "@") is the var sentinel from `:=@` syntax: sets
-            // is_name on the expr. Special value "@" pairs with the
-            // expr's parsed value (at most one such per item).
-            if (auto bindings_it = item_dict->data().find("bindings");
-                bindings_it != item_dict->data().end()
-                && expr_it != item_dict->data().end()) {
-                auto bindings_dict = std::dynamic_pointer_cast<DictValue>(
-                    bindings_it->second);
-                if (!bindings_dict) {
-                    return tl::unexpected(
-                        "multi-binding: 'bindings' must be a dict");
+            // New multi-binding form: ITEM dict with `expr` plus an
+            // optional `bindings` dict field (defaults to empty when
+            // absent — bare item). The bindings dict expands into
+            // Value-name markers + Value-const constants around the
+            // expr. Special empty-name key ("" → "@") is the var
+            // sentinel from `:=@` syntax: sets is_name on the expr.
+            // Special value "@" pairs with the expr's parsed value
+            // (at most one such per item).
+            //
+            // Skip this path if the dict ALSO has a recognised legacy
+            // `type` field (bare/var/binding/binding_const) — the
+            // legacy handler below owns it.
+            bool has_legacy_type = false;
+            if (auto type_it = item_dict->data().find("type");
+                type_it != item_dict->data().end()) {
+                if (auto sv = std::dynamic_pointer_cast<StringValue>(type_it->second)) {
+                    const std::string& t = sv->data();
+                    if (t == "bare" || t == "var" || t == "binding"
+                        || t == "binding_const") {
+                        has_legacy_type = true;
+                    }
+                }
+            }
+            if (expr_it != item_dict->data().end() && !has_legacy_type) {
+                std::shared_ptr<DictValue> bindings_dict;
+                if (auto bit = item_dict->data().find("bindings");
+                    bit != item_dict->data().end()) {
+                    bindings_dict = std::dynamic_pointer_cast<DictValue>(bit->second);
+                    if (!bindings_dict) {
+                        return tl::unexpected(
+                            "multi-binding: 'bindings' must be a dict");
+                    }
                 }
                 if (!expr_it->second) {
                     return tl::unexpected("multi-binding: null expr");
@@ -258,6 +287,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 std::vector<std::pair<std::string, ValuePtr>> at_bindings;
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
+                if (bindings_dict)
                 for (const auto& [name, value] : bindings_dict->data()) {
                     // Empty-name key is the var sentinel from :=@ syntax.
                     if (name.empty()) {
