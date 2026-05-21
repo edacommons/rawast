@@ -1,4 +1,5 @@
 #include <rawast/parsers.hpp>
+#include <rawast/parsers_registry.hpp>
 
 #include <array>
 #include <cctype>
@@ -436,6 +437,29 @@ ParseResult BlockCommentParser::parse(StreamReader& sr) {
 
     sr.accept();
     return make_string(std::move(body));
+}
+
+// -----------------------------------------------------------------------
+// Standard parser group registration
+// -----------------------------------------------------------------------
+
+void register_std_parser_group() {
+    // Idempotent: register_parser_group(ParserGroup) does
+    // insert_or_assign, so repeated calls overwrite with an equivalent
+    // group definition. Safe to call from multiple init paths
+    // (binding load, host C++ code).
+    ParserGroup g;
+    g.name = "std";
+    g.parsers = {
+        {"int",            [] { return std::make_unique<IntParser>(); }},
+        {"float",          [] { return std::make_unique<FloatParser>(); }},
+        {"identifier",     [] { return std::make_unique<IdentifierParser>(); }},
+        {"string",         [] { return std::make_unique<DoubleQuoteStringParser>(); }},
+        {"whitespace",     [] { return std::make_unique<WhitespaceParser>(); }},
+        {"line_comment",   [] { return std::make_unique<LineCommentParser>(); }},
+        {"block_comment",  [] { return std::make_unique<BlockCommentParser>(); }},
+    };
+    register_parser_group(std::move(g));
 }
 
 } // namespace rawast

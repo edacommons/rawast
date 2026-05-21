@@ -112,4 +112,20 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
+// Register the `std` parser group. Idempotent — safe to call from
+// multiple init paths. Provides:
+//
+//   std.int            (IntParser)
+//   std.float          (FloatParser)
+//   std.identifier     (IdentifierParser, default char set)
+//   std.string         (DoubleQuoteStringParser)
+//   std.whitespace     (WhitespaceParser)
+//   std.line_comment   (LineCommentParser)
+//   std.block_comment  (BlockCommentParser)
+//
+// Each is also addressable bare (`int`, `whitespace`, ...) when no
+// other active group declares the same name. Grammars opt in by
+// adding `"use": ["std"]` (JSON form) or `use: std` (.rawast form).
+void register_std_parser_group();
+
 } // namespace rawast

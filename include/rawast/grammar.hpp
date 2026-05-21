@@ -75,6 +75,11 @@ public:
 
     void register_rule(std::string name, NodeId node);
     void register_parser(std::unique_ptr<Parser> p);
+    // Register a parser under an arbitrary key (e.g. a dotted alias
+    // like "std.int") rather than the parser's own ::name(). Used by
+    // the parser-group machinery to give one logical terminal two
+    // addressable forms: bare and "group.local".
+    void register_parser_alias(std::string key, std::unique_ptr<Parser> p);
     void add_ignore(std::string parser_name);
 
     // --- Mid-parse hooks: rule callbacks and parser replacement -------

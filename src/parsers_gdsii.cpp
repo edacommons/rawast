@@ -349,73 +349,94 @@ SaveResult GdsiiRecordParser::unparse(const Value& value) const {
 }
 
 // -------------------------------------------------------------------------
-// register_gdsii_parsers — all 47 record types
+// gdsii parser group — all 47 record types
 // -------------------------------------------------------------------------
 
-void register_gdsii_parsers(Grammar& g) {
-    auto add = [&](std::string name, std::uint8_t type, std::uint8_t dt) {
-        g.register_parser(std::make_unique<GdsiiRecordParser>(
-            std::move(name), REC(type, dt)));
-    };
-    // Conventional lowercase names for each record type.
-    add("gds_header",       0x00, DT_INT16);
-    add("gds_bgnlib",       0x01, DT_INT16);
-    add("gds_libname",      0x02, DT_STR);
-    add("gds_units",        0x03, DT_REAL64);
-    add("gds_endlib",       0x04, DT_NO_DATA);
-    add("gds_bgnstr",       0x05, DT_INT16);
-    add("gds_strname",      0x06, DT_STR);
-    add("gds_endstr",       0x07, DT_NO_DATA);
-    add("gds_boundary",     0x08, DT_NO_DATA);
-    add("gds_path",         0x09, DT_NO_DATA);
-    add("gds_sref",         0x0A, DT_NO_DATA);
-    add("gds_aref",         0x0B, DT_NO_DATA);
-    add("gds_text",         0x0C, DT_NO_DATA);
-    add("gds_layer",        0x0D, DT_INT16);
-    add("gds_datatype",     0x0E, DT_INT16);
-    add("gds_width",        0x0F, DT_INT32);
-    add("gds_xy",           0x10, DT_INT32);
-    add("gds_endel",        0x11, DT_NO_DATA);
-    add("gds_sname",        0x12, DT_STR);
-    add("gds_colrow",       0x13, DT_INT16);
-    add("gds_textnode",     0x14, DT_NO_DATA);
-    add("gds_node",         0x15, DT_NO_DATA);
-    add("gds_texttype",     0x16, DT_INT16);
-    add("gds_presentation", 0x17, DT_BIT_ARRAY);
-    add("gds_string",       0x19, DT_STR);
-    add("gds_strans",       0x1A, DT_BIT_ARRAY);
-    add("gds_mag",          0x1B, DT_REAL64);
-    add("gds_angle",        0x1C, DT_REAL64);
-    add("gds_reflibs",      0x1F, DT_STR);
-    add("gds_fonts",        0x20, DT_STR);
-    add("gds_pathtype",     0x21, DT_INT16);
-    add("gds_generations",  0x22, DT_INT16);
-    add("gds_attrtable",    0x23, DT_STR);
-    add("gds_elflags",      0x26, DT_BIT_ARRAY);
-    add("gds_nodetype",     0x2A, DT_INT16);
-    add("gds_propattr",     0x2B, DT_INT16);
-    add("gds_propvalue",    0x2C, DT_STR);
-    add("gds_box",          0x2D, DT_NO_DATA);
-    add("gds_boxtype",      0x2E, DT_INT16);
-    add("gds_plex",         0x2F, DT_INT32);
-    add("gds_bgnextn",      0x30, DT_INT32);
-    add("gds_endextn",      0x31, DT_INT32);
-    add("gds_tapenum",      0x32, DT_INT16);
-    add("gds_tapecode",     0x33, DT_INT16);
-    add("gds_strclass",     0x34, DT_BIT_ARRAY);
-    add("gds_format",       0x36, DT_INT16);
-    add("gds_mask",         0x37, DT_STR);
-    add("gds_endmasks",     0x38, DT_NO_DATA);
-}
-
-// Auto-register the "gdsii" group so grammars can declare `use: gdsii`.
 namespace {
-    struct GdsiiAutoRegister {
-        GdsiiAutoRegister() {
-            register_parser_group("gdsii", register_gdsii_parsers);
+
+// Each spec yields a fresh GdsiiRecordParser instance bound to one
+// record-type / data-type pair. The factory captures the type+dt by
+// value so it remains valid past the spec list's construction.
+ParserSpec gds_spec(std::string name, std::uint8_t type, std::uint8_t dt) {
+    auto stored_name = name;
+    return ParserSpec{
+        std::move(name),
+        [stored_name, type, dt]() {
+            return std::make_unique<GdsiiRecordParser>(
+                stored_name, REC(type, dt));
         }
     };
-    GdsiiAutoRegister gdsii_auto_register_;
+}
+
+ParserGroup make_gdsii_group() {
+    ParserGroup g;
+    g.name = "gdsii";
+    g.parsers = {
+        gds_spec("gds_header",       0x00, DT_INT16),
+        gds_spec("gds_bgnlib",       0x01, DT_INT16),
+        gds_spec("gds_libname",      0x02, DT_STR),
+        gds_spec("gds_units",        0x03, DT_REAL64),
+        gds_spec("gds_endlib",       0x04, DT_NO_DATA),
+        gds_spec("gds_bgnstr",       0x05, DT_INT16),
+        gds_spec("gds_strname",      0x06, DT_STR),
+        gds_spec("gds_endstr",       0x07, DT_NO_DATA),
+        gds_spec("gds_boundary",     0x08, DT_NO_DATA),
+        gds_spec("gds_path",         0x09, DT_NO_DATA),
+        gds_spec("gds_sref",         0x0A, DT_NO_DATA),
+        gds_spec("gds_aref",         0x0B, DT_NO_DATA),
+        gds_spec("gds_text",         0x0C, DT_NO_DATA),
+        gds_spec("gds_layer",        0x0D, DT_INT16),
+        gds_spec("gds_datatype",     0x0E, DT_INT16),
+        gds_spec("gds_width",        0x0F, DT_INT32),
+        gds_spec("gds_xy",           0x10, DT_INT32),
+        gds_spec("gds_endel",        0x11, DT_NO_DATA),
+        gds_spec("gds_sname",        0x12, DT_STR),
+        gds_spec("gds_colrow",       0x13, DT_INT16),
+        gds_spec("gds_textnode",     0x14, DT_NO_DATA),
+        gds_spec("gds_node",         0x15, DT_NO_DATA),
+        gds_spec("gds_texttype",     0x16, DT_INT16),
+        gds_spec("gds_presentation", 0x17, DT_BIT_ARRAY),
+        gds_spec("gds_string",       0x19, DT_STR),
+        gds_spec("gds_strans",       0x1A, DT_BIT_ARRAY),
+        gds_spec("gds_mag",          0x1B, DT_REAL64),
+        gds_spec("gds_angle",        0x1C, DT_REAL64),
+        gds_spec("gds_reflibs",      0x1F, DT_STR),
+        gds_spec("gds_fonts",        0x20, DT_STR),
+        gds_spec("gds_pathtype",     0x21, DT_INT16),
+        gds_spec("gds_generations",  0x22, DT_INT16),
+        gds_spec("gds_attrtable",    0x23, DT_STR),
+        gds_spec("gds_elflags",      0x26, DT_BIT_ARRAY),
+        gds_spec("gds_nodetype",     0x2A, DT_INT16),
+        gds_spec("gds_propattr",     0x2B, DT_INT16),
+        gds_spec("gds_propvalue",    0x2C, DT_STR),
+        gds_spec("gds_box",          0x2D, DT_NO_DATA),
+        gds_spec("gds_boxtype",      0x2E, DT_INT16),
+        gds_spec("gds_plex",         0x2F, DT_INT32),
+        gds_spec("gds_bgnextn",      0x30, DT_INT32),
+        gds_spec("gds_endextn",      0x31, DT_INT32),
+        gds_spec("gds_tapenum",      0x32, DT_INT16),
+        gds_spec("gds_tapecode",     0x33, DT_INT16),
+        gds_spec("gds_strclass",     0x34, DT_BIT_ARRAY),
+        gds_spec("gds_format",       0x36, DT_INT16),
+        gds_spec("gds_mask",         0x37, DT_STR),
+        gds_spec("gds_endmasks",     0x38, DT_NO_DATA),
+    };
+    return g;
+}
+
+} // namespace
+
+void register_gdsii_parser_group() {
+    register_parser_group(make_gdsii_group());
+}
+
+// Back-compat shim: the legacy function-style entry point still works
+// for any direct C++ caller. Internally it applies the structured
+// group, so both code paths converge on the same parser instances.
+void register_gdsii_parsers(Grammar& g) {
+    register_gdsii_parser_group();   // idempotent
+    auto r = apply_parser_group(g, "gdsii");
+    (void)r;   // structured group always exists once registered
 }
 
 } // namespace rawast

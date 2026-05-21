@@ -213,18 +213,15 @@ TEST_CASE("JSON grammar parses the astrw prototype's smoke-test input") {
     CHECK(arr->data().size() == 10);
 }
 
-// JSON-with-comments — modularity demonstration --------------------------
-//
-// The engine treats comment-handling as an orthogonal concern: same JSON
-// grammar tree, plus comment parsers in the ignore list, equals JSONC
-// support with zero grammar changes. This is the §3.8 "different
-// applications of the same single mechanism" property in action.
+// JSONC support — the in-memory JSON grammar is JSONC by construction
+// (make_json_grammar registers // and /* */ comment parsers and adds
+// both to the ignore list). File-loaded grammars opt into the same
+// behaviour explicitly via the top-level "ignore" field; the host API
+// never adds comment ignores implicitly. These tests pin the
+// out-of-the-box behaviour for the in-memory grammar.
 
-TEST_CASE("JSONC: adding LineCommentParser to ignore list enables // comments") {
+TEST_CASE("JSONC: in-memory JSON grammar accepts // line comments") {
     auto g = make_json_grammar();
-    g.register_parser(std::make_unique<LineCommentParser>());
-    g.add_ignore("line_comment");
-
     auto r = parse_json(g,
         "// header comment\n"
         "{\n"
@@ -239,11 +236,8 @@ TEST_CASE("JSONC: adding LineCommentParser to ignore list enables // comments") 
     CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("frequency"))->data() == 100);
 }
 
-TEST_CASE("JSONC: adding BlockCommentParser enables /* */ comments") {
+TEST_CASE("JSONC: in-memory JSON grammar accepts /* */ block comments") {
     auto g = make_json_grammar();
-    g.register_parser(std::make_unique<BlockCommentParser>());
-    g.add_ignore("block_comment");
-
     auto r = parse_json(g,
         "/* top-level\n"
         "   block comment */\n"
@@ -256,11 +250,6 @@ TEST_CASE("JSONC: adding BlockCommentParser enables /* */ comments") {
 
 TEST_CASE("JSONC: both comment styles together") {
     auto g = make_json_grammar();
-    g.register_parser(std::make_unique<LineCommentParser>());
-    g.register_parser(std::make_unique<BlockCommentParser>());
-    g.add_ignore("line_comment");
-    g.add_ignore("block_comment");
-
     auto r = parse_json(g,
         "// file header\n"
         "{\n"

@@ -420,18 +420,12 @@ populate(Grammar& g, NodeId target, const Value& body) {
     return {};
 }
 
-// Lazy-built JSON+comments meta-grammar reused across loader calls.
-// JSONC tolerance (// line and /* block */ comments in the ignore list)
-// lets community grammar files in JSON form carry inline documentation.
+// Lazy-built JSONC meta-grammar reused across loader calls. The
+// in-memory JSON grammar (make_json_grammar) is itself JSONC, so this
+// wrapper is just a cached instance used to parse JSON-form grammar
+// files (which may carry // and /* */ comments as inline docs).
 const Grammar& json_meta_grammar() {
-    static const Grammar g = [] {
-        Grammar base = make_json_grammar();
-        base.register_parser(std::make_unique<LineCommentParser>());
-        base.register_parser(std::make_unique<BlockCommentParser>());
-        base.add_ignore("line_comment");
-        base.add_ignore("block_comment");
-        return base;
-    }();
+    static const Grammar g = make_json_grammar();
     return g;
 }
 
@@ -462,19 +456,38 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
         }
     }
 
+    // Apply the explicit ignore-list declaration (top-level "ignore"
+    // field): an array of parser names to call add_ignore() on. Run
+    // AFTER `use:` so that group-registered parsers are resolvable. A
+    // grammar that wants comment tolerance must opt in here — the host
+    // API never adds comment ignores implicitly.
+    if (auto ig_it = root->data().find("ignore"); ig_it != root->data().end()) {
+        auto ig_arr = std::dynamic_pointer_cast<ArrayValue>(ig_it->second);
+        if (!ig_arr) {
+            return tl::unexpected("'ignore' field must be an array of parser names");
+        }
+        for (const auto& entry : ig_arr->data()) {
+            auto sv = std::dynamic_pointer_cast<StringValue>(entry);
+            if (!sv) {
+                return tl::unexpected("'ignore' entries must be parser names");
+            }
+            g.add_ignore(sv->data());
+        }
+    }
+
     // Pass 1: allocate one Node per named rule and register the name. The
     // Node's kind/value/children are filled in pass 2; for now they're
     // placeholders so that build_inline() / populate() can correctly
     // disambiguate bare-string Ref vs. Key by checking has_rule().
     for (const auto& [name, body] : root->data()) {
-        if (name == "start" || name == "use") continue;
+        if (name == "start" || name == "use" || name == "ignore") continue;
         NodeId id = g.new_sequence();   // placeholder
         g.register_rule(name, id);
     }
 
     // Pass 2: populate each named rule's Node from its body.
     for (const auto& [name, body] : root->data()) {
-        if (name == "start" || name == "use") continue;
+        if (name == "start" || name == "use" || name == "ignore") continue;
         if (!body) {
             return tl::unexpected("rule '" + name + "' has null body");
         }
@@ -544,18 +557,12 @@ namespace {
 
 const tl::expected<Grammar, std::string>& rawast_meta_grammar() {
     static const auto cached = []() -> tl::expected<Grammar, std::string> {
+        // The grammar file itself declares `"use": ["std"]` and the
+        // ignore list it needs; the loader brings those in via the
+        // `use:` directive. Just ensure the std group is registered
+        // globally so the use directive can resolve it.
+        register_std_parser_group();
         Grammar g;
-        g.register_parser(std::make_unique<DoubleQuoteStringParser>());
-        g.register_parser(std::make_unique<IdentifierParser>());
-        // int/float are needed by BIND_VALUE_LITERAL (Tier-2 binding RHS).
-        g.register_parser(std::make_unique<IntParser>());
-        g.register_parser(std::make_unique<FloatParser>());
-        g.register_parser(std::make_unique<WhitespaceParser>());
-        g.register_parser(std::make_unique<LineCommentParser>());
-        g.register_parser(std::make_unique<BlockCommentParser>());
-        g.add_ignore("whitespace");
-        g.add_ignore("line_comment");
-        g.add_ignore("block_comment");
         auto r = load_json_grammar_from_file(g, "grammars/rawast.json");
         if (!r) {
             return tl::unexpected("rawast meta-grammar load: " + r.error());

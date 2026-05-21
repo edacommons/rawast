@@ -24,8 +24,12 @@ are documented in `docs/` and in the prototype's history.
   backtracking; structural linter at grammar-load time flagging LL(1)
   violations.
 - **Bidirectional walk**: parse and save share one grammar definition.
+  The save direction uses a stack-navigation walk with key-based Choice
+  dispatch, wrapped-substructure descent, and catch-all alternatives —
+  enough machinery that the `.rawast` meta-grammar can save its own
+  parsed grammars back as canonical `.rawast` text (self-host save).
   Pretty-print attributes (`indent`, `tab`, `space`, `newline`,
-  `tail="..."`) plus a `pretty=true/false` toggle on save let one grammar
+  `tail="..."`) plus a `pretty=true/false` toggle let one grammar
   cover both compact and human-readable output.
 - **Value model**: typed AST (`null`/`bool`/`int`/`uint`/`real`/`string`/
   `array`/`dict`) with primitive interning and back-references for
@@ -47,6 +51,11 @@ are documented in `docs/` and in the prototype's history.
     Real production GDSII files from open-PDK chip flows (GF180MCU and
     IHP130) parse cleanly; synthetic round-trip tests cover save back
     to byte-identical output.
+- **Bidirectional grammar conversion**: the `.rawast` meta-grammar
+  loads grammars as data (`Grammar.from_dict`, `meta.parse_file`) and
+  writes them back via the same save engine. Parse a `.rawast` file,
+  modify the AST, emit it back as canonical `.rawast` text — round-
+  trips structurally identical.
 - **Test suite**: 200+ tests covering the engine, loader, JSON
   round-trip, GDSII round-trip, linter, callbacks, pretty-print, and
   the `use:` directive.
@@ -93,6 +102,71 @@ gdsii = rawast.Grammar.load("grammars/gdsii.rawast")
 json_g = rawast.Grammar.load("grammars/json.json")
 print(json_g.save(gdsii.parse_file("layout.gds")).decode("utf-8"))
 ```
+
+### Parser groups, `use:`, and ignore declarations
+
+Every grammar declares the parsers it needs and which of them to skip
+between tokens. The host loader never injects parsers or ignores
+implicitly. Two top-level fields drive this:
+
+- **`"use"`**: an array of parser-group names (e.g. `["std"]`,
+  `["std", "gdsii"]`). Each named group is registered globally at
+  process start; `use:` makes its parsers addressable in the grammar.
+- **`"ignore"`**: an array of parser names whose matches are silently
+  consumed between tokens (whitespace, comments, …). Names can be
+  bare (`"whitespace"`) or qualified (`"std.whitespace"`).
+
+Each parser is addressable under **two names**: bare (`int`) and
+qualified (`std.int`). Bare works when unambiguous; qualified is
+self-documenting and disambiguates across groups that share local
+names. Both forms resolve to the same parser.
+
+Shipped groups:
+
+| Group | Parsers |
+|---|---|
+| `std` | `int`, `float`, `identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
+| `gdsii` | All 47 GDSII record-type parsers (`gds_header`, `gds_bgnlib`, …, `gds_endmasks`) |
+
+Shipped grammars:
+
+```json
+// grammars/json.json — strict JSON (RFC 8259)
+{ "start": "VALUE",
+  "use":    ["std"],
+  "ignore": ["whitespace"],
+  ... }
+```
+
+```json
+// grammars/rawast.json — JSONC meta-grammar
+{ "start": "FILE",
+  "use":    ["std"],
+  "ignore": ["whitespace", "line_comment", "block_comment"],
+  ... }
+```
+
+```
+# grammars/gdsii.rawast — binary, no ignores
+use: gdsii
+start: <LIBRARY>
+...
+```
+
+The in-memory `make_json_grammar()` (C++) is **JSONC by construction**
+— it applies the `std` group internally and adds whitespace + comments
+to its ignore list. This is the bootstrap grammar used to read JSON-
+form grammar files (which typically carry inline `//` and `/* */` docs).
+
+In Python, `Grammar.load(path)` reads `use:` and `ignore:` from the
+file and applies them. Nothing is added implicitly — what the grammar
+declares is what it accepts.
+
+> The `.rawast` text format does not yet have syntactic `ignore:` or
+> structured `use:` array directives parallel to JSON form (only
+> `use: <group>` single-token). Text grammars authored in `.rawast`
+> that need ignore declarations should use JSON form for now;
+> bringing parity to `.rawast` is M1 scope.
 
 ## Build (C++ library and tests)
 

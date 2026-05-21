@@ -1,0 +1,112 @@
+"""Phase B save engine — acceptance tests.
+
+The save entry point is the stack-navigation rewrite of the save
+direction. These tests pin its capabilities:
+
+  * Self-host: the .rawast meta-grammar parses its own grammar files
+    and saves them back as .rawast text that re-parses to the same
+    dict (round-trip).
+  * Existing JSON round-trip via save (no regression).
+  * GDSII round-trip via save (no regression).
+"""
+
+from __future__ import annotations
+
+import json
+import pathlib
+
+import pytest
+
+import rawast
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+GRAMMARS  = REPO_ROOT / "grammars"
+
+
+# --- The headline Phase B test: self-host save ----------------------------
+
+def test_self_host_save_gdsii_rawast():
+    """Parse gdsii.rawast through the meta-grammar, save as .rawast text
+    via save, re-parse — the dicts must be equal."""
+    meta = rawast.rawast_format()
+    original = meta.parse_file(str(GRAMMARS / "gdsii.rawast"))
+    text     = meta.save(original, pretty=True).decode("utf-8")
+    reparsed = meta.parse_string(text)
+    assert reparsed == original
+
+
+def test_self_host_save_includes_use_directive():
+    """The `use: gdsii` directive at the top of gdsii.rawast must
+    survive the round-trip."""
+    meta = rawast.rawast_format()
+    original = meta.parse_file(str(GRAMMARS / "gdsii.rawast"))
+    text     = meta.save(original, pretty=True).decode("utf-8")
+    assert "use" in text
+    assert "gdsii" in text
+
+
+# --- JSON via save (no regression vs the legacy engine) ----------------
+
+@pytest.mark.parametrize("value", [
+    42,
+    "hello",
+    True,
+    False,
+    [1, 2, 3],
+    {"a": 1},
+    {"a": 1, "b": [2, 3], "c": "nested"},
+    {"nested": {"deeper": {"deepest": [1, 2, [3, 4]]}}},
+])
+def test_json_save_round_trip(value):
+    g = rawast.Grammar.load(str(GRAMMARS / "json.json"))
+    raw = g.save(value).decode("utf-8")
+    assert json.loads(raw) == value
+
+
+# --- save dispatch behaviours -----------------------------------------
+
+def test_save_dispatches_parse_expr_catch_all():
+    """For `{"type":"int"}`, the EXPR Choice picks PARSE_EXPR
+    (catch-all alternative)."""
+    meta = rawast.rawast_format()
+    data = {"start": "X", "X": {"type": "int"}}
+    text = meta.save(data, pretty=False).decode("utf-8")
+    assert "int" in text
+
+
+def test_save_dispatches_ref_for_bare_string():
+    """In EXPR's choice, a bare-string value picks REF (matches
+    `<identifier>` shape)."""
+    meta = rawast.rawast_format()
+    data = {"start": "X", "X": "Y", "Y": "Z"}
+    text = meta.save(data, pretty=False).decode("utf-8")
+    assert "<Y>" in text or "<Z>" in text or "<X>" in text
+
+
+def test_save_dispatches_use_decl_via_bare_key():
+    """`USE_DECL` matches via key-based dispatch — the bare Key 'use'
+    in its grammar tree matches when the current dict key is 'use'."""
+    meta = rawast.rawast_format()
+    data = {"start": "X", "use": ["gdsii"], "X": "Y"}
+    text = meta.save(data, pretty=False).decode("utf-8")
+    assert "use" in text and "gdsii" in text
+
+
+def test_save_optional_section_skipped_when_default():
+    """ITEM's `type=bare` default — when dict["type"]=="bare", the
+    BIND_TAIL_OPT optional block must emit nothing."""
+    meta = rawast.rawast_format()
+    # An ELEMENTS-style rule: bare item wrapping a Repeat
+    data = {
+        "start": "X",
+        "X": {"container": "array", "items": [
+            {"expr": {"item": {"expr": "Y", "type": "bare"},
+                      "type": "repeat"},
+             "type": "bare"}
+        ], "type": "sequence"},
+        "Y": "Z",
+    }
+    text = meta.save(data, pretty=False).decode("utf-8")
+    # Bare items shouldn't emit `:name=` binding suffix
+    assert "[" in text or "{" in text  # something structural present

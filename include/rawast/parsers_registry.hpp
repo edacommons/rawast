@@ -3,31 +3,58 @@
 #include <tl/expected.hpp>
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace rawast {
 
 class Grammar;
+class Parser;
 
-// A "parser group" is a named set of terminal parsers that a grammar
-// declares it needs via a `use:` directive. The group is identified by
-// a short name (e.g. "gdsii", "standard") and resolves to a function
-// that registers the group's parsers on a target Grammar.
+// A "parser group" is a named, namespaced set of terminal parsers a
+// grammar opts into via a `use:` directive. Each parser inside group
+// `G` is addressable two ways:
 //
-// Groups are typically registered at static-initialisation time via the
-// RAWAST_REGISTER_PARSER_GROUP macro below; the loader looks them up at
-// grammar-load time when it encounters a `use:` declaration.
+//   * bare:    "int"          — works when unambiguous
+//   * dotted:  "std.int"      — always works, self-documenting
+//
+// Both names resolve to the same kind of Parser (a separate instance
+// per Grammar); replace_parser (used for callback-driven parser
+// rewriting in LEF/DEF/Liberty) operates on whichever name the rule
+// referenced. Future M1 work: detect bare-name collisions across
+// active groups and require qualification when ambiguous.
 
+// Factory for one parser. Called every time the group is applied —
+// each Grammar gets fresh instances.
+using ParserFactory = std::function<std::unique_ptr<Parser>()>;
+
+struct ParserSpec {
+    std::string   local_name;   // e.g. "int", "gds_header"
+    ParserFactory factory;
+};
+
+struct ParserGroup {
+    std::string             name;     // e.g. "std", "gdsii"
+    std::vector<ParserSpec> parsers;  // local names within the group
+};
+
+// Register a structured group. After it has been applied via
+// `apply_parser_group`, every parser is registered on the target
+// Grammar under both its bare and dotted names.
+void register_parser_group(ParserGroup group);
+
+// --- Legacy API (function-only, opaque to the loader) -------------------
+// Kept for any third-party code that still builds groups by hand. New
+// groups should use the structured ParserGroup form above.
 using ParserGroupRegisterFn = std::function<void(Grammar&)>;
-
-// Register a parser-group factory under `name`. Later loads of any
-// grammar containing `use: name` will call `fn(grammar)` to register
-// that group's parsers on the target.
 void register_parser_group(std::string name, ParserGroupRegisterFn fn);
 
-// Apply a previously-registered group to `g`. Returns an error if the
-// group name was never registered.
+// --- Application + introspection ----------------------------------------
+
+// Apply a previously-registered group to `g`. Structured and legacy
+// groups are both supported. Returns an error if the group name was
+// never registered.
 tl::expected<void, std::string>
 apply_parser_group(Grammar& g, const std::string& name);
 
@@ -37,17 +64,10 @@ bool parser_group_exists(const std::string& name);
 // Return the list of currently-registered group names, sorted.
 std::vector<std::string> registered_parser_groups();
 
-// Static-init-time registration pattern. Each parser-providing TU
-// places an anonymous-namespace struct whose constructor calls
-// register_parser_group:
-//
-//   namespace {
-//       struct MyParsersAutoRegister {
-//           MyParsersAutoRegister() {
-//               register_parser_group("my_group", register_my_parsers);
-//           }
-//       };
-//       MyParsersAutoRegister my_parsers_auto_register_;
-//   }
+// Enumerate the parser local names a structured group contributes.
+// Returns an empty vector for legacy (function-only) groups — those
+// are opaque to introspection. Used by docs/tooling, not the loader.
+std::vector<std::string>
+parser_group_local_names(const std::string& group_name);
 
 } // namespace rawast

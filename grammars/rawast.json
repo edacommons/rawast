@@ -31,6 +31,17 @@
 {
   "start": "FILE",
 
+  // Pull in standard text terminal parsers (int, identifier, string,
+  // whitespace, line/block comment). Each is addressable bare or as
+  // `std.<name>`.
+  "use": ["std"],
+
+  // The .rawast source format uses C-style comments (// and /* */)
+  // for inline documentation, so this grammar opts the comment
+  // terminal parsers into the ignore list. Without this declaration
+  // the loader treats // and /* */ as syntax errors.
+  "ignore": ["whitespace", "line_comment", "block_comment"],
+
   // ---------------------------------------------------------------------
   // FILE: top-level. A dict that holds rule definitions and optional
   // `use:` directives. `use:` is matched first (predictive — its first

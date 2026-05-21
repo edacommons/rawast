@@ -1,6 +1,16 @@
 {
   "start": "VALUE",
 
+  // Pull in standard text terminal parsers (int, float, string,
+  // identifier, whitespace, line_comment, block_comment). Each is
+  // addressable bare (`int`) or qualified (`std.int`).
+  "use": ["std"],
+
+  // Strict JSON (RFC 8259): only whitespace is skipped between tokens.
+  // For JSONC tolerance, add "line_comment" and "block_comment" here
+  // (or qualify as "std.line_comment" / "std.block_comment").
+  "ignore": ["whitespace"],
+
   "VALUE": {
     "type": "choice",
     "items": [

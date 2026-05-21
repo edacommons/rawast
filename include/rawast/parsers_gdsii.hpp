@@ -41,10 +41,15 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
-// Register all GDSII record-type parsers on `g` under their conventional
-// names: "gds_header", "gds_bgnlib", ..., "gds_endmasks". Use these
-// names in a .rawast grammar as parser-name references. The complete
-// list (~47 entries) mirrors the GDSII spec.
+// Register the "gdsii" parser group in the global registry. Grammars
+// declare `use: gdsii` to pull in all 47 record-type parsers; each is
+// addressable both bare (`gds_header`) and dotted (`gdsii.gds_header`).
+// Idempotent — safe to call from multiple init paths.
+void register_gdsii_parser_group();
+
+// Legacy direct-register entry point: applies the gdsii group to a
+// Grammar directly. Kept for callers that wire the group up in C++
+// without a `use:` directive. Internally just applies the group.
 void register_gdsii_parsers(Grammar& g);
 
 } // namespace rawast

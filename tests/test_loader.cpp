@@ -10,15 +10,13 @@ using namespace rawast;
 
 namespace {
 
-// Build a Grammar with the standard JSON terminal parsers registered.
+// Build a target Grammar for loading grammars/json.json. The file
+// itself declares `"use": ["std"]` and `"ignore": ["whitespace"]`, so
+// the helper just ensures the std parser group is registered globally
+// before any `use: std` directive is processed.
 Grammar make_json_target() {
-    Grammar g;
-    g.register_parser(std::make_unique<IntParser>());
-    g.register_parser(std::make_unique<FloatParser>());
-    g.register_parser(std::make_unique<DoubleQuoteStringParser>());
-    g.register_parser(std::make_unique<WhitespaceParser>());
-    g.add_ignore("whitespace");
-    return g;
+    register_std_parser_group();
+    return Grammar{};
 }
 
 ValuePtr parse_with(const Grammar& g, std::string input) {
@@ -206,18 +204,18 @@ TEST_CASE("Loader: {type:value, var:true} flags Node's is_name correctly") {
 
 namespace {
 
-// Build a Grammar with the parsers needed by the .rawast grammar.
+// Build a target Grammar for loading grammars/rawast.json. The file
+// itself declares `"use": ["std"]` and the ignore list it needs, so
+// nothing needs to be pre-registered here — the loader brings the
+// std parser group in via the `use:` directive.
+//
+// `register_std_parser_group()` is idempotent and must be called at
+// least once per process before any grammar declaring `use: std` is
+// loaded. In the Python binding this happens at module init; in
+// C++ unit tests we call it from the test helper.
 Grammar make_rawast_target() {
-    Grammar g;
-    g.register_parser(std::make_unique<DoubleQuoteStringParser>());
-    g.register_parser(std::make_unique<IdentifierParser>());
-    g.register_parser(std::make_unique<WhitespaceParser>());
-    g.register_parser(std::make_unique<LineCommentParser>());
-    g.register_parser(std::make_unique<BlockCommentParser>());
-    g.add_ignore("whitespace");
-    g.add_ignore("line_comment");
-    g.add_ignore("block_comment");
-    return g;
+    register_std_parser_group();
+    return Grammar{};
 }
 
 } // namespace

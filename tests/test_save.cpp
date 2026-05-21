@@ -184,12 +184,8 @@ TEST_CASE("Parse-then-save canonicalizes whitespace away") {
 }
 
 TEST_CASE("Parse-then-save with JSONC input: comments stripped, canonical output") {
+    // make_json_grammar() is JSONC by construction — no extra setup needed.
     auto g = make_json_grammar();
-    g.register_parser(std::make_unique<LineCommentParser>());
-    g.register_parser(std::make_unique<BlockCommentParser>());
-    g.add_ignore("line_comment");
-    g.add_ignore("block_comment");
-
     auto v = parse_to_value(g,
         "// header\n"
         "{ \"a\": 1 /* inline */, \"b\": 2 }");

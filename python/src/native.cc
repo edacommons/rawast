@@ -107,11 +107,12 @@ std::string format_parse_error(const rawast::ParseError& e) {
 } // namespace
 
 NB_MODULE(_native, m) {
-    // Register built-in parser groups so grammars with `use: gdsii`
-    // (etc.) resolve correctly. Library-side anonymous-namespace
-    // auto-registration is unreliable across linker configurations;
-    // explicit init here is the durable path.
-    rawast::register_parser_group("gdsii", rawast::register_gdsii_parsers);
+    // Register built-in parser groups so grammars opting in via
+    // `"use": ["std", "gdsii"]` resolve correctly. Library-side
+    // anonymous-namespace auto-registration is unreliable across
+    // linker configurations; explicit init here is the durable path.
+    rawast::register_std_parser_group();
+    rawast::register_gdsii_parser_group();
 
     nb::class_<rawast::Grammar>(m, "Grammar",
         "A loaded grammar — drives parse, save, and lint via its methods.")
@@ -127,16 +128,10 @@ NB_MODULE(_native, m) {
                 // text grammar) now work without the Python user knowing
                 // about parser registration. Binary-format grammars (e.g.
                 // gdsii.rawast) bring their own via `use:` directives.
-                g->register_parser(std::make_unique<IntParser>());
-                g->register_parser(std::make_unique<FloatParser>());
-                g->register_parser(std::make_unique<IdentifierParser>());
-                g->register_parser(std::make_unique<DoubleQuoteStringParser>());
-                g->register_parser(std::make_unique<WhitespaceParser>());
-                g->register_parser(std::make_unique<LineCommentParser>());
-                g->register_parser(std::make_unique<BlockCommentParser>());
-                g->add_ignore("whitespace");
-                g->add_ignore("line_comment");
-                g->add_ignore("block_comment");
+                // No implicit parser registration here either —
+                // grammars opt into parser groups via `use:` (e.g.
+                // `"use": ["std"]` for text grammars, `use: gdsii`
+                // for the binary GDSII grammar). Loader handles it.
 
                 tl::expected<void, std::string> r;
                 if (ends_with(path, ".rawast")) {
@@ -221,16 +216,10 @@ NB_MODULE(_native, m) {
                 // Same standard parsers Grammar.load pre-registers — a
                 // dict produced by parsing any rawast grammar file (JSON
                 // or .rawast) references this same set.
-                g->register_parser(std::make_unique<IntParser>());
-                g->register_parser(std::make_unique<FloatParser>());
-                g->register_parser(std::make_unique<IdentifierParser>());
-                g->register_parser(std::make_unique<DoubleQuoteStringParser>());
-                g->register_parser(std::make_unique<WhitespaceParser>());
-                g->register_parser(std::make_unique<LineCommentParser>());
-                g->register_parser(std::make_unique<BlockCommentParser>());
-                g->add_ignore("whitespace");
-                g->add_ignore("line_comment");
-                g->add_ignore("block_comment");
+                // No implicit parser registration here either —
+                // grammars opt into parser groups via `use:` (e.g.
+                // `"use": ["std"]` for text grammars, `use: gdsii`
+                // for the binary GDSII grammar). Loader handles it.
 
                 auto val = python_to_value(d);
                 if (!val) throw std::runtime_error(
