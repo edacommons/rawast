@@ -1,0 +1,50 @@
+[build-system]
+requires = ["scikit-build-core>=0.8", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "rawast"
+version = "0.1.0"
+description = "Data-driven predictive PEG parser engine for structured text and binary formats; one grammar drives parse, save, and validate."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Serge Rabyking" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Text Processing :: Markup",
+]
+
+[project.urls]
+Homepage = "https://github.com/edacommons/rawast"
+Issues   = "https://github.com/edacommons/rawast/issues"
+
+[project.scripts]
+rawast = "rawast.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.scikit-build]
+minimum-version = "0.8"
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+wheel.packages = ["python/rawast"]
+
+[tool.scikit-build.cmake.define]
+RAWAST_BUILD_TESTS = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]

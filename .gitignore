@@ -31,7 +31,7 @@ CMakeUserPresets.json
 *.bak
 *~
 
-# Python (for later: bindings, helper scripts)
+# Python bindings, packaging artefacts, test caches
 __pycache__/
 *.pyc
 *.pyo
@@ -40,3 +40,6 @@ __pycache__/
 venv/
 dist/
 build-py/
+.pytest_cache/
+_skbuild/
+.eggs/

@@ -63,7 +63,38 @@ classes from any grammar; M4 publishes the grammar repository, ten
 production-quality grammars (LEF, DEF, Verilog netlist, Liberty, SPEF,
 JSON, TOML, CSV, syslog, Nginx log), and per-grammar PyPI packages.
 
-## Build
+## Quickstart (Python)
+
+```sh
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+rawast --help
+rawast lint  grammars/gdsii.rawast
+rawast parse grammars/json.json file.json
+```
+
+Module use:
+
+```python
+import rawast
+
+g = rawast.Grammar.load("grammars/json.json")
+ast = g.parse_string('{"name": "alice", "items": [1, 2, 3]}')
+# ast == {"name": "alice", "items": [1, 2, 3]}
+
+text = g.save(ast)        # bytes — works for binary grammars too
+issues = g.lint()         # warnings about ambiguous Choices, if any
+```
+
+Cross-format conversion in three lines:
+
+```python
+gdsii = rawast.Grammar.load("grammars/gdsii.rawast")
+json_g = rawast.Grammar.load("grammars/json.json")
+print(json_g.save(gdsii.parse_file("layout.gds")).decode("utf-8"))
+```
+
+## Build (C++ library and tests)
 
 ```sh
 cmake -B build
@@ -81,6 +112,7 @@ Dependencies (fetched automatically by CMake):
 
 - [tl::expected](https://github.com/TartanLlama/expected) — error model, header-only.
 - [doctest](https://github.com/doctest/doctest) — test framework, single-header, test-only.
+- [nanobind](https://github.com/wjakob/nanobind) — Python binding generator (only when building the Python module).
 
 ## Repository layout
 
@@ -89,7 +121,11 @@ include/rawast/      public C++ API headers
 src/                 engine implementation
 grammars/            community-maintained grammars (.rawast and .json)
 docs/                language and architecture documentation
-tests/               doctest-based test suite
+tests/               doctest-based C++ test suite
+python/              Python binding + CLI (nanobind extension module)
+  src/native.cc        binding implementation
+  rawast/              Python package
+  tests/               pytest suite
 ```
 
 ## Documentation

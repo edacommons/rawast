@@ -80,3 +80,25 @@ if(RAWAST_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# -----------------------------------------------------------------------
+# Python binding (built only when invoked via scikit-build-core).
+# -----------------------------------------------------------------------
+if(SKBUILD)
+    set_property(TARGET rawast PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+    find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+
+    FetchContent_Declare(nanobind
+        GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+        GIT_TAG v2.4.0
+        GIT_SHALLOW ON
+    )
+    FetchContent_MakeAvailable(nanobind)
+
+    nanobind_add_module(_native NB_STATIC python/src/native.cc)
+    target_link_libraries(_native PRIVATE rawast::rawast)
+    target_compile_features(_native PRIVATE cxx_std_20)
+
+    install(TARGETS _native LIBRARY DESTINATION rawast)
+endif()
