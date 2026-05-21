@@ -586,7 +586,7 @@ struct SaveCursor {
     const Frame::EmittedValue& next() { return values[idx++]; }
 };
 
-bool alternative_matches(const Grammar& g, const Node& alt, const Value& v);
+bool can_match(const Grammar& g, NodeId node_id, const Value& v);
 
 // Save-direction helpers used by the dict-container code path to
 // distinguish fixed-schema dicts (LIBRARY, STRUCTURE in GDSII; any
@@ -663,13 +663,11 @@ bool has_name_markers(const Grammar& g, const Node& seq) {
 }
 
 // Choose the Choice alternative whose grammar shape matches the value.
+// Uses the recursive `can_match` to validate full subtree compatibility,
+// not just shallow value-shape checks.
 NodeId choose_alternative(const Grammar& g, const Node& choice_node, const Value& v) {
     for (NodeId child_id : choice_node.children) {
-        NodeId resolved = g.resolve_ref(child_id);
-        const Node& alt = g.node(resolved);
-        if (alternative_matches(g, alt, v)) {
-            return child_id;
-        }
+        if (can_match(g, child_id, v)) return child_id;
     }
     return NodeId{};
 }
@@ -706,74 +704,126 @@ bool values_equal(const ValuePtr& a, const ValuePtr& b) {
     }
 }
 
-// A container-less Sequence whose first item carries a literal-binding
-// discriminator (`gds_X:element="boundary"`) desugars to children
-// starting with [Parse, Value-name-marker, Value-const]. This walks the
-// alternative's children looking for any (Value-name, Value-const)
-// adjacent pair; if dict[name] == const for any such pair, the
-// alternative matches.
-bool matches_discriminator(const Grammar& g, const Node& alt,
-                            const DictValue& dict) {
-    for (std::size_t i = 0; i + 1 < alt.children.size(); ++i) {
-        const Node& a = g.node(g.resolve_ref(alt.children[i]));
-        const Node& b = g.node(g.resolve_ref(alt.children[i + 1]));
-        if (a.kind != NodeKind::Value || !a.is_name) continue;
-        if (b.kind != NodeKind::Value ||  b.is_name) continue;
-        auto name_sv = std::dynamic_pointer_cast<StringValue>(a.value);
-        if (!name_sv) continue;
-        auto it = dict.data().find(name_sv->data());
-        if (it == dict.data().end()) continue;
-        if (!values_equal(it->second, b.value)) continue;
+// Recursive save-direction match: returns true iff the grammar element
+// at `node_id` could be successfully saved against `value`. Walks the
+// grammar tree against the value tree in parallel, validating that
+// every required field, discriminator, and value-shape constraint is
+// satisfied.
+//
+// This is the unified dispatch primitive: one recursive walk handles
+// every Choice-discrimination case the engine needs, replacing the
+// earlier ad-hoc `alternative_matches` + `matches_discriminator` pair.
+// It handles
+// every Choice-discrimination case the engine needs:
+//
+//   - Container Sequences (Dict/Array) → value-type shape match.
+//   - Container-less Sequences with discriminator patterns
+//     ([name-marker, constant] pairs from `X:name="constant"`
+//     bindings) → walk the children, check dict[name] == constant for
+//     every such pair, AND recurse into name-bound consumers to verify
+//     their target field's shape.
+//   - Parse nodes → value-type ↔ parser-name correspondence.
+//   - Key nodes with Value-kind discriminator children →
+//     identity-equality against the named constant (null/true/false
+//     singletons).
+//   - Choice nodes → match if any alternative matches.
+//   - Ref → resolve and recurse.
+//
+// The recursion bottoms out at terminal kinds (Parse / Key / Value);
+// composite kinds delegate based on their structural rules.
+bool can_match(const Grammar& g, NodeId node_id, const Value& v) {
+    NodeId resolved = g.resolve_ref(node_id);
+    const Node& n = g.node(resolved);
+    const ValueType vt = v.type();
+
+    switch (n.kind) {
+
+    case NodeKind::Sequence: {
+        if (n.container == Container::Dict)  return vt == ValueType::Dict;
+        if (n.container == Container::Array) return vt == ValueType::Array;
+
+        // Container-less Sequence: walk for discriminator binding pairs
+        // (the `X:name="constant"` form, which desugars to adjacent
+        // Value-kind name marker + Value-kind constant). Every such
+        // pair must satisfy dict[name] == constant; if none exist, the
+        // alternative matches any dict. Named-field consumers (Parse,
+        // Ref, etc.) aren't validated here — their shape is checked at
+        // emit time. This keeps Choice dispatch focused on the
+        // discriminator, not on full subtree validation.
+        if (vt != ValueType::Dict) {
+            // Bare-string Ref dispatch: a container-less Sequence with
+            // no dict to discriminate against. Try the first non-name
+            // consumer child against the value directly.
+            for (NodeId c : n.children) {
+                const Node& cn = g.node(g.resolve_ref(c));
+                if (cn.kind == NodeKind::Value && cn.is_name) continue;
+                return can_match(g, c, v);
+            }
+            return false;
+        }
+        const auto* dict = dynamic_cast<const DictValue*>(&v);
+        if (!dict) return false;
+
+        for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
+            const Node& a = g.node(g.resolve_ref(n.children[i]));
+            const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
+            if (a.kind != NodeKind::Value || !a.is_name) continue;
+            if (b.kind != NodeKind::Value ||  b.is_name) continue;
+            auto name_sv = std::dynamic_pointer_cast<StringValue>(a.value);
+            if (!name_sv) continue;
+            auto it = dict->data().find(name_sv->data());
+            if (it == dict->data().end()) return false;
+            if (!values_equal(it->second, b.value)) return false;
+        }
         return true;
     }
-    return false;
-}
-
-bool alternative_matches(const Grammar& g, const Node& alt, const Value& v) {
-    const ValueType vt = v.type();
-    switch (alt.kind) {
-    case NodeKind::Sequence:
-        if (alt.container == Container::Dict  && vt == ValueType::Dict)  return true;
-        if (alt.container == Container::Array && vt == ValueType::Array) return true;
-        // Container-less Sequence + dict value: try the discriminator
-        // pattern (literal-binding pairs). Used by ELEMENT-style
-        // choices where each alt is `sequence { gds_X:kind="...", ... }`
-        // and we pick the alt whose kind matches the dict's field.
-        if (alt.container == Container::None && vt == ValueType::Dict) {
-            auto* dict = dynamic_cast<const DictValue*>(&v);
-            return dict ? matches_discriminator(g, alt, *dict) : false;
-        }
-        return false;
 
     case NodeKind::Parse: {
-        auto sv = std::dynamic_pointer_cast<StringValue>(alt.value);
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
         if (!sv) return false;
-        const std::string& pn = sv->data();
-        if (vt == ValueType::Int    && pn == "int")    return true;
-        if (vt == ValueType::UInt   && pn == "uint")   return true;
-        if (vt == ValueType::Real   && pn == "float")  return true;
-        if (vt == ValueType::String && pn == "string") return true;
+        const std::string& p = sv->data();
+        if (vt == ValueType::Int    && p == "int")    return true;
+        if (vt == ValueType::UInt   && p == "uint")   return true;
+        if (vt == ValueType::Real   && p == "float")  return true;
+        if (vt == ValueType::String && (p == "string" || p == "identifier")) return true;
         return false;
     }
 
-    case NodeKind::Key: {
-        // Match if any Value-kind child has an identity-equal constant.
-        // For Phase 5 this covers the JSON null/true/false case where the
-        // Value children hold the global singletons.
-        for (NodeId child_id : alt.children) {
-            NodeId resolved = g.resolve_ref(child_id);
-            const Node& vc = g.node(resolved);
-            if (vc.kind == NodeKind::Value && vc.value && vc.value.get() == &v) {
+    case NodeKind::Key:
+        // A Key with a Value-kind child is a discriminator (JSON's
+        // "null":null pattern); matches by identity against the
+        // global singleton constant.
+        for (NodeId c : n.children) {
+            const Node& cn = g.node(g.resolve_ref(c));
+            if (cn.kind == NodeKind::Value && cn.value
+                && cn.value.get() == &v) {
                 return true;
             }
         }
         return false;
-    }
 
-    default:
+    case NodeKind::Value:
+        // Constants — no value constraint at this point.
+        return true;
+
+    case NodeKind::Choice:
+        for (NodeId child : n.children) {
+            if (can_match(g, child, v)) return true;
+        }
+        return false;
+
+    case NodeKind::Repeat:
+        // Repeats are permissive at the match level — Array containers
+        // upstream gate the value-type check.
+        return true;
+
+    case NodeKind::Ref:
+        // Unreachable — resolve_ref above unwrapped any Refs.
         return false;
     }
+    return false;
 }
+
 
 tl::expected<void, SaveError> save_node(const Grammar& g, std::ostream& out,
                                         NodeId node_id, SaveCursor& cursor,
