@@ -11,17 +11,23 @@
   // (or qualify as "std.line_comment" / "std.block_comment").
   "ignore": ["whitespace"],
 
+  // The items arrays use the wrapper form (ITEM-style dicts with
+  // "expr" / "type" / optional "name" / "value"). This is the same
+  // shape the .rawast meta-grammar produces when parsing equivalent
+  // .rawast source — letting JSON-form and .rawast-form grammars
+  // round-trip through each other via parse-and-save.
+
   "VALUE": {
     "type": "choice",
     "items": [
-      "STRUCT",
-      "LIST",
-      {"type": "string"},
-      {"type": "float"},
-      {"type": "int"},
-      {"type": "key", "key": "null",  "value": null},
-      {"type": "key", "key": "true",  "value": true},
-      {"type": "key", "key": "false", "value": false}
+      {"expr": "STRUCT", "type": "bare"},
+      {"expr": "LIST",   "type": "bare"},
+      {"expr": {"type": "string"}, "type": "bare"},
+      {"expr": {"type": "float"},  "type": "bare"},
+      {"expr": {"type": "int"},    "type": "bare"},
+      {"expr": {"type": "key", "key": "null",  "value": null},  "type": "bare"},
+      {"expr": {"type": "key", "key": "true",  "value": true},  "type": "bare"},
+      {"expr": {"type": "key", "key": "false", "value": false}, "type": "bare"}
     ]
   },
 
@@ -29,18 +35,22 @@
     "type": "sequence",
     "container": "array",
     "items": [
-      "[",
-      {"type": "repeat", "separator": ",", "item": "VALUE"},
-      "]"
+      {"expr": {"type": "key", "key": "["}, "type": "bare"},
+      {"expr": {
+        "type": "repeat",
+        "separator": {"expr": {"type": "key", "key": ","}, "type": "bare"},
+        "item":      {"expr": "VALUE", "type": "bare"}
+      }, "type": "bare"},
+      {"expr": {"type": "key", "key": "]"}, "type": "bare"}
     ]
   },
 
   "PAIR": {
     "type": "sequence",
     "items": [
-      {"type": "string", "var": true},
-      ":",
-      "VALUE"
+      {"expr": {"type": "string"}, "type": "var"},
+      {"expr": {"type": "key", "key": ":"}, "type": "bare"},
+      {"expr": "VALUE", "type": "bare"}
     ]
   },
 
@@ -48,9 +58,13 @@
     "type": "sequence",
     "container": "dict",
     "items": [
-      "{",
-      {"type": "repeat", "separator": ",", "item": "PAIR"},
-      "}"
+      {"expr": {"type": "key", "key": "{"}, "type": "bare"},
+      {"expr": {
+        "type": "repeat",
+        "separator": {"expr": {"type": "key", "key": ","}, "type": "bare"},
+        "item":      {"expr": "PAIR", "type": "bare"}
+      }, "type": "bare"},
+      {"expr": {"type": "key", "key": "}"}, "type": "bare"}
     ]
   }
 }
