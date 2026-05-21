@@ -58,8 +58,10 @@
 
   "FILE_ENTRY": {
     "type": "choice",
+    "newline": true,
     "items": [
       "USE_DECL",
+      "IGNORE_DECL",
       "RULE_DEF"
     ]
   },
@@ -74,11 +76,27 @@
       {"type": "value", "value": "use", "var": true},
       "use",
       ":",
-      "USE_LIST"
+      "IDENT_LIST"
     ]
   },
 
-  "USE_LIST": {
+  // IGNORE_DECL: "ignore" ":" identifier ("," identifier)* — emits
+  // "ignore" as a dict key whose value is an array of parser names.
+  // The loader's `load_json_grammar_into` calls add_ignore() for each
+  // after `use:` resolution.
+  "IGNORE_DECL": {
+    "type": "sequence",
+    "items": [
+      {"type": "value", "value": "ignore", "var": true},
+      "ignore",
+      ":",
+      "IDENT_LIST"
+    ]
+  },
+
+  // Comma-separated identifier list, materialised as an ArrayValue.
+  // Shared by USE_DECL and IGNORE_DECL.
+  "IDENT_LIST": {
     "type": "sequence",
     "container": "array",
     "items": [
