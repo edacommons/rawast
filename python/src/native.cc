@@ -135,6 +135,8 @@ NB_MODULE(_native, m) {
                 g->register_parser(std::make_unique<LineCommentParser>());
                 g->register_parser(std::make_unique<BlockCommentParser>());
                 g->add_ignore("whitespace");
+                g->add_ignore("line_comment");
+                g->add_ignore("block_comment");
 
                 tl::expected<void, std::string> r;
                 if (ends_with(path, ".rawast")) {
@@ -210,7 +212,47 @@ NB_MODULE(_native, m) {
                 }
                 return out;
             },
-            "Lint the grammar; returns a list of issue description strings.");
+            "Lint the grammar; returns a list of issue description strings.")
+
+        .def_static("from_dict",
+            [](nb::handle d) {
+                using namespace rawast;
+                auto g = std::make_unique<Grammar>();
+                // Same standard parsers Grammar.load pre-registers — a
+                // dict produced by parsing any rawast grammar file (JSON
+                // or .rawast) references this same set.
+                g->register_parser(std::make_unique<IntParser>());
+                g->register_parser(std::make_unique<FloatParser>());
+                g->register_parser(std::make_unique<IdentifierParser>());
+                g->register_parser(std::make_unique<DoubleQuoteStringParser>());
+                g->register_parser(std::make_unique<WhitespaceParser>());
+                g->register_parser(std::make_unique<LineCommentParser>());
+                g->register_parser(std::make_unique<BlockCommentParser>());
+                g->add_ignore("whitespace");
+                g->add_ignore("line_comment");
+                g->add_ignore("block_comment");
+
+                auto val = python_to_value(d);
+                if (!val) throw std::runtime_error(
+                    "rawast.Grammar.from_dict: input dict converted to null");
+                auto r = load_json_grammar_into(*g, *val);
+                if (!r) throw std::runtime_error(r.error());
+                return g;
+            },
+            nb::arg("d"),
+            "Build a Grammar from a value-tree dict (the form a grammar "
+            "file produces when parsed through json_format() or "
+            "rawast_format()). Inverse of `meta.parse_file(grammar_file)`.")
+
+        .def_static("json_format_builtin",
+            []() {
+                return std::make_unique<rawast::Grammar>(
+                    rawast::make_json_grammar());
+            },
+            "The JSON grammar — built in C++ via make_json_grammar(), no "
+            "file IO. Parses any JSON document, including JSON-form "
+            "grammar files (use it to browse a JSON-form grammar as a "
+            "Python dict).");
 
     m.attr("__version__") = "0.1.0";
 }

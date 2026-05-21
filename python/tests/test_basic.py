@@ -75,3 +75,53 @@ def test_parse_failure_raises():
     g = rawast.Grammar.load(str(GRAMMARS / "json.json"))
     with pytest.raises(RuntimeError, match="byte"):
         g.parse_string("not valid json")
+
+
+# --- Grammar introspection: meta-grammars + Grammar.from_dict --------------
+
+def test_grammar_path_resolves_bundled_files():
+    """Grammar files ship with the package via the symlink/install rule."""
+    path = rawast.grammar_path("json.json")
+    assert os.path.exists(path), f"{path} should be bundled with rawast"
+
+
+def test_json_format_browses_json_grammar_file_as_dict():
+    g = rawast.json_format()
+    data = g.parse_file(rawast.grammar_path("json.json"))
+    # The grammar definition itself comes through as a Python dict —
+    # we can walk it like any other parsed value.
+    assert "VALUE" in data
+    assert data["VALUE"]["type"] == "choice"
+    assert "STRUCT" in data["VALUE"]["items"]
+
+
+def test_rawast_format_browses_rawast_file_as_dict():
+    g = rawast.rawast_format()
+    data = g.parse_file(rawast.grammar_path("gdsii.rawast"))
+    # The .rawast meta-grammar produces the same dict shape as the
+    # JSON-form would for an equivalent grammar.
+    assert data["LIBRARY"]["type"] == "sequence"
+    assert data["LIBRARY"]["container"] == "dict"
+    assert len(data["LIBRARY"]["items"]) > 5
+
+
+def test_from_dict_compiles_runtime_grammar():
+    """Inverse of meta.parse_file: turn a dict back into an executable Grammar."""
+    meta = rawast.rawast_format()
+    data = meta.parse_file(rawast.grammar_path("gdsii.rawast"))
+    g = rawast.Grammar.from_dict(data)
+    # The reconstituted grammar should lint cleanly (same as the
+    # original gdsii.rawast loaded directly).
+    assert g.lint() == []
+
+
+def test_from_dict_transformation():
+    """The 'grammars are data' story: load → transform → rebuild."""
+    meta = rawast.rawast_format()
+    data = meta.parse_file(rawast.grammar_path("gdsii.rawast"))
+
+    # Add a synthetic rule.
+    data["EXTRA"] = {"type": "key", "key": "extra"}
+
+    g = rawast.Grammar.from_dict(data)
+    assert g.lint() == []   # still well-formed after transformation
