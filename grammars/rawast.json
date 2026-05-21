@@ -1,504 +1,689 @@
-// =========================================================================
-// grammars/rawast.json
-//
-// JSON-form grammar for parsing .rawast source files. The engine
-// bootstraps via this file: load grammars/rawast.json with the JSON-
-// grammar loader, then use the resulting Grammar to parse .rawast files
-// directly. Future grammars in the community repository can be authored
-// in .rawast and loaded transparently.
-//
-// Limitations of this draft:
-//   - Bindings (X:@= and X:name=@) are not yet supported.
-//   - Reserved keywords (sequence/choice/repeat/separator/array/dict)
-//     cannot appear as prefixes of identifiers; an identifier like
-//     `sequencing` will be misparsed as the keyword `sequence` followed
-//     by `ing`. Workaround: rename. Proper fix is a keyword-boundary
-//     check on KeyParser, deferred.
-//   - The `:@` (literal-as-value) shorthand for Key constants is not
-//     yet handled; use explicit `:null`, `:true`, or `:false` only.
-//
-// What is supported:
-//   - Rule definitions (NAME: BODY).
-//   - References (<NAME>).
-//   - Literals ("text") and literals with null/true/false discriminator.
-//   - Bare-identifier parsers (e.g., int, float, string).
-//   - Sequence / Choice / Repeat structural forms with optional
-//     containers and separators.
-//   - Optional expressions (?expr).
-//   - // line and /* block */ comments via the ignore list.
-// =========================================================================
-
 {
   "start": "FILE",
-
-  // Pull in standard text terminal parsers (int, identifier, string,
-  // whitespace, line/block comment). Each is addressable bare or as
-  // `std.<name>`.
-  "use": ["std"],
-
-  // The .rawast source format uses C-style comments (// and /* */)
-  // for inline documentation, so this grammar opts the comment
-  // terminal parsers into the ignore list. Without this declaration
-  // the loader treats // and /* */ as syntax errors.
-  "ignore": ["whitespace", "line_comment", "block_comment"],
-
-  // ---------------------------------------------------------------------
-  // FILE: top-level. A dict that holds rule definitions and optional
-  // `use:` directives. `use:` is matched first (predictive — its first
-  // token is the literal "use" keyword); identifiers other than "use"
-  // fall through to RULE_DEF.
-  // ---------------------------------------------------------------------
+  "use": [
+    "std"
+  ],
+  "ignore": [
+    "whitespace",
+    "line_comment",
+    "block_comment"
+  ],
   "FILE": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "repeat", "item": "FILE_ENTRY"}
+      {
+        "expr": {
+          "type": "repeat",
+          "item": {
+            "expr": "FILE_ENTRY"
+          }
+        }
+      }
     ]
   },
-
   "FILE_ENTRY": {
     "type": "choice",
     "newline": true,
     "items": [
-      "USE_DECL",
-      "IGNORE_DECL",
-      "RULE_DEF"
+      {
+        "expr": "USE_DECL"
+      },
+      {
+        "expr": "IGNORE_DECL"
+      },
+      {
+        "expr": "RULE_DEF"
+      }
     ]
   },
-
-  // USE_DECL: "use" ":" identifier ("," identifier)* — emits "use" as
-  // a dict key whose value is an array of group-name strings. The
-  // loader's `load_json_grammar_into` picks them up and applies each
-  // via apply_parser_group() before processing rule definitions.
   "USE_DECL": {
     "type": "sequence",
     "items": [
-      {"type": "value", "value": "use", "var": true},
-      "use",
-      ":",
-      "IDENT_LIST"
+      {
+        "expr": {
+          "type": "key",
+          "key": "use"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": ":"
+        }
+      },
+      {
+        "expr": "IDENT_LIST",
+        "bindings": {
+          "use": "@"
+        }
+      }
     ]
   },
-
-  // IGNORE_DECL: "ignore" ":" identifier ("," identifier)* — emits
-  // "ignore" as a dict key whose value is an array of parser names.
-  // The loader's `load_json_grammar_into` calls add_ignore() for each
-  // after `use:` resolution.
   "IGNORE_DECL": {
     "type": "sequence",
     "items": [
-      {"type": "value", "value": "ignore", "var": true},
-      "ignore",
-      ":",
-      "IDENT_LIST"
+      {
+        "expr": {
+          "type": "key",
+          "key": "ignore"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": ":"
+        }
+      },
+      {
+        "expr": "IDENT_LIST",
+        "bindings": {
+          "ignore": "@"
+        }
+      }
     ]
   },
-
-  // Comma-separated identifier list, materialised as an ArrayValue.
-  // Shared by USE_DECL and IGNORE_DECL.
   "IDENT_LIST": {
     "type": "sequence",
     "container": "array",
     "items": [
-      {"type": "repeat", "separator": ",", "item": {"type": "identifier"}}
+      {
+        "expr": {
+          "type": "repeat",
+          "separator": {
+            "expr": {
+              "type": "key",
+              "key": ","
+            }
+          },
+          "item": {
+            "expr": {
+              "type": "identifier"
+            }
+          }
+        }
+      }
     ]
   },
-
-  // RULE_DEF: identifier ":" EXPR. The identifier becomes the dict key
-  // for this rule's entry in FILE's surrounding catcher.
   "RULE_DEF": {
     "type": "sequence",
     "items": [
-      {"type": "identifier", "var": true},
-      ":",
-      "EXPR"
+      {
+        "expr": {
+          "type": "identifier"
+        },
+        "bindings": {
+          "": "@"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": ":"
+        }
+      },
+      {
+        "expr": "EXPR"
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // EXPR: every expression form. Order matters under predictive PEG:
-  // the alternatives with distinctive initial tokens come first, the
-  // catch-all PARSE_EXPR (bare identifier) is last.
-  // ---------------------------------------------------------------------
   "EXPR": {
     "type": "choice",
     "items": [
-      "REF",
-      "OPTIONAL_EXPR",
-      "SEQUENCE_EXPR",
-      "CHOICE_EXPR",
-      "REPEAT_EXPR",
-      "KEY_EXPR",
-      "PARSE_EXPR"
+      {
+        "expr": "REF"
+      },
+      {
+        "expr": "OPTIONAL_EXPR"
+      },
+      {
+        "expr": "SEQUENCE_EXPR"
+      },
+      {
+        "expr": "CHOICE_EXPR"
+      },
+      {
+        "expr": "REPEAT_EXPR"
+      },
+      {
+        "expr": "KEY_EXPR"
+      },
+      {
+        "expr": "PARSE_EXPR"
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // <NAME> — produces a bare string "NAME" in the resulting tree, which
-  // the JSON-grammar loader will interpret as a Ref because the name
-  // appears in the rule registry.
-  // ---------------------------------------------------------------------
   "REF": {
     "type": "sequence",
     "items": [
-      "<",
-      {"type": "identifier"},
-      ">"
+      {
+        "expr": {
+          "type": "key",
+          "key": "<"
+        }
+      },
+      {
+        "expr": {
+          "type": "identifier"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": ">"
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // ?EXPR — produces {"type":"optional", "expr": <expr>}. The loader
-  // recognises "optional" as a transparent wrapper that sets the
-  // is_optional flag on the wrapped node.
-  // ---------------------------------------------------------------------
   "OPTIONAL_EXPR": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "value", "value": "optional"},
-      "?",
-      {"type": "value", "value": "expr", "var": true},
-      "EXPR"
+      {
+        "expr": {
+          "type": "key",
+          "key": "?"
+        },
+        "bindings": {
+          "type": "optional"
+        }
+      },
+      {
+        "expr": "EXPR",
+        "bindings": {
+          "expr": "@"
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // sequence [array|dict]? { items } -> {"type":"sequence", ...}
-  // ---------------------------------------------------------------------
   "SEQUENCE_EXPR": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "key", "key": "sequence", "value": "sequence"},
-      "CONTAINER_OPT",
-      {"type": "value", "value": "items", "var": true},
-      "{",
-      "ITEMS",
-      "}"
+      {
+        "expr": {
+          "type": "key",
+          "key": "sequence"
+        },
+        "bindings": {
+          "type": "sequence"
+        }
+      },
+      {
+        "expr": "CONTAINER_OPT"
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "{"
+        }
+      },
+      {
+        "expr": "ITEMS",
+        "bindings": {
+          "items": "@"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "}"
+        }
+      }
     ]
   },
-
-  // Optional container annotation. When absent, no fields are emitted
-  // (the optional Sequence's failure-as-empty handling means nothing
-  // ends up in the surrounding dict catcher).
   "CONTAINER_OPT": {
     "type": "sequence",
     "optional": true,
     "items": [
-      {"type": "value", "value": "container", "var": true},
-      "CONTAINER_KIND"
+      {
+        "expr": "CONTAINER_KIND",
+        "bindings": {
+          "container": "@"
+        }
+      }
     ]
   },
-
   "CONTAINER_KIND": {
     "type": "choice",
     "items": [
-      {"type": "key", "key": "array", "value": "array"},
-      {"type": "key", "key": "dict",  "value": "dict"}
+      {
+        "expr": {
+          "type": "key",
+          "key": "array",
+          "value": "array"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "dict",
+          "value": "dict"
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // choice { items } -> {"type":"choice", ...}
-  // ---------------------------------------------------------------------
   "CHOICE_EXPR": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "key", "key": "choice", "value": "choice"},
-      {"type": "value", "value": "items", "var": true},
-      "{",
-      "ITEMS",
-      "}"
+      {
+        "expr": {
+          "type": "key",
+          "key": "choice"
+        },
+        "bindings": {
+          "type": "choice"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "{"
+        }
+      },
+      {
+        "expr": "ITEMS",
+        "bindings": {
+          "items": "@"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "}"
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // repeat ITEM [separator ITEM] -> {"type":"repeat", "item":..., ?sep}
-  // The inner item and separator each accept postfix attrs (tab, newline,
-  // etc.), so they go through the ITEM rule rather than bare EXPR.
-  // ---------------------------------------------------------------------
   "REPEAT_EXPR": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "key", "key": "repeat", "value": "repeat"},
-      {"type": "value", "value": "item", "var": true},
-      "ITEM",
-      "SEPARATOR_OPT"
+      {
+        "expr": {
+          "type": "key",
+          "key": "repeat"
+        },
+        "bindings": {
+          "type": "repeat"
+        }
+      },
+      {
+        "expr": "ITEM",
+        "bindings": {
+          "item": "@"
+        }
+      },
+      {
+        "expr": "SEPARATOR_OPT"
+      }
     ]
   },
-
   "SEPARATOR_OPT": {
     "type": "sequence",
     "optional": true,
     "items": [
-      "separator",
-      {"type": "value", "value": "separator", "var": true},
-      "ITEM"
+      {
+        "expr": {
+          "type": "key",
+          "key": "separator"
+        }
+      },
+      {
+        "expr": "ITEM",
+        "bindings": {
+          "separator": "@"
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // "text" -> {"type":"key", "key":"text"}; optional :null|true|false
-  // ---------------------------------------------------------------------
   "KEY_EXPR": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "value", "value": "key"},
-      {"type": "value", "value": "key", "var": true},
-      {"type": "string"},
-      "KEY_VALUE_SUFFIX"
+      {
+        "expr": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "key",
+          "key": "@"
+        }
+      },
+      {
+        "expr": "KEY_VALUE_SUFFIX"
+      }
     ]
   },
-
   "KEY_VALUE_SUFFIX": {
     "type": "sequence",
     "optional": true,
     "items": [
-      ":",
-      {"type": "value", "value": "value", "var": true},
-      "CONSTANT"
+      {
+        "expr": {
+          "type": "key",
+          "key": ":"
+        }
+      },
+      {
+        "expr": "CONSTANT",
+        "bindings": {
+          "value": "@"
+        }
+      }
     ]
   },
-
   "CONSTANT": {
     "type": "choice",
     "items": [
-      {"type": "key", "key": "null",  "value": null},
-      {"type": "key", "key": "true",  "value": true},
-      {"type": "key", "key": "false", "value": false}
+      {
+        "expr": {
+          "type": "key",
+          "key": "null",
+          "value": null
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "true",
+          "value": true
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "false",
+          "value": false
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // bare identifier -> {"type":"<identifier>"} — invokes the named
-  // terminal parser on the target grammar at parse time.
-  // ---------------------------------------------------------------------
   "PARSE_EXPR": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "identifier"}
+      {
+        "expr": {
+          "type": "identifier"
+        },
+        "bindings": {
+          "type": "@"
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // ITEMS — the contents of a { ... } block. Comma-separated list of
-  // ITEM wrappers, materialised as an ArrayValue. Each ITEM carries the
-  // bare EXPR plus optional binding annotation (var / named), which the
-  // JSON-grammar loader's append_items_array interprets.
-  // ---------------------------------------------------------------------
   "ITEMS": {
     "type": "sequence",
     "container": "array",
     "items": [
-      {"type": "repeat", "separator": ",", "item": "ITEM"}
+      {
+        "expr": {
+          "type": "repeat",
+          "separator": {
+            "expr": {
+              "type": "key",
+              "key": ","
+            }
+          },
+          "item": {
+            "expr": "ITEM"
+          }
+        }
+      }
     ]
   },
-
-  // Each ITEM produces a uniform wrapper dict around its EXPR:
-  //
-  //   expr                   -> {"expr": <X>, "bindings": {}}
-  //   expr:name=@            -> {"expr": <X>, "bindings": {"name": "@"}}
-  //   expr:name="lit"        -> {"expr": <X>, "bindings": {"name": "lit"}}
-  //   expr:type=var          -> {"expr": <X>, "bindings": {"type": "var"}}
-  //   expr:a=@:b="x":c=null  -> {"expr": <X>, "bindings": {"a":"@","b":"x","c":null}}
-  //
-  // The `bindings` dict can hold any number of (name, value) pairs.
-  // Special values: "@" means "expr's parsed value goes here". Special
-  // pair: {type: "var"} sets is_name on the expr (the parsed value
-  // becomes a dict-key marker — see RULE_DEF's identifier pattern).
-  // The loader's append_items_array recognises both this new form and
-  // the legacy {type:"bare"|"var"|"binding"|"binding_const"} wrappers.
   "ITEM": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"type": "value", "value": "expr", "var": true},
-      "EXPR",
-      {"type": "value", "value": "bindings", "var": true},
-      "BINDINGS",
-      {"type": "repeat", "item": "POSTFIX_ATTR"}
+      {
+        "expr": "EXPR",
+        "bindings": {
+          "expr": "@"
+        }
+      },
+      {
+        "expr": "BINDINGS",
+        "bindings": {
+          "bindings": "@"
+        }
+      },
+      {
+        "expr": {
+          "type": "repeat",
+          "item": {
+            "expr": "POSTFIX_ATTR"
+          }
+        }
+      }
     ]
   },
-
-  // ---------------------------------------------------------------------
-  // Postfix pretty-print attrs on items:
-  //
-  //   indent             - depth+1 for this Node's scope
-  //   tab                - emit depth × indent_step before content
-  //   space              - emit " " after content
-  //   newline            - emit "\n" after content
-  //   tail="<string>"    - emit string after content (escape-interpreted)
-  //
-  // Each attr emits one name=value pair into the surrounding ITEM dict;
-  // the loader's apply_pretty_attrs picks them up and sets the
-  // corresponding Node fields. Multiple attrs can stack on one item, any
-  // order: `<EXPR> tab newline indent`.
-  // ---------------------------------------------------------------------
   "POSTFIX_ATTR": {
     "type": "choice",
     "items": [
-      "INDENT_ATTR",
-      "TAB_ATTR",
-      "SPACE_ATTR",
-      "NEWLINE_ATTR",
-      "TAIL_ATTR"
+      {
+        "expr": "INDENT_ATTR"
+      },
+      {
+        "expr": "TAB_ATTR"
+      },
+      {
+        "expr": "SPACE_ATTR"
+      },
+      {
+        "expr": "NEWLINE_ATTR"
+      },
+      {
+        "expr": "TAIL_ATTR"
+      }
     ]
   },
-
   "INDENT_ATTR": {
     "type": "sequence",
     "items": [
-      "indent",
-      {"type": "value", "value": "indent", "var": true},
-      {"type": "value", "value": true}
+      {
+        "expr": {
+          "type": "key",
+          "key": "indent"
+        },
+        "bindings": {
+          "indent": true
+        }
+      }
     ]
   },
-
   "TAB_ATTR": {
     "type": "sequence",
     "items": [
-      "tab",
-      {"type": "value", "value": "tab", "var": true},
-      {"type": "value", "value": true}
+      {
+        "expr": {
+          "type": "key",
+          "key": "tab"
+        },
+        "bindings": {
+          "tab": true
+        }
+      }
     ]
   },
-
   "SPACE_ATTR": {
     "type": "sequence",
     "items": [
-      "space",
-      {"type": "value", "value": "space", "var": true},
-      {"type": "value", "value": true}
+      {
+        "expr": {
+          "type": "key",
+          "key": "space"
+        },
+        "bindings": {
+          "space": true
+        }
+      }
     ]
   },
-
   "NEWLINE_ATTR": {
     "type": "sequence",
     "items": [
-      "newline",
-      {"type": "value", "value": "newline", "var": true},
-      {"type": "value", "value": true}
+      {
+        "expr": {
+          "type": "key",
+          "key": "newline"
+        },
+        "bindings": {
+          "newline": true
+        }
+      }
     ]
   },
-
   "TAIL_ATTR": {
     "type": "sequence",
     "items": [
-      "tail",
-      "=",
-      {"type": "value", "value": "tail", "var": true},
-      {"type": "string"}
+      {
+        "expr": {
+          "type": "key",
+          "key": "tail"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "="
+        }
+      },
+      {
+        "expr": {
+          "type": "string"
+        },
+        "bindings": {
+          "tail": "@"
+        }
+      }
     ]
   },
-
-  // BINDINGS — zero or more `:name=value` chained bindings on an ITEM.
-  // Materialised as a dict catcher so each (name, value) pair is keyed
-  // by name. The dict ends up under ITEM's `bindings` field.
-  //
-  // Two-rule structure: BINDINGS (outer, optional) skips entirely when
-  // no `:` follows; BINDINGS_NONEMPTY (inner, requires at least one
-  // BIND_ENTRY) provides the dict catcher. Net effect: ITEM's
-  // `bindings` field is OMITTED from the parsed value tree when the
-  // item has no bindings, instead of being present as `{}`.
   "BINDINGS": {
     "type": "sequence",
     "optional": true,
     "items": [
-      "BINDINGS_NONEMPTY"
+      {
+        "expr": "BINDINGS_NONEMPTY"
+      }
     ]
   },
-
   "BINDINGS_NONEMPTY": {
     "type": "sequence",
     "container": "dict",
     "items": [
-      "BIND_ENTRY",
-      {"type": "repeat", "item": "BIND_ENTRY"}
+      {
+        "expr": "BIND_ENTRY"
+      },
+      {
+        "expr": {
+          "type": "repeat",
+          "item": {
+            "expr": "BIND_ENTRY"
+          }
+        }
+      }
     ]
   },
-
-  // One binding entry: `:name=rhs` or the legacy var shorthand `:@=`.
-  // After the leading ":", a predictive choice on the next token:
-  //   "@" -> BIND_ENTRY_VAR (`:@=` emits {type: "var"} into BINDINGS)
-  //   identifier -> BIND_ENTRY_NAMED (`:name=rhs`)
   "BIND_ENTRY": {
     "type": "sequence",
     "items": [
-      ":",
-      "BIND_ENTRY_TAIL"
+      {
+        "expr": {
+          "type": "key",
+          "key": ":"
+        }
+      },
+      {
+        "expr": "BIND_NAME"
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "="
+        }
+      },
+      {
+        "expr": "BIND_RHS"
+      }
     ]
   },
-
-  "BIND_ENTRY_TAIL": {
+  "BIND_NAME": {
     "type": "choice",
     "items": [
-      "BIND_ENTRY_VAR_TAIL",
-      "BIND_ENTRY_NAMED_TAIL"
+      {
+        "expr": {
+          "type": "identifier"
+        },
+        "bindings": {
+          "": "@"
+        }
+      },
+      {
+        "expr": {
+          "type": "value",
+          "value": "",
+          "var": true
+        }
+      }
     ]
   },
-
-  // `:=@` — var binding: expr's parsed value becomes the dict-key
-  // marker in the surrounding catcher (equivalent of is_name=true on
-  // the expr). Encoded in the BINDINGS dict as an empty-name entry
-  // ({"": "@"}); the loader recognises the empty key and calls
-  // set_name on the built expr.
-  "BIND_ENTRY_VAR_TAIL": {
-    "type": "sequence",
-    "items": [
-      "=",
-      "@",
-      {"type": "value", "value": "", "var": true},
-      {"type": "value", "value": "@"}
-    ]
-  },
-
-  // `:name=rhs` — emits (name, rhs) into BINDINGS.
-  "BIND_ENTRY_NAMED_TAIL": {
-    "type": "sequence",
-    "items": [
-      {"type": "identifier", "var": true},
-      "=",
-      "BIND_RHS"
-    ]
-  },
-
-  // Right-hand side of a `:name=` binding. Either:
-  //   `@` — the expr's parsed value is bound to `name` (encoded as the
-  //         string "@" in the wrapper; the loader pairs the name
-  //         marker with the actual expr at load time).
-  //   literal — a constant (string/float/int/true/false/null) bound
-  //             directly to `name` regardless of what expr parses.
   "BIND_RHS": {
     "type": "choice",
     "items": [
-      {"type": "key", "key": "@", "value": "@"},
-      "BIND_LITERAL"
+      {
+        "expr": {
+          "type": "key",
+          "key": "@",
+          "value": "@"
+        }
+      },
+      {
+        "expr": "BIND_LITERAL"
+      }
     ]
   },
-
-  // Constant value: string / float / int / true / false / null.
-  // float comes before int so "3.14" matches float (predictive PEG —
-  // same ordering rule as in the JSON grammar's VALUE choice).
   "BIND_LITERAL": {
     "type": "choice",
     "items": [
-      {"type": "string"},
-      {"type": "float"},
-      {"type": "int"},
-      {"type": "key", "key": "true",  "value": true},
-      {"type": "key", "key": "false", "value": false},
-      {"type": "key", "key": "null",  "value": null}
+      {
+        "expr": {
+          "type": "string"
+        }
+      },
+      {
+        "expr": {
+          "type": "float"
+        }
+      },
+      {
+        "expr": {
+          "type": "int"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "true",
+          "value": true
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "false",
+          "value": false
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "null",
+          "value": null
+        }
+      }
     ]
   }
 }
