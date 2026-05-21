@@ -152,8 +152,13 @@ build_item(Grammar& g, const Value& val) {
             if (total == 0) {
                 // bare
             } else if (total == 1) {
-                auto it = bindings_dict->data().find("type");
-                if (it != bindings_dict->data().end()) {
+                // Either the empty-name sentinel (":=@") or the legacy
+                // {type:"var"} encoding sets is_name on expr without
+                // emitting siblings — both are allowed here.
+                if (bindings_dict->data().count("")) {
+                    only_var = true;
+                } else if (auto it = bindings_dict->data().find("type");
+                           it != bindings_dict->data().end()) {
                     auto sv = std::dynamic_pointer_cast<StringValue>(it->second);
                     if (sv && sv->data() == "var") only_var = true;
                 }
@@ -232,9 +237,10 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
 
             // New multi-binding form: ITEM dict with a `bindings` dict
             // field. Expand into Value-name markers + Value-const
-            // constants around the expr. Special key (type, "var")
-            // sets is_name on the expr. Special value "@" pairs with
-            // the expr's parsed value (at most one such per item).
+            // constants around the expr. Special empty-name key (""
+            // → "@") is the var sentinel from `:=@` syntax: sets
+            // is_name on the expr. Special value "@" pairs with the
+            // expr's parsed value (at most one such per item).
             if (auto bindings_it = item_dict->data().find("bindings");
                 bindings_it != item_dict->data().end()
                 && expr_it != item_dict->data().end()) {
@@ -253,7 +259,12 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
                 for (const auto& [name, value] : bindings_dict->data()) {
-                    // {type: "var"} sets is_name on the expr.
+                    // Empty-name key is the var sentinel from :=@ syntax.
+                    if (name.empty()) {
+                        set_var = true;
+                        continue;
+                    }
+                    // Back-compat: {type: "var"} also sets is_name on expr.
                     if (name == "type") {
                         if (auto sv = std::dynamic_pointer_cast<StringValue>(value)) {
                             if (sv->data() == "var") {

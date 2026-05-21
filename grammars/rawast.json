@@ -437,14 +437,18 @@
     ]
   },
 
-  // `:@=` shorthand — emits (type, "var") into BINDINGS.
+  // `:=@` — var binding: expr's parsed value becomes the dict-key
+  // marker in the surrounding catcher (equivalent of is_name=true on
+  // the expr). Encoded in the BINDINGS dict as an empty-name entry
+  // ({"": "@"}); the loader recognises the empty key and calls
+  // set_name on the built expr.
   "BIND_ENTRY_VAR_TAIL": {
     "type": "sequence",
     "items": [
-      "@",
       "=",
-      {"type": "value", "value": "type", "var": true},
-      {"type": "value", "value": "var"}
+      "@",
+      {"type": "value", "value": "", "var": true},
+      {"type": "value", "value": "@"}
     ]
   },
 

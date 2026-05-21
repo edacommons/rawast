@@ -414,7 +414,7 @@ TEST_CASE("Pretty: full JSON pretty grammar in .rawast — round-trip") {
         }
 
         PAIR: sequence {
-          string:@=, ":" space, <VALUE>
+          string:=@, ":" space, <VALUE>
         }
 
         STRUCT: sequence dict {

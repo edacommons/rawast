@@ -340,19 +340,19 @@ TEST_CASE("End-to-end: .rawast definition produces a working parser") {
     CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[2])->data() == 3);
 }
 
-TEST_CASE("End-to-end: .rawast var-binding (X:@=) — string as dict key") {
+TEST_CASE("End-to-end: .rawast var-binding (X:=@) — string as dict key") {
     Grammar target;
     target.register_parser(std::make_unique<IntParser>());
     target.register_parser(std::make_unique<DoubleQuoteStringParser>());
     target.register_parser(std::make_unique<WhitespaceParser>());
     target.add_ignore("whitespace");
 
-    // PAIR uses string:@= to mark the parsed string as the dict key.
+    // PAIR uses string:=@ to mark the parsed string as the dict key.
     // STRUCT then catches name/value pairs into a dict.
     const char* rawast_source = R"(
         start: <STRUCT>
         STRUCT: sequence dict { "{", repeat <PAIR> separator ",", "}" }
-        PAIR:   sequence { string:@=, ":", int }
+        PAIR:   sequence { string:=@, ":", int }
     )";
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
@@ -377,7 +377,7 @@ TEST_CASE("End-to-end: .rawast full JSON grammar — self-host through bindings"
     target.add_ignore("whitespace");
 
     // The complete JSON grammar, written in .rawast, exercising both
-    // bindings (string:@= for the PAIR) and Key-with-constant
+    // bindings (string:=@ for the PAIR) and Key-with-constant
     // discriminators (the null/true/false alternatives).
     const char* json_in_rawast = R"(
         start: <VALUE>
@@ -392,7 +392,7 @@ TEST_CASE("End-to-end: .rawast full JSON grammar — self-host through bindings"
           "false":false
         }
         LIST:   sequence array { "[", repeat <VALUE> separator ",", "]" }
-        PAIR:   sequence       { string:@=, ":", <VALUE> }
+        PAIR:   sequence       { string:=@, ":", <VALUE> }
         STRUCT: sequence dict  { "{", repeat <PAIR> separator ",", "}" }
     )";
     REQUIRE(load_rawast_grammar_from_string(target, json_in_rawast));
