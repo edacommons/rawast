@@ -18,7 +18,12 @@ tl::expected<std::string, std::string>
 dict_string(const DictValue& d, const std::string& key) {
     auto it = d.data().find(key);
     if (it == d.data().end()) {
-        return tl::unexpected("missing field '" + key + "'");
+        std::string keys;
+        for (const auto& [k, _] : d.data()) {
+            if (!keys.empty()) keys += ", ";
+            keys += k;
+        }
+        return tl::unexpected("missing field '" + key + "' (have: [" + keys + "])");
     }
     auto sv = std::dynamic_pointer_cast<StringValue>(it->second);
     if (!sv) return tl::unexpected("field '" + key + "' is not a string");
@@ -122,8 +127,56 @@ build_inline(Grammar& g, const Value& body) {
 tl::expected<NodeId, std::string>
 build_item(Grammar& g, const Value& val) {
     if (auto dv = dynamic_cast<const DictValue*>(&val)) {
-        auto type_it = dv->data().find("type");
         auto expr_it = dv->data().find("expr");
+
+        // New multi-binding form: {expr:<X>, bindings:{...}}.
+        // For a repeat-item / repeat-separator position only ONE child
+        // is allowed, so non-empty bindings (which would emit name
+        // markers around the expr) aren't representable here. Allow:
+        //   * empty bindings (equivalent to "bare")
+        //   * just {type: "var"} (equivalent to "var")
+        // Anything else: reject with a clear message.
+        if (auto bindings_it = dv->data().find("bindings");
+            bindings_it != dv->data().end()
+            && expr_it != dv->data().end()) {
+            auto bindings_dict = std::dynamic_pointer_cast<DictValue>(
+                bindings_it->second);
+            if (!bindings_dict) {
+                return tl::unexpected("multi-binding: 'bindings' must be a dict");
+            }
+            if (!expr_it->second) {
+                return tl::unexpected("multi-binding: null expr");
+            }
+            bool only_var = false;
+            std::size_t total = bindings_dict->data().size();
+            if (total == 0) {
+                // bare
+            } else if (total == 1) {
+                auto it = bindings_dict->data().find("type");
+                if (it != bindings_dict->data().end()) {
+                    auto sv = std::dynamic_pointer_cast<StringValue>(it->second);
+                    if (sv && sv->data() == "var") only_var = true;
+                }
+                if (!only_var) {
+                    return tl::unexpected(
+                        "binding wrapper not allowed as repeat item or "
+                        "separator (would produce two children where one is "
+                        "required)");
+                }
+            } else {
+                return tl::unexpected(
+                    "binding wrapper not allowed as repeat item or "
+                    "separator (would produce two children where one is "
+                    "required)");
+            }
+            auto child_r = build_inline(g, *expr_it->second);
+            if (!child_r) return tl::unexpected(child_r.error());
+            if (only_var) g.set_name(*child_r);
+            apply_pretty_attrs(g, *child_r, *dv);
+            return *child_r;
+        }
+
+        auto type_it = dv->data().find("type");
         if (type_it != dv->data().end() && expr_it != dv->data().end()) {
             auto type_sv = std::dynamic_pointer_cast<StringValue>(type_it->second);
             if (type_sv) {
@@ -175,8 +228,86 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
 
         // Detect binding-wrapper shape.
         if (auto item_dict = std::dynamic_pointer_cast<DictValue>(item)) {
-            auto type_it = item_dict->data().find("type");
             auto expr_it = item_dict->data().find("expr");
+
+            // New multi-binding form: ITEM dict with a `bindings` dict
+            // field. Expand into Value-name markers + Value-const
+            // constants around the expr. Special key (type, "var")
+            // sets is_name on the expr. Special value "@" pairs with
+            // the expr's parsed value (at most one such per item).
+            if (auto bindings_it = item_dict->data().find("bindings");
+                bindings_it != item_dict->data().end()
+                && expr_it != item_dict->data().end()) {
+                auto bindings_dict = std::dynamic_pointer_cast<DictValue>(
+                    bindings_it->second);
+                if (!bindings_dict) {
+                    return tl::unexpected(
+                        "multi-binding: 'bindings' must be a dict");
+                }
+                if (!expr_it->second) {
+                    return tl::unexpected("multi-binding: null expr");
+                }
+
+                bool set_var = false;
+                std::vector<std::pair<std::string, ValuePtr>> at_bindings;
+                std::vector<std::pair<std::string, ValuePtr>> const_bindings;
+
+                for (const auto& [name, value] : bindings_dict->data()) {
+                    // {type: "var"} sets is_name on the expr.
+                    if (name == "type") {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(value)) {
+                            if (sv->data() == "var") {
+                                set_var = true;
+                                continue;
+                            }
+                        }
+                    }
+                    // Value "@" means "bind to expr's parsed value".
+                    if (auto sv = std::dynamic_pointer_cast<StringValue>(value)) {
+                        if (sv->data() == "@") {
+                            at_bindings.push_back({name, value});
+                            continue;
+                        }
+                    }
+                    const_bindings.push_back({name, value});
+                }
+
+                if (at_bindings.size() > 1) {
+                    return tl::unexpected(
+                        "multi-binding: at most one '@' binding per item "
+                        "(would need multiple consumers to pair with)");
+                }
+
+                // (1) @-binding name marker BEFORE expr (so the expr
+                // pairs with the pending name in the surrounding catcher).
+                for (auto& [name, _] : at_bindings) {
+                    NodeId vn = g.new_value(make_string(name));
+                    g.set_name(vn);
+                    g.node(target).children.push_back(vn);
+                }
+
+                // (2) The expr.
+                auto expr_child = build_inline(g, *expr_it->second);
+                if (!expr_child) return tl::unexpected(expr_child.error());
+                if (set_var) g.set_name(*expr_child);
+                apply_pretty_attrs(g, *expr_child, *item_dict);
+                g.node(target).children.push_back(*expr_child);
+
+                // (3) Const bindings AFTER expr — each is Value-name +
+                // Value-const, emitting (name, value) into the
+                // surrounding catcher independently.
+                for (auto& [name, value] : const_bindings) {
+                    NodeId vn = g.new_value(make_string(name));
+                    g.set_name(vn);
+                    g.node(target).children.push_back(vn);
+                    NodeId vc = g.new_value(value ? value : null_value());
+                    g.node(target).children.push_back(vc);
+                }
+
+                continue;
+            }
+
+            auto type_it = item_dict->data().find("type");
             if (type_it != item_dict->data().end() &&
                 expr_it != item_dict->data().end()) {
                 auto type_sv = std::dynamic_pointer_cast<StringValue>(

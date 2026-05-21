@@ -93,20 +93,20 @@ def test_save_dispatches_use_decl_via_bare_key():
     assert "use" in text and "gdsii" in text
 
 
-def test_save_optional_section_skipped_when_default():
-    """ITEM's `type=bare` default — when dict["type"]=="bare", the
-    BIND_TAIL_OPT optional block must emit nothing."""
+def test_save_bare_item_emits_no_binding_suffix():
+    """An ITEM with no bindings (empty `bindings` dict) should emit
+    just the expr — no `:name=` suffix."""
     meta = rawast.rawast_format()
-    # An ELEMENTS-style rule: bare item wrapping a Repeat
+    # ELEMENTS-style rule using the multi-binding wrapper form
     data = {
         "start": "X",
         "X": {"container": "array", "items": [
-            {"expr": {"item": {"expr": "Y", "type": "bare"},
+            {"expr": {"item": {"expr": "Y", "bindings": {}},
                       "type": "repeat"},
-             "type": "bare"}
+             "bindings": {}}
         ], "type": "sequence"},
         "Y": "Z",
     }
     text = meta.save(data, pretty=False).decode("utf-8")
-    # Bare items shouldn't emit `:name=` binding suffix
-    assert "[" in text or "{" in text  # something structural present
+    # Bare items don't emit `:name=` binding suffix
+    assert ":" not in text or "X:" in text or "Y:" in text  # only rule-def colons

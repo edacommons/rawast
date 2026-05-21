@@ -307,23 +307,26 @@
 
   // Each ITEM produces a uniform wrapper dict around its EXPR:
   //
-  //   bare:      {"expr": <X>, "type": "bare"}
-  //   X:@=       {"expr": <X>, "type": "var"}
-  //   X:name=@   {"expr": <X>, "type": "binding", "name": "name"}
+  //   expr                   -> {"expr": <X>, "bindings": {}}
+  //   expr:name=@            -> {"expr": <X>, "bindings": {"name": "@"}}
+  //   expr:name="lit"        -> {"expr": <X>, "bindings": {"name": "lit"}}
+  //   expr:type=var          -> {"expr": <X>, "bindings": {"type": "var"}}
+  //   expr:a=@:b="x":c=null  -> {"expr": <X>, "bindings": {"a":"@","b":"x","c":null}}
   //
-  // The dict-catcher's emit-order means that if BIND_TAIL_OPT matches,
-  // it appends a second "type" / "name" pair that overwrites the
-  // default "bare" set by the always-emitted Value-kind constants
-  // earlier in this sequence.
+  // The `bindings` dict can hold any number of (name, value) pairs.
+  // Special values: "@" means "expr's parsed value goes here". Special
+  // pair: {type: "var"} sets is_name on the expr (the parsed value
+  // becomes a dict-key marker — see RULE_DEF's identifier pattern).
+  // The loader's append_items_array recognises both this new form and
+  // the legacy {type:"bare"|"var"|"binding"|"binding_const"} wrappers.
   "ITEM": {
     "type": "sequence",
     "container": "dict",
     "items": [
       {"type": "value", "value": "expr", "var": true},
       "EXPR",
-      {"type": "value", "value": "type", "var": true},
-      {"type": "value", "value": "bare"},
-      "BIND_TAIL_OPT",
+      {"type": "value", "value": "bindings", "var": true},
+      "BINDINGS",
       {"type": "repeat", "item": "POSTFIX_ATTR"}
     ]
   },
@@ -399,29 +402,43 @@
     ]
   },
 
-  // Optional ":bind_target" suffix after an EXPR.
-  "BIND_TAIL_OPT": {
+  // BINDINGS — zero or more `:name=value` chained bindings on an ITEM.
+  // Materialised as a dict catcher so each (name, value) pair is keyed
+  // by name. The dict ends up under ITEM's `bindings` field.
+  //
+  // Predictive: the outer ITEM commits to BINDINGS unconditionally; the
+  // repeat inside iterates until the next token isn't ":" (zero items
+  // yields the empty bindings dict).
+  "BINDINGS": {
     "type": "sequence",
-    "optional": true,
+    "container": "dict",
+    "items": [
+      {"type": "repeat", "item": "BIND_ENTRY"}
+    ]
+  },
+
+  // One binding entry: `:name=rhs` or the legacy var shorthand `:@=`.
+  // After the leading ":", a predictive choice on the next token:
+  //   "@" -> BIND_ENTRY_VAR (`:@=` emits {type: "var"} into BINDINGS)
+  //   identifier -> BIND_ENTRY_NAMED (`:name=rhs`)
+  "BIND_ENTRY": {
+    "type": "sequence",
     "items": [
       ":",
-      "BIND_TARGET"
+      "BIND_ENTRY_TAIL"
     ]
   },
 
-  // The two binding forms; predictive-PEG distinguishable by first token
-  // after ":" — `@` for var, identifier for named.
-  "BIND_TARGET": {
+  "BIND_ENTRY_TAIL": {
     "type": "choice",
     "items": [
-      "BIND_TARGET_VAR",
-      "BIND_TARGET_NAMED"
+      "BIND_ENTRY_VAR_TAIL",
+      "BIND_ENTRY_NAMED_TAIL"
     ]
   },
 
-  // @= — emits "type" = "var" into the surrounding ITEM dict catcher,
-  // overriding the earlier "bare" default.
-  "BIND_TARGET_VAR": {
+  // `:@=` shorthand — emits (type, "var") into BINDINGS.
+  "BIND_ENTRY_VAR_TAIL": {
     "type": "sequence",
     "items": [
       "@",
@@ -431,51 +448,26 @@
     ]
   },
 
-  // name=<rhs> — RHS is either `@` (the parsed expression's value, the
-  // original binding form) or a literal value (string, int, float, true,
-  // false, null). The literal form emits the constant kv pair into the
-  // surrounding dict catcher regardless of what EXPR parsed — useful as
-  // a discriminator+constant idiom (e.g. GDS_BOUNDARY:element="boundary"
-  // for binary discriminator records that have no payload).
-  "BIND_TARGET_NAMED": {
+  // `:name=rhs` — emits (name, rhs) into BINDINGS.
+  "BIND_ENTRY_NAMED_TAIL": {
     "type": "sequence",
     "items": [
-      {"type": "value", "value": "name", "var": true},
-      {"type": "identifier"},
+      {"type": "identifier", "var": true},
       "=",
-      "BIND_VALUE"
+      "BIND_RHS"
     ]
   },
 
-  "BIND_VALUE": {
+  // Right-hand side of a `:name=` binding. Either:
+  //   `@` — the expr's parsed value is bound to `name` (encoded as the
+  //         string "@" in the wrapper; the loader pairs the name
+  //         marker with the actual expr at load time).
+  //   literal — a constant (string/float/int/true/false/null) bound
+  //             directly to `name` regardless of what expr parses.
+  "BIND_RHS": {
     "type": "choice",
     "items": [
-      "BIND_VALUE_PARSE",
-      "BIND_VALUE_LITERAL"
-    ]
-  },
-
-  // @ — the original parsed-value binding: type=binding.
-  "BIND_VALUE_PARSE": {
-    "type": "sequence",
-    "items": [
-      "@",
-      {"type": "value", "value": "type", "var": true},
-      {"type": "value", "value": "binding"}
-    ]
-  },
-
-  // Literal constant — type=binding_const + the constant under "value".
-  // The loader picks up "value" and emits a (name, literal) pair into
-  // the surrounding dict catcher. The EXPR is still parsed (its parse
-  // side effect — typically matching a discriminator record — is what
-  // we want), only its produced value is discarded.
-  "BIND_VALUE_LITERAL": {
-    "type": "sequence",
-    "items": [
-      {"type": "value", "value": "type", "var": true},
-      {"type": "value", "value": "binding_const"},
-      {"type": "value", "value": "value", "var": true},
+      {"type": "key", "key": "@", "value": "@"},
       "BIND_LITERAL"
     ]
   },
