@@ -1,0 +1,109 @@
+#include <rawast/parsers_lefdef.hpp>
+#include <rawast/parsers_registry.hpp>
+#include <rawast/stream.hpp>
+#include <rawast/value.hpp>
+
+#include <memory>
+#include <string>
+
+namespace rawast {
+
+namespace {
+
+// Stop characters for identifier consumption. Whitespace stops via the
+// !isgraph check; everything below is also a stop:
+//   `; ( ) " + -`
+// `#` is NOT a stop — see header note on comment handling.
+bool is_identifier_stop(char c) {
+    switch (c) {
+    case ' ': case '\t': case '\n': case '\r':
+    case ';': case '(': case ')': case '"':
+    case '+': case '-':
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
+// --- LefdefIdentifierParser ---------------------------------------------
+
+LefdefIdentifierParser::LefdefIdentifierParser() : Parser("identifier") {}
+
+ParseResult LefdefIdentifierParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    std::string ident;
+    while (true) {
+        auto c = sr.peek();
+        if (!c || is_identifier_stop(*c)) break;
+        ident.push_back(*c);
+        sr.get();
+    }
+
+    if (ident.empty()) {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected LEF/DEF identifier"});
+    }
+
+    sr.accept();
+    return make_string(std::move(ident));
+}
+
+SaveResult LefdefIdentifierParser::unparse(const Value& value) const {
+    auto sv = dynamic_cast<const StringValue*>(&value);
+    if (!sv) {
+        return tl::unexpected(SaveError{
+            "LefdefIdentifierParser::unparse expects StringValue"});
+    }
+    return sv->data();
+}
+
+// --- LefdefLineCommentParser --------------------------------------------
+
+LefdefLineCommentParser::LefdefLineCommentParser() : Parser("line_comment") {}
+
+ParseResult LefdefLineCommentParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto first = sr.peek();
+    if (!first || *first != '#') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '#' line comment"});
+    }
+
+    // Consume `#` and everything up to and including the newline (or EOF).
+    while (true) {
+        auto c = sr.get();
+        if (!c) break;
+        if (*c == '\n') break;
+    }
+
+    sr.accept();
+    return null_value();
+}
+
+// --- Group registration -------------------------------------------------
+
+ParserGroup make_lefdef_group() {
+    ParserGroup g;
+    g.name = "lefdef";
+    g.parsers = {
+        ParserSpec{"identifier",   []() {
+            return std::make_unique<LefdefIdentifierParser>();
+        }},
+        ParserSpec{"line_comment", []() {
+            return std::make_unique<LefdefLineCommentParser>();
+        }},
+    };
+    return g;
+}
+
+void register_lefdef_parser_group() {
+    register_parser_group(make_lefdef_group());
+}
+
+} // namespace rawast

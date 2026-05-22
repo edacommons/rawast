@@ -49,6 +49,7 @@ add_library(rawast STATIC
     src/loader.cpp
     src/linter.cpp
     src/parsers_gdsii.cpp
+    src/parsers_lefdef.cpp
     src/parsers_registry.cpp
 )
 add_library(rawast::rawast ALIAS rawast)

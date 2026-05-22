@@ -13,6 +13,7 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_gdsii.hpp>
+#include <rawast/parsers_lefdef.hpp>
 #include <rawast/parsers_registry.hpp>
 
 #include <fstream>
@@ -113,6 +114,7 @@ NB_MODULE(_native, m) {
     // linker configurations; explicit init here is the durable path.
     rawast::register_std_parser_group();
     rawast::register_gdsii_parser_group();
+    rawast::register_lefdef_parser_group();
 
     nb::class_<rawast::Grammar>(m, "Grammar",
         "A loaded grammar — drives parse, save, and lint via its methods.")
