@@ -13,11 +13,9 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "repeat",
-          "item": {
-            "expr": "FILE_ENTRY"
-          }
+        "type": "repeat",
+        "item": {
+          "type": "FILE_ENTRY"
         }
       }
     ]
@@ -27,13 +25,13 @@
     "newline": true,
     "items": [
       {
-        "expr": "USE_DECL"
+        "type": "USE_DECL"
       },
       {
-        "expr": "IGNORE_DECL"
+        "type": "IGNORE_DECL"
       },
       {
-        "expr": "RULE_DEF"
+        "type": "RULE_DEF"
       }
     ]
   },
@@ -41,19 +39,15 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "use"
-        }
+        "type": "key",
+        "key": "use"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": ":"
-        }
+        "type": "key",
+        "key": ":"
       },
       {
-        "expr": "IDENT_LIST",
+        "type": "IDENT_LIST",
         "bindings": [
           {
             "name": "use",
@@ -67,19 +61,15 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "ignore"
-        }
+        "type": "key",
+        "key": "ignore"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": ":"
-        }
+        "type": "key",
+        "key": ":"
       },
       {
-        "expr": "IDENT_LIST",
+        "type": "IDENT_LIST",
         "bindings": [
           {
             "name": "ignore",
@@ -94,19 +84,13 @@
     "container": "array",
     "items": [
       {
-        "expr": {
-          "type": "repeat",
-          "separator": {
-            "expr": {
-              "type": "key",
-              "key": ","
-            }
-          },
-          "item": {
-            "expr": {
-              "type": "identifier"
-            }
-          }
+        "type": "repeat",
+        "separator": {
+          "type": "key",
+          "key": ","
+        },
+        "item": {
+          "type": "identifier"
         }
       }
     ]
@@ -115,9 +99,7 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "identifier"
-        },
+        "type": "identifier",
         "bindings": [
           {
             "var": true,
@@ -126,13 +108,11 @@
         ]
       },
       {
-        "expr": {
-          "type": "key",
-          "key": ":"
-        }
+        "type": "key",
+        "key": ":"
       },
       {
-        "expr": "EXPR"
+        "type": "EXPR"
       }
     ]
   },
@@ -140,25 +120,25 @@
     "type": "choice",
     "items": [
       {
-        "expr": "REF"
+        "type": "REF"
       },
       {
-        "expr": "OPTIONAL_EXPR"
+        "type": "OPTIONAL_EXPR"
       },
       {
-        "expr": "SEQUENCE_EXPR"
+        "type": "SEQUENCE_EXPR"
       },
       {
-        "expr": "CHOICE_EXPR"
+        "type": "CHOICE_EXPR"
       },
       {
-        "expr": "REPEAT_EXPR"
+        "type": "REPEAT_EXPR"
       },
       {
-        "expr": "KEY_EXPR"
+        "type": "KEY_EXPR"
       },
       {
-        "expr": "PARSE_EXPR"
+        "type": "PARSE_EXPR"
       }
     ]
   },
@@ -166,21 +146,15 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "<"
-        }
+        "type": "key",
+        "key": "<"
       },
       {
-        "expr": {
-          "type": "identifier"
-        }
+        "type": "identifier"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": ">"
-        }
+        "type": "key",
+        "key": ">"
       }
     ]
   },
@@ -189,10 +163,8 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "?"
-        },
+        "type": "key",
+        "key": "?",
         "bindings": [
           {
             "name": "type",
@@ -201,7 +173,7 @@
         ]
       },
       {
-        "expr": "EXPR",
+        "type": "EXPR",
         "bindings": [
           {
             "name": "expr",
@@ -216,10 +188,8 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "sequence"
-        },
+        "type": "key",
+        "key": "sequence",
         "bindings": [
           {
             "name": "type",
@@ -228,16 +198,14 @@
         ]
       },
       {
-        "expr": "CONTAINER_OPT"
+        "type": "CONTAINER_OPT"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "{"
-        }
+        "type": "key",
+        "key": "{"
       },
       {
-        "expr": "ITEMS",
+        "type": "ITEMS",
         "bindings": [
           {
             "name": "items",
@@ -246,10 +214,8 @@
         ]
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "}"
-        }
+        "type": "key",
+        "key": "}"
       }
     ]
   },
@@ -258,7 +224,7 @@
     "optional": true,
     "items": [
       {
-        "expr": "CONTAINER_KIND",
+        "type": "CONTAINER_KIND",
         "bindings": [
           {
             "name": "container",
@@ -272,18 +238,14 @@
     "type": "choice",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "array",
-          "value": "array"
-        }
+        "type": "key",
+        "key": "array",
+        "value": "array"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "dict",
-          "value": "dict"
-        }
+        "type": "key",
+        "key": "dict",
+        "value": "dict"
       }
     ]
   },
@@ -292,10 +254,8 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "choice"
-        },
+        "type": "key",
+        "key": "choice",
         "bindings": [
           {
             "name": "type",
@@ -304,13 +264,11 @@
         ]
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "{"
-        }
+        "type": "key",
+        "key": "{"
       },
       {
-        "expr": "ITEMS",
+        "type": "ITEMS",
         "bindings": [
           {
             "name": "items",
@@ -319,10 +277,8 @@
         ]
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "}"
-        }
+        "type": "key",
+        "key": "}"
       }
     ]
   },
@@ -331,10 +287,8 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "repeat"
-        },
+        "type": "key",
+        "key": "repeat",
         "bindings": [
           {
             "name": "type",
@@ -343,7 +297,7 @@
         ]
       },
       {
-        "expr": "ITEM",
+        "type": "ITEM",
         "bindings": [
           {
             "name": "item",
@@ -352,7 +306,7 @@
         ]
       },
       {
-        "expr": "SEPARATOR_OPT"
+        "type": "SEPARATOR_OPT"
       }
     ]
   },
@@ -361,13 +315,11 @@
     "optional": true,
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "separator"
-        }
+        "type": "key",
+        "key": "separator"
       },
       {
-        "expr": "ITEM",
+        "type": "ITEM",
         "bindings": [
           {
             "name": "separator",
@@ -382,9 +334,7 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "string"
-        },
+        "type": "string",
         "bindings": [
           {
             "name": "type",
@@ -397,7 +347,7 @@
         ]
       },
       {
-        "expr": "KEY_VALUE_SUFFIX"
+        "type": "KEY_VALUE_SUFFIX"
       }
     ]
   },
@@ -406,13 +356,11 @@
     "optional": true,
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": ":"
-        }
+        "type": "key",
+        "key": ":"
       },
       {
-        "expr": "CONSTANT",
+        "type": "CONSTANT",
         "bindings": [
           {
             "name": "value",
@@ -426,40 +374,28 @@
     "type": "choice",
     "items": [
       {
-        "expr": {
-          "type": "string"
-        }
+        "type": "string"
       },
       {
-        "expr": {
-          "type": "float"
-        }
+        "type": "float"
       },
       {
-        "expr": {
-          "type": "int"
-        }
+        "type": "int"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "null",
-          "value": null
-        }
+        "type": "key",
+        "key": "null",
+        "value": null
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "true",
-          "value": true
-        }
+        "type": "key",
+        "key": "true",
+        "value": true
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "false",
-          "value": false
-        }
+        "type": "key",
+        "key": "false",
+        "value": false
       }
     ]
   },
@@ -468,9 +404,7 @@
     "container": "dict",
     "items": [
       {
-        "expr": {
-          "type": "identifier"
-        },
+        "type": "identifier",
         "bindings": [
           {
             "name": "type",
@@ -485,17 +419,13 @@
     "container": "array",
     "items": [
       {
-        "expr": {
-          "type": "repeat",
-          "separator": {
-            "expr": {
-              "type": "key",
-              "key": ","
-            }
-          },
-          "item": {
-            "expr": "ITEM"
-          }
+        "type": "repeat",
+        "separator": {
+          "type": "key",
+          "key": ","
+        },
+        "item": {
+          "type": "ITEM"
         }
       }
     ]
@@ -505,7 +435,7 @@
     "container": "dict",
     "items": [
       {
-        "expr": "EXPR",
+        "type": "EXPR",
         "bindings": [
           {
             "name": "expr",
@@ -514,7 +444,7 @@
         ]
       },
       {
-        "expr": "BINDINGS",
+        "type": "BINDINGS",
         "bindings": [
           {
             "name": "bindings",
@@ -523,11 +453,9 @@
         ]
       },
       {
-        "expr": {
-          "type": "repeat",
-          "item": {
-            "expr": "POSTFIX_ATTR"
-          }
+        "type": "repeat",
+        "item": {
+          "type": "POSTFIX_ATTR"
         }
       }
     ]
@@ -536,19 +464,19 @@
     "type": "choice",
     "items": [
       {
-        "expr": "INDENT_ATTR"
+        "type": "INDENT_ATTR"
       },
       {
-        "expr": "TAB_ATTR"
+        "type": "TAB_ATTR"
       },
       {
-        "expr": "SPACE_ATTR"
+        "type": "SPACE_ATTR"
       },
       {
-        "expr": "NEWLINE_ATTR"
+        "type": "NEWLINE_ATTR"
       },
       {
-        "expr": "TAIL_ATTR"
+        "type": "TAIL_ATTR"
       }
     ]
   },
@@ -556,10 +484,8 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "indent"
-        },
+        "type": "key",
+        "key": "indent",
         "bindings": [
           {
             "name": "indent",
@@ -573,10 +499,8 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "tab"
-        },
+        "type": "key",
+        "key": "tab",
         "bindings": [
           {
             "name": "tab",
@@ -590,10 +514,8 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "space"
-        },
+        "type": "key",
+        "key": "space",
         "bindings": [
           {
             "name": "space",
@@ -607,10 +529,8 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "newline"
-        },
+        "type": "key",
+        "key": "newline",
         "bindings": [
           {
             "name": "newline",
@@ -624,21 +544,15 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "tail"
-        }
+        "type": "key",
+        "key": "tail"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "="
-        }
+        "type": "key",
+        "key": "="
       },
       {
-        "expr": {
-          "type": "string"
-        },
+        "type": "string",
         "bindings": [
           {
             "name": "tail",
@@ -653,7 +567,7 @@
     "optional": true,
     "items": [
       {
-        "expr": "BINDINGS_NONEMPTY"
+        "type": "BINDINGS_NONEMPTY"
       }
     ]
   },
@@ -662,14 +576,12 @@
     "container": "array",
     "items": [
       {
-        "expr": "BIND_ENTRY"
+        "type": "BIND_ENTRY"
       },
       {
-        "expr": {
-          "type": "repeat",
-          "item": {
-            "expr": "BIND_ENTRY"
-          }
+        "type": "repeat",
+        "item": {
+          "type": "BIND_ENTRY"
         }
       }
     ]
@@ -680,13 +592,11 @@
     "fixed_schema": true,
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": ":"
-        }
+        "type": "key",
+        "key": ":"
       },
       {
-        "expr": "BIND_EXPR"
+        "type": "BIND_EXPR"
       }
     ]
   },
@@ -694,10 +604,10 @@
     "type": "choice",
     "items": [
       {
-        "expr": "NAME_BIND"
+        "type": "NAME_BIND"
       },
       {
-        "expr": "VALUE_BIND"
+        "type": "VALUE_BIND"
       }
     ]
   },
@@ -705,10 +615,8 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "="
-        },
+        "type": "key",
+        "key": "=",
         "bindings": [
           {
             "name": "var",
@@ -717,7 +625,7 @@
         ]
       },
       {
-        "expr": "BIND_RHS",
+        "type": "BIND_RHS",
         "bindings": [
           {
             "name": "value",
@@ -731,9 +639,7 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {
-          "type": "identifier"
-        },
+        "type": "identifier",
         "bindings": [
           {
             "name": "name",
@@ -742,13 +648,11 @@
         ]
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "="
-        }
+        "type": "key",
+        "key": "="
       },
       {
-        "expr": "BIND_RHS",
+        "type": "BIND_RHS",
         "bindings": [
           {
             "name": "value",
@@ -762,14 +666,12 @@
     "type": "choice",
     "items": [
       {
-        "expr": {
-          "type": "key",
-          "key": "@",
-          "value": "@"
-        }
+        "type": "key",
+        "key": "@",
+        "value": "@"
       },
       {
-        "expr": "BIND_LITERAL"
+        "type": "BIND_LITERAL"
       }
     ]
   },
@@ -777,40 +679,28 @@
     "type": "choice",
     "items": [
       {
-        "expr": {
-          "type": "string"
-        }
+        "type": "string"
       },
       {
-        "expr": {
-          "type": "float"
-        }
+        "type": "float"
       },
       {
-        "expr": {
-          "type": "int"
-        }
+        "type": "int"
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "true",
-          "value": true
-        }
+        "type": "key",
+        "key": "true",
+        "value": true
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "false",
-          "value": false
-        }
+        "type": "key",
+        "key": "false",
+        "value": false
       },
       {
-        "expr": {
-          "type": "key",
-          "key": "null",
-          "value": null
-        }
+        "type": "key",
+        "key": "null",
+        "value": null
       }
     ]
   }

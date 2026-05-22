@@ -674,7 +674,15 @@ populate(Grammar& g, NodeId target, const Value& body) {
         return {};
     }
 
-    // Otherwise: it's a parser-name reference.
+    // Ref-to-rule (if the name is a registered rule) or parser-name
+    // reference (otherwise). Rules are registered in pass 1 of
+    // load_json_grammar_into before any bodies are populated, so
+    // has_rule() works at this point regardless of declaration order.
+    if (g.has_rule(type)) {
+        n.kind = NodeKind::Ref;
+        n.value = make_string(type);
+        return {};
+    }
     n.kind  = NodeKind::Parse;
     n.value = make_string(type);
     if (dict_bool(*dv, "var")) {
