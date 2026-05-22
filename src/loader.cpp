@@ -773,20 +773,31 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
         }
     }
 
-    // Set top entry point.
+    // Set top entry point. Accepts two shapes:
+    //   "start": "RULE_NAME"               (JSON-form: plain string)
+    //   "start": {"type": "RULE_NAME"}     (.rawast meta-grammar emission:
+    //                                       a flat ref dict)
     auto start_it = root->data().find("start");
     if (start_it == root->data().end()) {
         return tl::unexpected("grammar must define 'start'");
     }
-    auto start_sv = std::dynamic_pointer_cast<StringValue>(start_it->second);
-    if (!start_sv) {
-        return tl::unexpected("'start' must be a string naming a rule");
+    std::string start_name;
+    if (auto sv = std::dynamic_pointer_cast<StringValue>(start_it->second)) {
+        start_name = sv->data();
+    } else if (auto dv = std::dynamic_pointer_cast<DictValue>(start_it->second)) {
+        auto type_r = dict_string(*dv, "type");
+        if (!type_r) {
+            return tl::unexpected("'start' dict must have 'type' naming a rule");
+        }
+        start_name = *type_r;
+    } else {
+        return tl::unexpected("'start' must be a rule name string or {\"type\": <name>} dict");
     }
-    if (!g.has_rule(start_sv->data())) {
+    if (!g.has_rule(start_name)) {
         return tl::unexpected("'start' references undefined rule '" +
-                              start_sv->data() + "'");
+                              start_name + "'");
     }
-    g.set_top(g.new_ref(start_sv->data()));
+    g.set_top(g.new_ref(start_name));
 
     return {};
 }

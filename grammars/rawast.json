@@ -31,6 +31,9 @@
         "type": "IGNORE_DECL"
       },
       {
+        "type": "START_DECL"
+      },
+      {
         "type": "RULE_DEF"
       }
     ]
@@ -112,19 +115,13 @@
         "key": ":"
       },
       {
-        "type": "EXPR"
+        "type": "ITEM"
       }
     ]
   },
   "EXPR": {
     "type": "choice",
     "items": [
-      {
-        "type": "REF"
-      },
-      {
-        "type": "OPTIONAL_EXPR"
-      },
       {
         "type": "SEQUENCE_EXPR"
       },
@@ -136,6 +133,9 @@
       },
       {
         "type": "KEY_EXPR"
+      },
+      {
+        "type": "REF"
       },
       {
         "type": "PARSE_EXPR"
@@ -150,7 +150,13 @@
         "key": "<"
       },
       {
-        "type": "identifier"
+        "type": "identifier",
+        "bindings": [
+          {
+            "name": "type",
+            "value": "@"
+          }
+        ]
       },
       {
         "type": "key",
@@ -158,34 +164,8 @@
       }
     ]
   },
-  "OPTIONAL_EXPR": {
-    "type": "sequence",
-    "container": "dict",
-    "items": [
-      {
-        "type": "key",
-        "key": "?",
-        "bindings": [
-          {
-            "name": "type",
-            "value": "optional"
-          }
-        ]
-      },
-      {
-        "type": "EXPR",
-        "bindings": [
-          {
-            "name": "expr",
-            "value": "@"
-          }
-        ]
-      }
-    ]
-  },
   "SEQUENCE_EXPR": {
     "type": "sequence",
-    "container": "dict",
     "items": [
       {
         "type": "key",
@@ -251,7 +231,6 @@
   },
   "CHOICE_EXPR": {
     "type": "sequence",
-    "container": "dict",
     "items": [
       {
         "type": "key",
@@ -284,7 +263,6 @@
   },
   "REPEAT_EXPR": {
     "type": "sequence",
-    "container": "dict",
     "items": [
       {
         "type": "key",
@@ -331,7 +309,6 @@
   },
   "KEY_EXPR": {
     "type": "sequence",
-    "container": "dict",
     "items": [
       {
         "type": "string",
@@ -401,7 +378,6 @@
   },
   "PARSE_EXPR": {
     "type": "sequence",
-    "container": "dict",
     "items": [
       {
         "type": "identifier",
@@ -435,13 +411,22 @@
     "container": "dict",
     "items": [
       {
-        "type": "EXPR",
+        "expr": {
+          "type": "optional",
+          "expr": {
+            "type": "key",
+            "key": "?"
+          }
+        },
         "bindings": [
           {
-            "name": "expr",
-            "value": "@"
+            "name": "optional",
+            "value": true
           }
         ]
+      },
+      {
+        "type": "EXPR"
       },
       {
         "type": "BINDINGS",
@@ -703,5 +688,37 @@
         "value": null
       }
     ]
+  },
+  "START_DECL": {
+    "type": "sequence",
+    "items": [
+      {
+        "type": "key",
+        "key": "start"
+      },
+      {
+        "type": "key",
+        "key": ":"
+      },
+      {
+        "type": "START_VAL",
+        "bindings": [
+          {
+            "name": "start",
+            "value": "@"
+          }
+        ]
+      }
+    ]
+  },
+  "START_VAL": {
+    "type": "sequence",
+    "container": "dict",
+    "items": [
+      {
+        "type": "REF"
+      }
+    ],
+    "fixed_schema": true
   }
 }

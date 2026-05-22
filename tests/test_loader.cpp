@@ -241,9 +241,14 @@ TEST_CASE("Loaded .rawast grammar parses a single ref rule") {
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
     REQUIRE(d->data().count("start") == 1);
-    auto start_val = std::dynamic_pointer_cast<StringValue>(d->data().at("start"));
-    REQUIRE(start_val);
-    CHECK(start_val->data() == "VALUE");
+    // Flat-shape ref dict: {"type": "VALUE"}. The loader accepts this
+    // alongside the JSON-form `"start": "VALUE"` plain-string shape.
+    auto start_dict = std::dynamic_pointer_cast<DictValue>(d->data().at("start"));
+    REQUIRE(start_dict);
+    auto type_val = std::dynamic_pointer_cast<StringValue>(
+        start_dict->data().at("type"));
+    REQUIRE(type_val);
+    CHECK(type_val->data() == "VALUE");
 }
 
 TEST_CASE("Loaded .rawast grammar parses a choice of parser-name expressions") {

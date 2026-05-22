@@ -70,42 +70,47 @@ def test_save_dispatches_parse_expr_catch_all():
     """For `{"type":"int"}`, the EXPR Choice picks PARSE_EXPR
     (catch-all alternative)."""
     meta = rawast.rawast_format()
-    data = {"start": "X", "X": {"type": "int"}}
+    data = {"start": {"type": "X"}, "X": {"type": "int"}}
     text = meta.save(data, pretty=False).decode("utf-8")
     assert "int" in text
 
 
-def test_save_dispatches_ref_for_bare_string():
-    """In EXPR's choice, a bare-string value picks REF (matches
-    `<identifier>` shape)."""
+def test_save_dispatches_ref_for_ref_dict():
+    """In EXPR's choice, a flat ref dict {"type": NAME} picks REF
+    (matches the `<identifier>` shape)."""
     meta = rawast.rawast_format()
-    data = {"start": "X", "X": "Y", "Y": "Z"}
+    data = {
+        "start": {"type": "X"},
+        "X": {"type": "Y"},
+        "Y": {"type": "identifier"},
+    }
     text = meta.save(data, pretty=False).decode("utf-8")
-    assert "<Y>" in text or "<Z>" in text or "<X>" in text
+    assert "<Y>" in text or "<X>" in text
 
 
 def test_save_dispatches_use_decl_via_bare_key():
     """`USE_DECL` matches via key-based dispatch — the bare Key 'use'
     in its grammar tree matches when the current dict key is 'use'."""
     meta = rawast.rawast_format()
-    data = {"start": "X", "use": ["gdsii"], "X": "Y"}
+    data = {
+        "start": {"type": "X"},
+        "use": ["gdsii"],
+        "X": {"type": "identifier"},
+    }
     text = meta.save(data, pretty=False).decode("utf-8")
     assert "use" in text and "gdsii" in text
 
 
 def test_save_bare_item_emits_no_binding_suffix():
-    """An ITEM with no bindings (empty `bindings` dict) should emit
-    just the expr — no `:name=` suffix."""
+    """A flat-form ITEM with no `bindings` field should emit just the
+    expr — no `:name=` suffix."""
     meta = rawast.rawast_format()
-    # ELEMENTS-style rule using the multi-binding wrapper form
     data = {
-        "start": "X",
-        "X": {"container": "array", "items": [
-            {"expr": {"item": {"expr": "Y", "bindings": {}},
-                      "type": "repeat"},
-             "bindings": {}}
-        ], "type": "sequence"},
-        "Y": "Z",
+        "start": {"type": "X"},
+        "X": {"type": "sequence", "container": "array", "items": [
+            {"type": "repeat", "item": {"type": "Y"}}
+        ]},
+        "Y": {"type": "identifier"},
     }
     text = meta.save(data, pretty=False).decode("utf-8")
     # Bare items don't emit `:name=` binding suffix

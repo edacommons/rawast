@@ -22,11 +22,15 @@ start: <FILE>
 
 FILE: sequence dict { repeat <FILE_ENTRY> newline }
 
-FILE_ENTRY: choice { <USE_DECL>, <IGNORE_DECL>, <RULE_DEF> }
+FILE_ENTRY: choice { <USE_DECL>, <IGNORE_DECL>, <START_DECL>, <RULE_DEF>}
 
 USE_DECL:    sequence { "use",    ":", <IDENT_LIST>:use=@    }
 IGNORE_DECL: sequence { "ignore", ":", <IDENT_LIST>:ignore=@ }
 IDENT_LIST:  sequence array { repeat identifier separator "," }
+
+START_DECL: sequence {"start", ':', <START_VAL>:start=@}
+
+START_VAL: sequence dict { <REF> }
 
 // A rule definition: name, colon, body. The body is an ITEM — same shape
 // as items inside a sequence/choice. The (rule-name, ITEM-value) pair
