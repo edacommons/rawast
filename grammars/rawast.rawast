@@ -1,0 +1,139 @@
+// rawast.rawast — meta-grammar for the .rawast format, written in .rawast.
+//
+// DESIGN DRAFT — not yet executable. The engine + loader still need to
+// support bindings as an ordered array and the flattened ITEM shape.
+//
+// Conventions used here:
+//   - A rule body is an ITEM. EXPR's fields flatten into the ITEM's dict
+//     (no separate `expr` field) — the ITEM dict carries `type`, `value`,
+//     `container`, etc., plus the optional flag, bindings, and postfix attrs.
+//   - A rule is just a named ITEM: `identifier:=@` sets the rule name as
+//     pending in FILE's dict; <ITEM>'s value pairs with it.
+//   - Optional is an ITEM-level prefix: `?` before an item sets `optional: true`.
+//   - Bindings are an ordered array of {name, value} entries; `name: ""`
+//     (empty string) marks a var binding.
+
+use: std
+ignore: whitespace, line_comment, block_comment
+
+start: <FILE>
+
+// ─── Top level ──────────────────────────────────────────────────────────
+
+FILE: sequence dict { repeat <FILE_ENTRY> newline }
+
+FILE_ENTRY: choice { <USE_DECL>, <IGNORE_DECL>, <RULE_DEF> }
+
+USE_DECL:    sequence { "use",    ":", <IDENT_LIST>:use=@    }
+IGNORE_DECL: sequence { "ignore", ":", <IDENT_LIST>:ignore=@ }
+IDENT_LIST:  sequence array { repeat identifier separator "," }
+
+// A rule definition: name, colon, body. The body is an ITEM — same shape
+// as items inside a sequence/choice. The (rule-name, ITEM-value) pair
+// bubbles up to FILE's dict.
+RULE_DEF: sequence {
+  identifier:=@,
+  ":",
+  <ITEM>
+}
+
+// ─── Items ──────────────────────────────────────────────────────────────
+
+// An item carries an expression, optional bindings, and postfix attrs.
+ITEM: sequence dict {
+  ?"?":optional=true,
+  <EXPR>,
+  ?<BINDINGS>:bindings=@,
+  repeat <POSTFIX_ATTR>
+}
+
+ITEMS: sequence array { repeat <ITEM> separator "," }
+
+// ─── Expressions ────────────────────────────────────────────────────────
+
+EXPR: choice {
+  <REF>,
+  <SEQUENCE_EXPR>,
+  <CHOICE_EXPR>,
+  <REPEAT_EXPR>,
+  <KEY_EXPR>,
+  <PARSE_EXPR>
+}
+
+REF: sequence {"<", identifier:type=@, ">" }
+
+SEQUENCE_EXPR: sequence {
+  "sequence":type="sequence",
+  ?<CONTAINER_KIND>:container=@,
+  "{", <ITEMS>:value=@, "}"
+}
+
+CONTAINER_KIND: choice { "array":@, "dict":@ }
+
+CHOICE_EXPR: sequence {
+  "choice":type="choice",
+  "{", <ITEMS>:value=@, "}"
+}
+
+REPEAT_EXPR: sequence {
+  "repeat":type="repeat",
+  <ITEM>:value=@,
+  ?string:separator=@
+}
+
+KEY_EXPR: sequence {
+  string:key=@:type="key",
+  ?<KEY_VALUE>
+}
+
+KEY_VALUE: sequence { ":", <CONSTANT>:value=@ }
+
+PARSE_EXPR: sequence { identifier:type=@ }
+
+// ─── Bindings ───────────────────────────────────────────────────────────
+//
+// Surface:   expr:name=val:other=@:=@
+// Encodes:   bindings is an ordered array of {name, value} entries. The
+//            BIND_EXPR choice dispatches on first token: `=` → NAME_BIND
+//            (var binding, name="" emitted), identifier → VALUE_BIND.
+
+BINDINGS: sequence array { repeat <BINDING> }
+
+BINDING: sequence dict {
+  ":",
+  <BIND_EXPR>
+}
+
+BIND_EXPR: choice { <NAME_BIND>, <VALUE_BIND>}
+
+NAME_BIND: sequence {
+  "=":var=true,
+  <BIND_VAL>:value=@
+}
+
+VALUE_BIND: sequence {
+  identifier:name=@,
+  "=",
+  <BIND_VAL>:value=@
+}
+
+BIND_VAL: choice { "@":@, <CONSTANT> }
+
+// ─── Constants ──────────────────────────────────────────────────────────
+
+CONSTANT: choice {
+  string, float, int,
+  "null":null, "true":true, "false":false
+}
+
+// ─── Postfix attrs ──────────────────────────────────────────────────────
+
+POSTFIX_ATTR: choice {
+  "indent" :indent=true,
+  "tab"    :tab=true,
+  "space"  :space=true,
+  "newline":newline=true,
+  <TAIL_ATTR>
+}
+
+TAIL_ATTR: sequence { "tail", "=", string:tail=@ }
