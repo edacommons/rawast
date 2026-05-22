@@ -54,9 +54,12 @@
       },
       {
         "expr": "IDENT_LIST",
-        "bindings": {
-          "use": "@"
-        }
+        "bindings": [
+          {
+            "name": "use",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -77,9 +80,12 @@
       },
       {
         "expr": "IDENT_LIST",
-        "bindings": {
-          "ignore": "@"
-        }
+        "bindings": [
+          {
+            "name": "ignore",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -112,9 +118,12 @@
         "expr": {
           "type": "identifier"
         },
-        "bindings": {
-          "": "@"
-        }
+        "bindings": [
+          {
+            "var": true,
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": {
@@ -184,15 +193,21 @@
           "type": "key",
           "key": "?"
         },
-        "bindings": {
-          "type": "optional"
-        }
+        "bindings": [
+          {
+            "name": "type",
+            "value": "optional"
+          }
+        ]
       },
       {
         "expr": "EXPR",
-        "bindings": {
-          "expr": "@"
-        }
+        "bindings": [
+          {
+            "name": "expr",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -205,9 +220,12 @@
           "type": "key",
           "key": "sequence"
         },
-        "bindings": {
-          "type": "sequence"
-        }
+        "bindings": [
+          {
+            "name": "type",
+            "value": "sequence"
+          }
+        ]
       },
       {
         "expr": "CONTAINER_OPT"
@@ -220,9 +238,12 @@
       },
       {
         "expr": "ITEMS",
-        "bindings": {
-          "items": "@"
-        }
+        "bindings": [
+          {
+            "name": "items",
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": {
@@ -238,9 +259,12 @@
     "items": [
       {
         "expr": "CONTAINER_KIND",
-        "bindings": {
-          "container": "@"
-        }
+        "bindings": [
+          {
+            "name": "container",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -272,9 +296,12 @@
           "type": "key",
           "key": "choice"
         },
-        "bindings": {
-          "type": "choice"
-        }
+        "bindings": [
+          {
+            "name": "type",
+            "value": "choice"
+          }
+        ]
       },
       {
         "expr": {
@@ -284,9 +311,12 @@
       },
       {
         "expr": "ITEMS",
-        "bindings": {
-          "items": "@"
-        }
+        "bindings": [
+          {
+            "name": "items",
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": {
@@ -305,15 +335,21 @@
           "type": "key",
           "key": "repeat"
         },
-        "bindings": {
-          "type": "repeat"
-        }
+        "bindings": [
+          {
+            "name": "type",
+            "value": "repeat"
+          }
+        ]
       },
       {
         "expr": "ITEM",
-        "bindings": {
-          "item": "@"
-        }
+        "bindings": [
+          {
+            "name": "item",
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": "SEPARATOR_OPT"
@@ -332,9 +368,12 @@
       },
       {
         "expr": "ITEM",
-        "bindings": {
-          "separator": "@"
-        }
+        "bindings": [
+          {
+            "name": "separator",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -346,10 +385,16 @@
         "expr": {
           "type": "string"
         },
-        "bindings": {
-          "type": "key",
-          "key": "@"
-        }
+        "bindings": [
+          {
+            "name": "type",
+            "value": "key"
+          },
+          {
+            "name": "key",
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": "KEY_VALUE_SUFFIX"
@@ -368,21 +413,54 @@
       },
       {
         "expr": "CONSTANT",
-        "bindings": {
-          "value": "@"
-        }
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
   "CONSTANT": {
     "type": "choice",
     "items": [
-      {"expr": {"type": "string"}},
-      {"expr": {"type": "float"}},
-      {"expr": {"type": "int"}},
-      {"expr": {"type": "key", "key": "null",  "value": null}},
-      {"expr": {"type": "key", "key": "true",  "value": true}},
-      {"expr": {"type": "key", "key": "false", "value": false}}
+      {
+        "expr": {
+          "type": "string"
+        }
+      },
+      {
+        "expr": {
+          "type": "float"
+        }
+      },
+      {
+        "expr": {
+          "type": "int"
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "null",
+          "value": null
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "true",
+          "value": true
+        }
+      },
+      {
+        "expr": {
+          "type": "key",
+          "key": "false",
+          "value": false
+        }
+      }
     ]
   },
   "PARSE_EXPR": {
@@ -393,9 +471,12 @@
         "expr": {
           "type": "identifier"
         },
-        "bindings": {
-          "type": "@"
-        }
+        "bindings": [
+          {
+            "name": "type",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -425,15 +506,21 @@
     "items": [
       {
         "expr": "EXPR",
-        "bindings": {
-          "expr": "@"
-        }
+        "bindings": [
+          {
+            "name": "expr",
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": "BINDINGS",
-        "bindings": {
-          "bindings": "@"
-        }
+        "bindings": [
+          {
+            "name": "bindings",
+            "value": "@"
+          }
+        ]
       },
       {
         "expr": {
@@ -473,9 +560,12 @@
           "type": "key",
           "key": "indent"
         },
-        "bindings": {
-          "indent": true
-        }
+        "bindings": [
+          {
+            "name": "indent",
+            "value": true
+          }
+        ]
       }
     ]
   },
@@ -487,9 +577,12 @@
           "type": "key",
           "key": "tab"
         },
-        "bindings": {
-          "tab": true
-        }
+        "bindings": [
+          {
+            "name": "tab",
+            "value": true
+          }
+        ]
       }
     ]
   },
@@ -501,9 +594,12 @@
           "type": "key",
           "key": "space"
         },
-        "bindings": {
-          "space": true
-        }
+        "bindings": [
+          {
+            "name": "space",
+            "value": true
+          }
+        ]
       }
     ]
   },
@@ -515,9 +611,12 @@
           "type": "key",
           "key": "newline"
         },
-        "bindings": {
-          "newline": true
-        }
+        "bindings": [
+          {
+            "name": "newline",
+            "value": true
+          }
+        ]
       }
     ]
   },
@@ -540,9 +639,12 @@
         "expr": {
           "type": "string"
         },
-        "bindings": {
-          "tail": "@"
-        }
+        "bindings": [
+          {
+            "name": "tail",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -591,20 +693,37 @@
   "BIND_EXPR": {
     "type": "choice",
     "items": [
-      {"expr": "NAME_BIND"},
-      {"expr": "VALUE_BIND"}
+      {
+        "expr": "NAME_BIND"
+      },
+      {
+        "expr": "VALUE_BIND"
+      }
     ]
   },
   "NAME_BIND": {
     "type": "sequence",
     "items": [
       {
-        "expr": {"type": "key", "key": "="},
-        "bindings": [{"name": "var", "value": true}]
+        "expr": {
+          "type": "key",
+          "key": "="
+        },
+        "bindings": [
+          {
+            "name": "var",
+            "value": true
+          }
+        ]
       },
       {
         "expr": "BIND_RHS",
-        "bindings": [{"name": "value", "value": "@"}]
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
@@ -612,15 +731,30 @@
     "type": "sequence",
     "items": [
       {
-        "expr": {"type": "identifier"},
-        "bindings": [{"name": "name", "value": "@"}]
+        "expr": {
+          "type": "identifier"
+        },
+        "bindings": [
+          {
+            "name": "name",
+            "value": "@"
+          }
+        ]
       },
       {
-        "expr": {"type": "key", "key": "="}
+        "expr": {
+          "type": "key",
+          "key": "="
+        }
       },
       {
         "expr": "BIND_RHS",
-        "bindings": [{"name": "value", "value": "@"}]
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ]
       }
     ]
   },
