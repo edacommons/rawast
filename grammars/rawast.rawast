@@ -28,7 +28,7 @@ USE_DECL:    sequence { "use",    ":", <IDENT_LIST>:use=@    }
 IGNORE_DECL: sequence { "ignore", ":", <IDENT_LIST>:ignore=@ }
 IDENT_LIST:  sequence array { repeat identifier separator "," }
 
-START_DECL: sequence {"start", ':', <START_VAL>:start=@}
+START_DECL: sequence {"start", ":", <START_VAL>:start=@}
 
 START_VAL: sequence dict { <REF> }
 
@@ -90,7 +90,7 @@ KEY_EXPR: sequence {
   ?<KEY_VALUE>
 }
 
-KEY_VALUE: sequence { ":", <CONSTANT>:value=@ }
+KEY_VALUE: sequence { ":", choice { "@":emit=true, <CONSTANT>:value=@ } }
 
 PARSE_EXPR: sequence { identifier:type=@ }
 

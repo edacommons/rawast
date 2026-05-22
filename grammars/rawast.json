@@ -220,12 +220,12 @@
       {
         "type": "key",
         "key": "array",
-        "value": "array"
+        "emit": true
       },
       {
         "type": "key",
         "key": "dict",
-        "value": "dict"
+        "emit": true
       }
     ]
   },
@@ -324,26 +324,8 @@
         ]
       },
       {
-        "type": "KEY_VALUE_SUFFIX"
-      }
-    ]
-  },
-  "KEY_VALUE_SUFFIX": {
-    "type": "sequence",
-    "optional": true,
-    "items": [
-      {
-        "type": "key",
-        "key": ":"
-      },
-      {
-        "type": "CONSTANT",
-        "bindings": [
-          {
-            "name": "value",
-            "value": "@"
-          }
-        ]
+        "type": "KEY_VALUE",
+        "optional": true
       }
     ]
   },
@@ -652,7 +634,7 @@
       {
         "type": "key",
         "key": "@",
-        "value": "@"
+        "emit": true
       },
       {
         "type": "BIND_LITERAL"
@@ -716,6 +698,39 @@
     "items": [
       {
         "type": "REF"
+      }
+    ]
+  },
+  "KEY_VALUE": {
+    "type": "sequence",
+    "items": [
+      {
+        "type": "key",
+        "key": ":"
+      },
+      {
+        "type": "choice",
+        "items": [
+          {
+            "type": "key",
+            "key": "@",
+            "bindings": [
+              {
+                "name": "emit",
+                "value": true
+              }
+            ]
+          },
+          {
+            "type": "CONSTANT",
+            "bindings": [
+              {
+                "name": "value",
+                "value": "@"
+              }
+            ]
+          }
+        ]
       }
     ]
   }

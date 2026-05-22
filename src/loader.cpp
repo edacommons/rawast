@@ -397,12 +397,24 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 // by the next field's V-name on the parse side.
                 const bool wrap_optional =
                     g.node(*expr_child).is_optional && !const_bindings.empty();
+                // Choice target: a binding-wrapped item must be ONE
+                // alternative (not split into V-name + expr siblings,
+                // which the Choice would treat as separate alts). Wrap
+                // in an unnamed Sequence so the bindings stay grouped
+                // with their expr inside a single alt.
+                const bool wrap_for_choice =
+                    !wrap_optional
+                    && g.node(target).kind == NodeKind::Choice
+                    && (!at_bindings.empty() || !const_bindings.empty());
                 NodeId append_to = target;
                 NodeId wrapper_id;
                 if (wrap_optional) {
                     wrapper_id = g.new_sequence();
                     g.set_optional(wrapper_id);
                     g.node(*expr_child).is_optional = false;
+                    append_to = wrapper_id;
+                } else if (wrap_for_choice) {
+                    wrapper_id = g.new_sequence();
                     append_to = wrapper_id;
                 }
 
@@ -425,7 +437,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     g.node(append_to).children.push_back(vc);
                 }
 
-                if (wrap_optional) {
+                if (wrap_optional || wrap_for_choice) {
                     g.node(target).children.push_back(wrapper_id);
                 }
 
@@ -651,7 +663,13 @@ populate(Grammar& g, NodeId target, const Value& body) {
         auto key_r = dict_string(*dv, "key");
         if (!key_r) return tl::unexpected(key_r.error());
         n.value = make_string(*key_r);
-        if (auto val = dict_value(*dv, "value")) {
+        // `"X":@` shorthand — `emit: true` flag means "use the key's own
+        // text as the emitted value." Equivalent at runtime to
+        // `{key: "X", value: "X"}`.
+        if (dict_bool(*dv, "emit")) {
+            NodeId val_child = g.new_value(make_string(*key_r));
+            g.node(target).children.push_back(val_child);
+        } else if (auto val = dict_value(*dv, "value")) {
             NodeId val_child = g.new_value(val);
             g.node(target).children.push_back(val_child);
         }
