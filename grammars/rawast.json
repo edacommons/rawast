@@ -574,7 +574,6 @@
   "BIND_ENTRY": {
     "type": "sequence",
     "container": "dict",
-    "fixed_schema": true,
     "items": [
       {
         "type": "key",
@@ -718,7 +717,6 @@
       {
         "type": "REF"
       }
-    ],
-    "fixed_schema": true
+    ]
   }
 }

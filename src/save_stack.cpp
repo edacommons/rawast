@@ -167,10 +167,27 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Does this Sequence have any direct Value-kind name-marker children?
-// Distinguishes fixed-schema (push dict scope) vs open-schema (flatten).
+// Does this Sequence behave as a fixed-schema dict (push scope, look up
+// fields by name) or an open-schema dict (flatten entries into queue,
+// iterate)?
+//
+// Heuristic:
+//   * Any direct Value-name child → fixed-schema (explicit named field).
+//   * Any direct Ref child        → fixed-schema (specific sub-structure;
+//     its V-names live one indirection away and would not be visible by
+//     a shallow check, but its presence signals "structured content").
+//   * Else (only Repeats and structural Keys)  → open-schema (the body
+//     is "iterate this dict's entries"; FILE-style).
+//
+// Replaces the older explicit `fixed_schema: true` flag — the grammar
+// no longer needs to tell the engine which mode to use.
 bool has_name_markers(const Grammar& g, const Node& seq) {
     for (NodeId c : seq.children) {
+        // Original child (Ref check must NOT resolve — the resolved
+        // target's kind is the rule's body kind, not Ref).
+        const Node& orig = g.node(c);
+        if (orig.kind == NodeKind::Ref) return true;
+        // V-name marker direct child.
         const Node& cn = g.node(g.resolve_ref(c));
         if (cn.kind == NodeKind::Value && cn.is_name) return true;
     }
