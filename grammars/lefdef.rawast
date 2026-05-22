@@ -1,0 +1,144 @@
+// lefdef.rawast — LEF/DEF grammar (subset)
+//
+// Ported from astrw/lefdefrw/lefdefschema.py. Covers HDR, DESIGN_CMD,
+// UNITS, DIEAREA, ORIENT, ROW_CMD — enough to exercise:
+//   - unordered command sets (`_NSEQ → repeat choice`)
+//   - keyword-tagged dicts (`_STRUCT + _SEQ(..., Type=...)`)
+//   - conditional bindings on optional sub-blocks (Phase 3)
+//   - sized arrays (treated as `repeat <item>`; count validation app-side)
+//   - shared-prefix Choice (handled by default backtracking)
+//
+// Intentionally omitted (large nested rules): TRACKS_CMD, VIAS,
+// COMPONENTS, PINS, BLOCKAGES, SPECNETS, NETS. Adding any of them is
+// mechanical once the patterns here are accepted.
+//
+// Translation legend:
+//   _KEY("X")               → "X"
+//   _KEY("X", val)          → "X":val
+//   _VAR(item, "Name")      → item:name=@
+//   _SEQ(..., Type="X")     → "FIRST_KEY":type="X" (binding on first key)
+//   _OPT(item)              → ?<item>
+//   _OPT(item, Flag=True)   → ?<item>:flag=true     (Phase 3 conditional)
+//   _CHOICE(...)            → choice { ... }
+//   _STRUCT(SEQ(...))       → sequence dict { ... }
+//   _REPEAT(item)           → repeat <item>
+//   _ARRAY(item)            → sequence array { repeat <item> }
+//   _ARRAY(item, n)         → same — count check moves to app layer
+//   _NSEQ(*items)           → sequence dict { repeat <choice {...}> }
+//   _END_CMD                → ";" newline
+
+use: std, lefdef
+ignore: whitespace, line_comment
+
+start: <FILE>
+
+// === Top level ============================================================
+
+FILE: sequence dict {
+  <HDR>:hdr=@,
+  <DESIGN>:design=@
+}
+
+// HDR — VERSION + DIVIDERCHAR + BUSBITCHARS, all three required per spec
+// and emitted in canonical order. We inline the commands directly into
+// HDR (rather than referring to sub-rules) so HDR has direct Value-name
+// markers — has_name_markers then returns true and the save engine
+// pushes a dict scope instead of falling into the open-schema flatten
+// path (which iterates dict entries alphabetically, scrambling field
+// order). A future NSEQ engine extension can recover the "any order"
+// flexibility for files that don't follow canonical ordering.
+HDR: sequence dict {
+  "VERSION" space,     identifier:version=@ space,     ";" newline,
+  "DIVIDERCHAR" space, string:divider=@ space,         ";" newline,
+  "BUSBITCHARS" space, string:bus_bit_chars=@ space,   ";" newline
+}
+
+// === DESIGN block ========================================================
+
+DESIGN: sequence dict {
+  <DESIGN_CMD>,
+  <DESIGN_INFO>,
+  <DESIGN_ITEMS>:items=@,
+  <ENDDESIGN_CMD>
+}
+
+DESIGN_CMD:    sequence { "DESIGN" space, identifier:name=@ space, ";" newline }
+ENDDESIGN_CMD: sequence { "END" space, "DESIGN" newline }
+
+// DESIGN_INFO — UNITS and DIEAREA. Both required, canonical order.
+DESIGN_INFO: sequence {
+  <UNITS_CMD>,
+  <DIEAREA_CMD>
+}
+
+UNITS_CMD: sequence {
+  "UNITS" space, "DISTANCE" space, "MICRONS" space, int:dbu=@ space, ";" newline
+}
+
+DIEAREA_CMD: sequence {
+  "DIEAREA" space, <DIEAREA_POINTS>:die_area=@, ";" newline
+}
+DIEAREA_POINTS: sequence array { repeat <XY> }
+
+// XY — coordinate pair `( x y )`. Per design, the parser doesn't enforce
+// exactly-2 ints; if input is malformed (`( 1 2 3 )`), it parses as
+// [1,2,3] and the app layer rejects.
+XY: sequence array { "(" space, int space, int space, ")" space }
+
+// === Orientation keywords =================================================
+
+// `_CHOICE(_KEY("N", "North"), ...)` — each alternative matches a one-or
+// two-letter token and emits the canonical name as the choice's value.
+ORIENT: choice {
+  "N":"North",
+  "S":"South",
+  "E":"East",
+  "W":"West",
+  "FN":"FlipNorth",
+  "FS":"FlipSouth",
+  "FE":"FlipEast",
+  "FW":"FlipWest"
+}
+
+// === Items inside DESIGN =================================================
+
+DESIGN_ITEMS: sequence array { repeat <DESIGN_ITEM> }
+DESIGN_ITEM: choice {
+  <ROW_CMD>
+  // TRACKS_CMD, VIAS, COMPONENTS, PINS, BLOCKAGES, SPECNETS, NETS:
+  // omitted in this demonstration subset.
+}
+
+// === ROW command =========================================================
+//
+// Original Python:
+//   "ROW_CMD": _STRUCT(_SEQ(_KEY("ROW"), _VAR(str, "Name"), _VAR(str, "Site"),
+//                _VAR(_ARRAY(int, 2), "Origin"), _VAR("ORIENT", "Orient"),
+//                _OPT(_SEQ(_KEY("DO"), _VAR(int, "NX"),
+//                          _KEY("BY"), _VAR(int, "NY"),
+//                _OPT(_SEQ(_KEY("STEP"), _VAR(int, "DX"), _VAR(int, "DY")))
+//                )),
+//                _END_CMD, Type="Row"))
+
+ROW_CMD: sequence dict {
+  "ROW":type="Row" space,
+  identifier:name=@ space,
+  identifier:site=@ space,
+  <ROW_ORIGIN>:origin=@,
+  <ORIENT>:orient=@ space,
+  ?<ROW_DO_OPT>,
+  ";" newline
+}
+
+// ROW origin: two ints. Same "no enforced count" stance as XY.
+ROW_ORIGIN: sequence array { int space, int space }
+
+// `_OPT(_SEQ(_KEY("DO"), int:NX, _KEY("BY"), int:NY, _OPT(...)))`.
+// No container — its bindings flow up into ROW_CMD's dict.
+ROW_DO_OPT: sequence {
+  "DO" space, int:nx=@ space, "BY" space, int:ny=@ space,
+  ?<ROW_STEP_OPT>
+}
+ROW_STEP_OPT: sequence {
+  "STEP" space, int:dx=@ space, int:dy=@ space
+}
