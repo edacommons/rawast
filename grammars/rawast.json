@@ -178,7 +178,14 @@
         ]
       },
       {
-        "type": "CONTAINER_OPT"
+        "type": "CONTAINER_KIND",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "container",
+            "value": "@"
+          }
+        ]
       },
       {
         "type": "key",
@@ -196,21 +203,6 @@
       {
         "type": "key",
         "key": "}"
-      }
-    ]
-  },
-  "CONTAINER_OPT": {
-    "type": "sequence",
-    "optional": true,
-    "items": [
-      {
-        "type": "CONTAINER_KIND",
-        "bindings": [
-          {
-            "name": "container",
-            "value": "@"
-          }
-        ]
       }
     ]
   },
@@ -285,25 +277,6 @@
       },
       {
         "type": "SEPARATOR_OPT"
-      }
-    ]
-  },
-  "SEPARATOR_OPT": {
-    "type": "sequence",
-    "optional": true,
-    "items": [
-      {
-        "type": "key",
-        "key": "separator"
-      },
-      {
-        "type": "ITEM",
-        "bindings": [
-          {
-            "name": "separator",
-            "value": "@"
-          }
-        ]
       }
     ]
   },
@@ -431,26 +404,6 @@
     "type": "choice",
     "items": [
       {
-        "type": "INDENT_ATTR"
-      },
-      {
-        "type": "TAB_ATTR"
-      },
-      {
-        "type": "SPACE_ATTR"
-      },
-      {
-        "type": "NEWLINE_ATTR"
-      },
-      {
-        "type": "TAIL_ATTR"
-      }
-    ]
-  },
-  "INDENT_ATTR": {
-    "type": "sequence",
-    "items": [
-      {
         "type": "key",
         "key": "indent",
         "bindings": [
@@ -459,12 +412,7 @@
             "value": true
           }
         ]
-      }
-    ]
-  },
-  "TAB_ATTR": {
-    "type": "sequence",
-    "items": [
+      },
       {
         "type": "key",
         "key": "tab",
@@ -474,12 +422,7 @@
             "value": true
           }
         ]
-      }
-    ]
-  },
-  "SPACE_ATTR": {
-    "type": "sequence",
-    "items": [
+      },
       {
         "type": "key",
         "key": "space",
@@ -489,12 +432,7 @@
             "value": true
           }
         ]
-      }
-    ]
-  },
-  "NEWLINE_ATTR": {
-    "type": "sequence",
-    "items": [
+      },
       {
         "type": "key",
         "key": "newline",
@@ -504,6 +442,9 @@
             "value": true
           }
         ]
+      },
+      {
+        "type": "TAIL_ATTR"
       }
     ]
   },
@@ -538,22 +479,7 @@
       }
     ]
   },
-  "BINDINGS_NONEMPTY": {
-    "type": "sequence",
-    "container": "array",
-    "items": [
-      {
-        "type": "BIND_ENTRY"
-      },
-      {
-        "type": "repeat",
-        "item": {
-          "type": "BIND_ENTRY"
-        }
-      }
-    ]
-  },
-  "BIND_ENTRY": {
+  "BINDING": {
     "type": "sequence",
     "container": "dict",
     "items": [
@@ -591,7 +517,7 @@
         ]
       },
       {
-        "type": "BIND_RHS",
+        "type": "BIND_VAL",
         "bindings": [
           {
             "name": "value",
@@ -618,7 +544,7 @@
         "key": "="
       },
       {
-        "type": "BIND_RHS",
+        "type": "BIND_VAL",
         "bindings": [
           {
             "name": "value",
@@ -628,7 +554,7 @@
       }
     ]
   },
-  "BIND_RHS": {
+  "BIND_VAL": {
     "type": "choice",
     "items": [
       {
@@ -637,36 +563,7 @@
         "emit": true
       },
       {
-        "type": "BIND_LITERAL"
-      }
-    ]
-  },
-  "BIND_LITERAL": {
-    "type": "choice",
-    "items": [
-      {
-        "type": "string"
-      },
-      {
-        "type": "float"
-      },
-      {
-        "type": "int"
-      },
-      {
-        "type": "key",
-        "key": "true",
-        "value": true
-      },
-      {
-        "type": "key",
-        "key": "false",
-        "value": false
-      },
-      {
-        "type": "key",
-        "key": "null",
-        "value": null
+        "type": "CONSTANT"
       }
     ]
   },
@@ -729,6 +626,40 @@
                 "value": "@"
               }
             ]
+          }
+        ]
+      }
+    ]
+  },
+  "BINDINGS_NONEMPTY": {
+    "type": "sequence",
+    "container": "array",
+    "items": [
+      {
+        "type": "BINDING"
+      },
+      {
+        "type": "repeat",
+        "item": {
+          "type": "BINDING"
+        }
+      }
+    ]
+  },
+  "SEPARATOR_OPT": {
+    "type": "sequence",
+    "optional": true,
+    "items": [
+      {
+        "type": "key",
+        "key": "separator"
+      },
+      {
+        "type": "ITEM",
+        "bindings": [
+          {
+            "name": "separator",
+            "value": "@"
           }
         ]
       }

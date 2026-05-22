@@ -55,12 +55,17 @@ ITEMS: sequence array { repeat <ITEM> separator "," }
 
 // ─── Expressions ────────────────────────────────────────────────────────
 
+// EXPR alt order matters for save-side dispatch: alternatives with
+// Value-const discriminators (`type=="sequence"` etc.) come before
+// REF and PARSE_EXPR, which match any `{type: NAME}` shape via
+// field-presence only. Without this ordering, REF would claim
+// SEQUENCE_EXPR's data before SEQUENCE_EXPR gets a chance.
 EXPR: choice {
-  <REF>,
   <SEQUENCE_EXPR>,
   <CHOICE_EXPR>,
   <REPEAT_EXPR>,
   <KEY_EXPR>,
+  <REF>,
   <PARSE_EXPR>
 }
 

@@ -397,11 +397,35 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     // Handle a parse failure: walk back to the nearest Choice with more
     // alternatives, or to a Repeat (which terminates gracefully on
     // failure), or to an optional level (which treats failure as empty).
+    //
+    // Order matters: Choice must be checked BEFORE the is_optional
+    // fast-path, otherwise an optional Choice (e.g. `?<X>` where X is
+    // itself a choice) would treat the first alt's failure as the whole
+    // optional failing — never giving the Choice a chance to try
+    // remaining alts.
     auto handle_failure = [&](const ParseError& err) {
         note_progress(max_progress, err);
         while (!stack.empty()) {
             Frame popped = std::move(stack.back());
             stack.pop_back();
+
+            if (popped.kind() == NodeKind::Choice) {
+                // The just-failed alternative was wrapped in a mark by
+                // the entry-side code below (only if backtrack was on).
+                // Reject it now so the stream rewinds to the position
+                // before this alternative was tried.
+                if (popped.has_mark()) {
+                    on_mark_reject();
+                    popped.set_has_mark(false);
+                }
+                if (popped.step_next()) {
+                    stack.push_back(std::move(popped));
+                    return;
+                }
+                // Else: choice exhausted -- propagate the failure further.
+                // If the choice was optional, fall through to the optional
+                // handler below.
+            }
 
             if (popped.is_optional()) {
                 // Reject the entry mark to rewind the stream to where
@@ -430,22 +454,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 popped.pass_values_to(stack.back());
                 advance_after_child();
                 return;
-            }
-
-            if (popped.kind() == NodeKind::Choice) {
-                // The just-failed alternative was wrapped in a mark by
-                // the entry-side code below (only if backtrack was on).
-                // Reject it now so the stream rewinds to the position
-                // before this alternative was tried.
-                if (popped.has_mark()) {
-                    on_mark_reject();
-                    popped.set_has_mark(false);
-                }
-                if (popped.step_next()) {
-                    stack.push_back(std::move(popped));
-                    return;
-                }
-                // Else: choice exhausted -- propagate the failure further.
             }
             // Sequence/Key/Parse: propagate by continuing to pop.
         }
