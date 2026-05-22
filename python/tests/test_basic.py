@@ -129,3 +129,14 @@ def test_from_dict_transformation():
 
     g = rawast.Grammar.from_dict(data)
     assert g.lint() == []   # still well-formed after transformation
+
+
+def test_meta_grammar_design_matches_runtime():
+    """rawast.rawast (design) and rawast.json (runtime) must encode the
+    same dict tree. Parsing rawast.rawast via the runtime meta-grammar
+    must yield exactly what rawast.json says — every rule, byte-equal."""
+    meta = rawast.rawast_format()
+    parsed = meta.parse_file(rawast.grammar_path("rawast.rawast"))
+    with open(rawast.grammar_path("rawast.json")) as f:
+        canonical = json.load(f)
+    assert parsed == canonical

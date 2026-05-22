@@ -20,6 +20,7 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     // for grammar/lint introspection but no longer gates runtime
     // behavior on Choice.
     is_backtrack_   = (kind_ == NodeKind::Choice) || n.backtrack;
+    min_            = n.min;
 
     // Value-kind frames pre-seed emitted_ with their own constant; the
     // driver pops them immediately after construction, so the constant
@@ -64,6 +65,9 @@ bool Frame::step_next() {
     }
     if (child_idx_ >= children_.size()) {
         if (kind_ == NodeKind::Repeat) {
+            ++iter_count_;
+            // Restart after a full pass. With a separator at children_[0]
+            // it must be matched between iterations, so don't skip it.
             child_idx_ = 0;
             return !children_.empty();
         }

@@ -4,6 +4,7 @@
 
 #include <compare>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
@@ -57,6 +58,12 @@ public:
     bool is_name       = false;
     bool is_optional   = false;
     bool has_separator = false;  // If true, children[0] is the separator.
+
+    // Repeat-only: minimum number of successful iterations required. Default
+    // 0 (the classical PEG `*` — zero-or-more). Set to 1 by the .rawast
+    // `repeat+` form (one-or-more); the parse fails if fewer than `min`
+    // iterations matched.
+    std::uint32_t min = 0;
 
     // Opt-in structural backtracking. Currently only meaningful on Choice
     // nodes: each alternative attempt is wrapped in StreamReader::mark()

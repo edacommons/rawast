@@ -59,6 +59,7 @@ public:
     void set_separator(NodeId parent, NodeId sep);
     void set_backtrack(NodeId id);
     void set_fixed_schema(NodeId id);
+    void set_min(NodeId id, std::uint32_t m);  // Repeat-only: minimum iteration count.
 
     // Save-side pretty-print modifiers; see Node fields for semantics.
     void set_indent(NodeId id);    // depth+1 for this Node's scope

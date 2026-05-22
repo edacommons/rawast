@@ -86,9 +86,12 @@ CHOICE_EXPR: sequence {
 
 REPEAT_EXPR: sequence {
   "repeat":type="repeat",
+  ?"+":min=1,
   <ITEM>:value=@,
-  ?string:separator=@
+  ?<SEPARATOR>
 }
+
+SEPARATOR: sequence { "separator", <ITEM>:separator=@ }
 
 KEY_EXPR: sequence {
   string:key=@:type="key",
@@ -106,7 +109,7 @@ PARSE_EXPR: sequence { identifier:type=@ }
 //            BIND_EXPR choice dispatches on first token: `=` → NAME_BIND
 //            (var binding, name="" emitted), identifier → VALUE_BIND.
 
-BINDINGS: sequence array { repeat <BINDING> }
+BINDINGS: sequence array { repeat+ <BINDING> }
 
 BINDING: sequence dict {
   ":",

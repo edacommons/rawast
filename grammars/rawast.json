@@ -1,5 +1,7 @@
 {
-  "start": "FILE",
+  "start": {
+    "type": "FILE"
+  },
   "use": [
     "std"
   ],
@@ -15,14 +17,14 @@
       {
         "type": "repeat",
         "value": {
-          "type": "FILE_ENTRY"
+          "type": "FILE_ENTRY",
+          "newline": true
         }
       }
     ]
   },
   "FILE_ENTRY": {
     "type": "choice",
-    "newline": true,
     "value": [
       {
         "type": "USE_DECL"
@@ -267,6 +269,17 @@
         ]
       },
       {
+        "type": "key",
+        "key": "+",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "min",
+            "value": 1
+          }
+        ]
+      },
+      {
         "type": "ITEM",
         "bindings": [
           {
@@ -276,7 +289,8 @@
         ]
       },
       {
-        "type": "SEPARATOR_OPT"
+        "type": "SEPARATOR",
+        "optional": true
       }
     ]
   },
@@ -287,12 +301,12 @@
         "type": "string",
         "bindings": [
           {
-            "name": "type",
-            "value": "key"
-          },
-          {
             "name": "key",
             "value": "@"
+          },
+          {
+            "name": "type",
+            "value": "key"
           }
         ]
       },
@@ -366,13 +380,9 @@
     "container": "dict",
     "value": [
       {
-        "expr": {
-          "type": "optional",
-          "expr": {
-            "type": "key",
-            "key": "?"
-          }
-        },
+        "type": "key",
+        "key": "?",
+        "optional": true,
         "bindings": [
           {
             "name": "optional",
@@ -390,7 +400,8 @@
             "name": "bindings",
             "value": "@"
           }
-        ]
+        ],
+        "optional": true
       },
       {
         "type": "repeat",
@@ -472,10 +483,14 @@
   },
   "BINDINGS": {
     "type": "sequence",
-    "optional": true,
+    "container": "array",
     "value": [
       {
-        "type": "BINDINGS_NONEMPTY"
+        "type": "repeat",
+        "min": 1,
+        "value": {
+          "type": "BINDING"
+        }
       }
     ]
   },
@@ -631,24 +646,8 @@
       }
     ]
   },
-  "BINDINGS_NONEMPTY": {
+  "SEPARATOR": {
     "type": "sequence",
-    "container": "array",
-    "value": [
-      {
-        "type": "BINDING"
-      },
-      {
-        "type": "repeat",
-        "value": {
-          "type": "BINDING"
-        }
-      }
-    ]
-  },
-  "SEPARATOR_OPT": {
-    "type": "sequence",
-    "optional": true,
     "value": [
       {
         "type": "key",

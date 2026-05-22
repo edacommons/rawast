@@ -126,6 +126,10 @@ void Grammar::set_fixed_schema(NodeId id) {
     nodes_[id.value()].fixed_schema = true;
 }
 
+void Grammar::set_min(NodeId id, std::uint32_t m) {
+    nodes_[id.value()].min = m;
+}
+
 void Grammar::set_indent(NodeId id)  { nodes_[id.value()].depth_in      = true; }
 void Grammar::set_tab(NodeId id)     { nodes_[id.value()].indent_emit   = true; }
 void Grammar::set_space(NodeId id)   { nodes_[id.value()].space_after   = true; }
@@ -443,6 +447,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             }
 
             if (popped.kind() == NodeKind::Repeat) {
+                // `repeat+` (min=1) form: the Repeat itself fails if too
+                // few iterations matched. Propagate the failure further up
+                // so an enclosing Choice/optional can react.
+                if (popped.iter_count() < popped.min()) {
+                    continue;
+                }
                 // Iteration ended -- accept what we collected so far.
                 popped.finish(pool);
                 fire_callbacks_for_frame(popped);

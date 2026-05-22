@@ -654,6 +654,15 @@ populate(Grammar& g, NodeId target, const Value& body) {
             if (!sep_r) return tl::unexpected(sep_r.error());
             g.set_separator(target, *sep_r);
         }
+        // `min`: zero-or-more (default 0) vs one-or-more (`repeat+` → 1).
+        if (auto mv = dict_value(*dv, "min")) {
+            if (auto iv = std::dynamic_pointer_cast<IntValue>(mv)) {
+                if (iv->data() < 0) return tl::unexpected("repeat: 'min' must be non-negative");
+                g.set_min(target, static_cast<std::uint32_t>(iv->data()));
+            } else {
+                return tl::unexpected("repeat: 'min' must be an integer");
+            }
+        }
         // Accept `value` (canonical) alongside legacy `item` for the
         // repeat's body.
         auto item_val = dict_value(*dv, "value");

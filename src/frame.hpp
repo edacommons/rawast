@@ -4,6 +4,7 @@
 #include <rawast/value.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace rawast {
@@ -32,6 +33,12 @@ public:
     bool is_name() const noexcept { return is_name_; }
     bool has_separator() const noexcept { return has_separator_; }
     bool is_backtrack() const noexcept { return is_backtrack_; }
+
+    // Repeat-only: how many full iterations have completed, and the
+    // minimum required for the Repeat to succeed (default 0 = `*`; 1 for
+    // the `repeat+` one-or-more form).
+    std::uint32_t iter_count() const noexcept { return iter_count_; }
+    std::uint32_t min() const noexcept { return min_; }
 
     // Backtracking-Choice bookkeeping: the driver records here whether
     // it has issued a StreamReader::mark() for the current alternative
@@ -80,6 +87,8 @@ private:
     bool has_mark_ = false;
     std::vector<NodeId> children_;
     std::size_t child_idx_ = 0;
+    std::uint32_t iter_count_ = 0;
+    std::uint32_t min_ = 0;
     std::vector<EmittedValue> emitted_;
 };
 
