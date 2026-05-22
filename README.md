@@ -80,6 +80,7 @@ pip install -e .
 rawast --help
 rawast lint  grammars/gdsii.rawast
 rawast parse grammars/json.json file.json
+rawast docs  grammars/gdsii.rawast   # EBNF-flavoured Markdown reference
 ```
 
 Module use:

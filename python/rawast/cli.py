@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 
-from . import Grammar, __version__
+from . import Grammar, __version__, json_format, rawast_format
 
 
 def cmd_parse(args: argparse.Namespace) -> int:
@@ -50,6 +50,17 @@ def cmd_lint(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_docs(args: argparse.Namespace) -> int:
+    from .docs import to_markdown
+    meta = json_format() if args.grammar.endswith(".json") else rawast_format()
+    grammar = meta.parse_file(args.grammar)
+    title = args.title or args.grammar
+    sys.stdout.write(to_markdown(grammar, title=title,
+                                 heading_level=args.heading_level))
+    sys.stdout.write("\n")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="rawast",
@@ -84,6 +95,15 @@ def main(argv: list[str] | None = None) -> int:
     p_lint = sub.add_parser("lint", help="Lint a grammar")
     p_lint.add_argument("grammar", help="Grammar file")
     p_lint.set_defaults(func=cmd_lint)
+
+    p_docs = sub.add_parser("docs", help="Render a grammar as EBNF-flavoured Markdown")
+    p_docs.add_argument("grammar", help="Grammar file (.rawast or .json)")
+    p_docs.add_argument("--title", help="Document title (defaults to the grammar path)")
+    p_docs.add_argument("--heading-level", type=int, default=1,
+                        help="Markdown heading level for the title (default 1). "
+                             "Per-rule headings are one level deeper. Bump to "
+                             "nest the output inside an existing section.")
+    p_docs.set_defaults(func=cmd_docs)
 
     args = parser.parse_args(argv)
     return args.func(args)
