@@ -70,13 +70,13 @@ TEST_CASE("Grammar register_rule and resolve_ref follow chains") {
     CHECK(resolved == target);
 }
 
-TEST_CASE("Choice without backtrack commits on first matching alternative") {
+TEST_CASE("Choice handles shared-prefix alternatives by default") {
     // Build a Choice between two alternatives that share a leading "a":
     //   alt1: "a" "b"
     //   alt2: "a" "c"
-    // Without backtrack, "ac" should fail: alt1's first terminal "a"
-    // matches, the engine commits to alt1, then "b" fails on the "c"
-    // input, the failure propagates up, and the parser gives up.
+    // Backtrack is default-on (standard PEG semantics, matches the
+    // LEF/DEF prototype): "ac" parses successfully because alt1 fails on
+    // "b" and the engine rewinds to try alt2, which matches.
     Grammar g;
     NodeId top = g.new_choice();
     g.register_rule("TOP", top);
@@ -93,7 +93,7 @@ TEST_CASE("Choice without backtrack commits on first matching alternative") {
 
     std::istringstream is{"ac"};
     StreamReader sr{is};
-    CHECK_FALSE(g.parse(sr));
+    CHECK(g.parse(sr));
 }
 
 TEST_CASE("Choice with backtrack handles shared-prefix alternatives") {

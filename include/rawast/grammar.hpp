@@ -58,6 +58,7 @@ public:
     void set_container(NodeId id, Container c);
     void set_separator(NodeId parent, NodeId sep);
     void set_backtrack(NodeId id);
+    void set_fixed_schema(NodeId id);
 
     // Save-side pretty-print modifiers; see Node fields for semantics.
     void set_indent(NodeId id);    // depth+1 for this Node's scope

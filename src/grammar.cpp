@@ -122,6 +122,10 @@ void Grammar::set_backtrack(NodeId id) {
     nodes_[id.value()].backtrack = true;
 }
 
+void Grammar::set_fixed_schema(NodeId id) {
+    nodes_[id.value()].fixed_schema = true;
+}
+
 void Grammar::set_indent(NodeId id)  { nodes_[id.value()].depth_in      = true; }
 void Grammar::set_tab(NodeId id)     { nodes_[id.value()].indent_emit   = true; }
 void Grammar::set_space(NodeId id)   { nodes_[id.value()].space_after   = true; }
@@ -323,6 +327,21 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         }
     };
 
+    // Wrap a push_node so optional frames pick up a stream mark on entry.
+    // Without this, an optional sub-rule that consumes input then fails
+    // mid-parse would leave the stream advanced — the "treat as empty"
+    // path in handle_failure would never rewind. Parallel to Choice's
+    // mark/reject around alternative attempts.
+    auto push_with_optional_mark = [&](NodeId id) {
+        push_node(stack, *this, id);
+        if (!stack.empty() && stack.back().is_optional()
+            && !stack.back().has_mark()) {
+            sr.mark();
+            pending_per_mark.emplace_back();
+            stack.back().set_has_mark(true);
+        }
+    };
+
     // Advance after a child has just completed successfully. Pops frames
     // until we either find one with more work to do, or reach the top.
     auto advance_after_child = [&]() {
@@ -357,6 +376,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             // Pop this frame, finish, pass values up.
             Frame popped = std::move(stack.back());
             stack.pop_back();
+            // Optional frame completed successfully — accept the entry
+            // mark so the stream advances permanently.
+            if (popped.is_optional() && popped.has_mark()) {
+                on_mark_accept();
+                popped.set_has_mark(false);
+            }
             popped.finish(pool);
             fire_callbacks_for_frame(popped);
             if (stack.empty()) {
@@ -379,6 +404,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             stack.pop_back();
 
             if (popped.is_optional()) {
+                // Reject the entry mark to rewind the stream to where
+                // the optional started — without this, any consumed
+                // input before the inner failure is left dangling.
+                if (popped.has_mark()) {
+                    on_mark_reject();
+                    popped.set_has_mark(false);
+                }
                 // Treat as success-with-empty.
                 if (!stack.empty()) {
                     advance_after_child();
@@ -420,7 +452,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         // Stack drained without recovery -- top-level parse fails.
     };
 
-    push_node(stack, *this, top_);
+    push_with_optional_mark(top_);
 
     while (!stack.empty() && !parse_finished) {
         Frame& top = stack.back();
@@ -438,7 +470,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 // Value-kind children, however, contribute their
                 // constants when iterated.
                 if (top.has_current()) {
-                    push_node(stack, *this, top.current_child());
+                    push_with_optional_mark(top.current_child());
                 } else {
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
@@ -473,7 +505,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                 ValuePtr canonical = pool.intern(*r);
                 top.add_value(canonical, top.is_name());
                 if (top.has_current()) {
-                    push_node(stack, *this, top.current_child());
+                    push_with_optional_mark(top.current_child());
                 } else {
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
@@ -522,7 +554,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                     pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
-                push_node(stack, *this, top.current_child());
+                push_with_optional_mark(top.current_child());
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
@@ -542,7 +574,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         case NodeKind::Sequence:
         case NodeKind::Repeat: {
             if (top.has_current()) {
-                push_node(stack, *this, top.current_child());
+                push_with_optional_mark(top.current_child());
             } else {
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());

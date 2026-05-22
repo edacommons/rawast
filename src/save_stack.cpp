@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <unordered_set>
 #include <set>
 #include <sstream>
 #include <string>
@@ -285,10 +286,13 @@ bool values_equal_v2(const ValuePtr& a, const Value* b) {
 //   * Container=Dict sequence: require value type is dict; if it
 //     has discriminators they must match.
 //   * Container=None / Parse first child: type-compatible value.
-bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
-    NodeId rid = g.resolve_ref(node_id);
-    const Node& n = g.node(rid);
+// Forward declaration: variant that takes an explicit peek_value (used by
+// the container=None deep walk when simulating pending-name consumption).
+bool can_consume_peek(const Grammar& g, NodeId node_id,
+                      ValuePtr peek_value, const std::string& peek_key,
+                      const SaveState& s);
 
+bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
     // What value would the alt see? Either the pending-name lookup
     // (top dict scope) or the next queue entry.
     ValuePtr peek_value;
@@ -303,6 +307,14 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
         peek_value = s.peek_q().value;
         peek_key   = s.peek_q().key_source;
     }
+    return can_consume_peek(g, node_id, peek_value, peek_key, s);
+}
+
+bool can_consume_peek(const Grammar& g, NodeId node_id,
+                      ValuePtr peek_value, const std::string& peek_key,
+                      const SaveState& s) {
+    NodeId rid = g.resolve_ref(node_id);
+    const Node& n = g.node(rid);
 
     switch (n.kind) {
     case NodeKind::Key: {
@@ -400,6 +412,43 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
             }
             if (found_disc) return true;
         }
+        // Field-presence walk (LEF/DEF prototype's _check_element pattern):
+        // when no Value-const discriminator matched, simulate Value-name
+        // markers updating pending, and require dict-has-field for each
+        // real consumer that follows a pending name marker.
+        if (const DictScope* scope = s.top_dict()) {
+            std::string sim_pending;
+            bool have_sim_pending = false;
+            bool walked_consumer = false;
+            for (NodeId c : n.children) {
+                const Node& cn = g.node(g.resolve_ref(c));
+                if (cn.kind == NodeKind::Value && cn.is_name) {
+                    if (auto sv = std::dynamic_pointer_cast<StringValue>(cn.value)) {
+                        sim_pending = sv->data();
+                        have_sim_pending = true;
+                    }
+                    continue;
+                }
+                if (cn.kind == NodeKind::Value) continue;
+                if (cn.kind == NodeKind::Key) continue;   // structural
+
+                // Real consumer.
+                if (have_sim_pending) {
+                    auto it = scope->dict->data().find(sim_pending);
+                    if (it == scope->dict->data().end()) return false;
+                    // NSEQ semantics: reject alts whose required field
+                    // has already been consumed by a sibling iteration.
+                    // Lets `repeat <choice>` iterate dict fields one at
+                    // a time without picking the same alt twice.
+                    if (scope->consumed.count(sim_pending)) return false;
+                    if (!can_consume_peek(g, c, it->second, sim_pending, s))
+                        return false;
+                    have_sim_pending = false;
+                    walked_consumer = true;
+                }
+            }
+            if (walked_consumer) return true;
+        }
         // Walk children. Logic:
         //   * Value (names + constants) — skip.
         //   * Key with Value-child — discriminator; dispatch via the
@@ -420,9 +469,8 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
                     }
                 }
                 if (has_value_child) {
-                    return can_consume(g, c, s);
+                    return can_consume_peek(g, c, peek_value, peek_key, s);
                 }
-                // Bare Key: key-based dispatch when literal matches.
                 if (cn.value) {
                     auto tok = std::dynamic_pointer_cast<StringValue>(cn.value);
                     if (tok) {
@@ -431,9 +479,9 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
                         if (!peek_key.empty() && peek_key == tok->data()) return true;
                     }
                 }
-                continue;   // structural pass-through
+                continue;
             }
-            return can_consume(g, c, s);
+            return can_consume_peek(g, c, peek_value, peek_key, s);
         }
         return false;
     }
@@ -448,7 +496,7 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
         return true;
 
     case NodeKind::Ref:
-        return can_consume(g, g.resolve_ref(node_id), s);
+        return can_consume_peek(g, g.resolve_ref(node_id), peek_value, peek_key, s);
     }
     return false;
 }
@@ -571,23 +619,24 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     case NodeKind::Sequence: {
         if (n.container == Container::None) {
             // Walk children in order with the same state.
-            // Optional sequences: if any child fails AND no emission has
-            // happened yet, restore and skip.
-            if (n.is_optional) {
-                auto snap = s.snapshot();
-                std::ostringstream trial_out;
-                bool ok = true;
-                for (NodeId c : n.children) {
-                    auto r = do_consume(g, trial_out, c, s, depth, pretty);
-                    if (!r) { ok = false; break; }
-                }
-                if (ok) {
-                    out << trial_out.str();
-                } else {
-                    s.restore(snap);
-                    // Clear pending-lookup that may now reference a
-                    // missing field (the optional opted out).
+            // Optional sequences: use can_consume as a read-only check
+            // (the LEF/DEF prototype's two-pass pattern) — if any
+            // consumer would fail to find its data, skip the whole
+            // block silently; otherwise commit. Avoids state-restore
+            // bugs from the older trial-output approach.
+            // Use-site optional (e.g. `?<RULE>`) lives on the Ref node,
+            // not the resolved rule. Walk the Ref chain to detect both.
+            if (n.is_optional || node_is_optional_chain(g, node_id)) {
+                // Read-only check (LEF/DEF prototype's _check_element):
+                // if the wrapper's bindings + consumers can't all match
+                // the current state, skip silently.
+                if (!can_consume(g, rid, s)) {
                     s.clear_pending();
+                    return {};
+                }
+                for (NodeId c : n.children) {
+                    auto r = do_consume(g, out, c, s, depth, pretty);
+                    if (!r) return r;
                 }
                 return {};
             }
@@ -636,10 +685,13 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         if (!dict) return tl::unexpected(SaveError{
             "expected DictValue for container=Dict sequence"});
 
-        if (has_name_markers(g, n)) {
+        if (has_name_markers(g, n) || n.fixed_schema) {
             // Fixed-schema: walk children with the dict pushed as a
             // scope. Value-name markers update pending; consumers
-            // pull from the dict by name.
+            // pull from the dict by name. The `fixed_schema` flag is
+            // an explicit override for cases where the named fields
+            // live inside nested rules (e.g. via a Ref/Choice) and
+            // `has_name_markers` can't see them.
             SaveState inner;
             inner.push_dict(*dict);
             for (NodeId c : n.children) {

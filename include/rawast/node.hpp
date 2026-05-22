@@ -64,6 +64,12 @@ public:
     // (the EDA `+ FOO / + BAR / + BAZ` pattern). Off by default.
     bool backtrack     = false;
 
+    // Save-direction: force fixed-schema scope push on a Sequence with
+    // container=Dict, even when has_name_markers can't detect the named
+    // fields (e.g. because they live inside a referenced sub-rule). Set
+    // by the grammar via `"fixed_schema": true` in JSON form.
+    bool fixed_schema  = false;
+
     // Carried for Key, Parse, Value kinds.
     //   Key   - StringValue holding the literal token to match.
     //   Parse - StringValue holding the name of the terminal parser to invoke.

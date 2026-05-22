@@ -80,6 +80,61 @@ std::string unescape(const std::string& raw) {
     return out;
 }
 
+// One parsed binding entry — extracted from either the canonical array
+// form or the legacy dict form. Empty `name` (with value "@") is the
+// var-binding sentinel; the loader sets is_name on the surrounding expr.
+struct BindingEntry {
+    std::string name;
+    ValuePtr    value;
+};
+
+// Extract binding entries from a `bindings` field value. Accepts:
+//   - Array of {name, value} dicts (canonical form, preserves order).
+//     A missing `name` field is treated as empty (var sentinel).
+//   - Dict of name→value pairs (deprecated legacy form, std::map order).
+//   - nullptr (no bindings field) → returns an empty vector.
+tl::expected<std::vector<BindingEntry>, std::string>
+extract_bindings(const ValuePtr& bindings_val) {
+    std::vector<BindingEntry> entries;
+    if (!bindings_val) return entries;
+
+    if (auto arr = std::dynamic_pointer_cast<ArrayValue>(bindings_val)) {
+        for (const auto& e : arr->data()) {
+            auto ed = std::dynamic_pointer_cast<DictValue>(e);
+            if (!ed) {
+                return tl::unexpected(
+                    "bindings: array entry must be a dict {name, value}");
+            }
+            std::string name;
+            if (auto nit = ed->data().find("name");
+                nit != ed->data().end()) {
+                auto ns = std::dynamic_pointer_cast<StringValue>(nit->second);
+                if (!ns) {
+                    return tl::unexpected(
+                        "bindings: entry 'name' must be a string");
+                }
+                name = ns->data();
+            }
+            ValuePtr value;
+            if (auto vit = ed->data().find("value");
+                vit != ed->data().end()) {
+                value = vit->second;
+            }
+            entries.push_back({std::move(name), std::move(value)});
+        }
+        return entries;
+    }
+
+    if (auto dict = std::dynamic_pointer_cast<DictValue>(bindings_val)) {
+        for (const auto& [name, value] : dict->data()) {
+            entries.push_back({name, value});
+        }
+        return entries;
+    }
+
+    return tl::unexpected("bindings: must be an array or dict");
+}
+
 // Apply pretty-print attributes (depth/indent flags + tail string) read
 // from a dict (either a top-level node body or an ITEM wrapper) to a
 // built Node. Universal — callable on any node kind.
@@ -150,27 +205,22 @@ build_item(Grammar& g, const Value& val) {
             }
         }
         if (expr_it != dv->data().end() && !has_legacy_type) {
-            std::shared_ptr<DictValue> bindings_dict;
-            if (auto bit = dv->data().find("bindings");
-                bit != dv->data().end()) {
-                bindings_dict = std::dynamic_pointer_cast<DictValue>(bit->second);
-                if (!bindings_dict) {
-                    return tl::unexpected("multi-binding: 'bindings' must be a dict");
-                }
-            }
+            auto entries_r = extract_bindings(dict_value(*dv, "bindings"));
+            if (!entries_r) return tl::unexpected(entries_r.error());
+            const auto& entries = *entries_r;
             if (!expr_it->second) {
                 return tl::unexpected("multi-binding: null expr");
             }
             bool only_var = false;
-            std::size_t total = bindings_dict ? bindings_dict->data().size() : 0;
-            if (total == 0) {
+            if (entries.empty()) {
                 // bare
-            } else if (total == 1) {
-                if (bindings_dict->data().count("")) {
-                    only_var = true;
-                } else if (auto it = bindings_dict->data().find("type");
-                           it != bindings_dict->data().end()) {
-                    auto sv = std::dynamic_pointer_cast<StringValue>(it->second);
+            } else if (entries.size() == 1) {
+                const auto& e = entries[0];
+                if (e.name.empty()) {
+                    only_var = true;   // empty-name = var sentinel
+                } else if (e.name == "type") {
+                    // Back-compat: {type: "var"} also sets is_name on expr.
+                    auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
                     if (sv && sv->data() == "var") only_var = true;
                 }
                 if (!only_var) {
@@ -270,15 +320,10 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 }
             }
             if (expr_it != item_dict->data().end() && !has_legacy_type) {
-                std::shared_ptr<DictValue> bindings_dict;
-                if (auto bit = item_dict->data().find("bindings");
-                    bit != item_dict->data().end()) {
-                    bindings_dict = std::dynamic_pointer_cast<DictValue>(bit->second);
-                    if (!bindings_dict) {
-                        return tl::unexpected(
-                            "multi-binding: 'bindings' must be a dict");
-                    }
-                }
+                auto entries_r = extract_bindings(
+                    dict_value(*item_dict, "bindings"));
+                if (!entries_r) return tl::unexpected(entries_r.error());
+                const auto& entries = *entries_r;
                 if (!expr_it->second) {
                     return tl::unexpected("multi-binding: null expr");
                 }
@@ -287,16 +332,15 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 std::vector<std::pair<std::string, ValuePtr>> at_bindings;
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
-                if (bindings_dict)
-                for (const auto& [name, value] : bindings_dict->data()) {
-                    // Empty-name key is the var sentinel from :=@ syntax.
-                    if (name.empty()) {
+                for (const auto& e : entries) {
+                    // Empty-name = var sentinel from :=@ syntax.
+                    if (e.name.empty()) {
                         set_var = true;
                         continue;
                     }
                     // Back-compat: {type: "var"} also sets is_name on expr.
-                    if (name == "type") {
-                        if (auto sv = std::dynamic_pointer_cast<StringValue>(value)) {
+                    if (e.name == "type") {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {
                             if (sv->data() == "var") {
                                 set_var = true;
                                 continue;
@@ -304,13 +348,13 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         }
                     }
                     // Value "@" means "bind to expr's parsed value".
-                    if (auto sv = std::dynamic_pointer_cast<StringValue>(value)) {
+                    if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {
                         if (sv->data() == "@") {
-                            at_bindings.push_back({name, value});
+                            at_bindings.push_back({e.name, e.value});
                             continue;
                         }
                     }
-                    const_bindings.push_back({name, value});
+                    const_bindings.push_back({e.name, e.value});
                 }
 
                 if (at_bindings.size() > 1) {
@@ -319,30 +363,54 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         "(would need multiple consumers to pair with)");
                 }
 
-                // (1) @-binding name marker BEFORE expr (so the expr
-                // pairs with the pending name in the surrounding catcher).
-                for (auto& [name, _] : at_bindings) {
-                    NodeId vn = g.new_value(make_string(name));
-                    g.set_name(vn);
-                    g.node(target).children.push_back(vn);
-                }
-
-                // (2) The expr.
+                // Build the expr first so we can detect is_optional and
+                // scope the bindings inside the same optional unit.
                 auto expr_child = build_inline(g, *expr_it->second);
                 if (!expr_child) return tl::unexpected(expr_child.error());
                 if (set_var) g.set_name(*expr_child);
                 apply_pretty_attrs(g, *expr_child, *item_dict);
-                g.node(target).children.push_back(*expr_child);
 
-                // (3) Const bindings AFTER expr — each is Value-name +
-                // Value-const, emitting (name, value) into the
-                // surrounding catcher independently.
+                // Conditional bindings: when the expr is optional AND
+                // there are CONST bindings (e.g. `?X:flag=true`), wrap
+                // the whole [@-bindings, expr, const-bindings] block in
+                // a new sequence and move is_optional onto the wrapper.
+                // Const bindings emit unconditionally as siblings, so
+                // without the wrap they'd fire even when the optional
+                // rewinds. At-bindings alone (`?X:name=@`) work without
+                // wrap because the V-name's pending gets overwritten
+                // by the next field's V-name on the parse side.
+                const bool wrap_optional =
+                    g.node(*expr_child).is_optional && !const_bindings.empty();
+                NodeId append_to = target;
+                NodeId wrapper_id;
+                if (wrap_optional) {
+                    wrapper_id = g.new_sequence();
+                    g.set_optional(wrapper_id);
+                    g.node(*expr_child).is_optional = false;
+                    append_to = wrapper_id;
+                }
+
+                // (1) @-binding name marker BEFORE expr.
+                for (auto& [name, _] : at_bindings) {
+                    NodeId vn = g.new_value(make_string(name));
+                    g.set_name(vn);
+                    g.node(append_to).children.push_back(vn);
+                }
+
+                // (2) The expr.
+                g.node(append_to).children.push_back(*expr_child);
+
+                // (3) Const bindings AFTER expr.
                 for (auto& [name, value] : const_bindings) {
                     NodeId vn = g.new_value(make_string(name));
                     g.set_name(vn);
-                    g.node(target).children.push_back(vn);
+                    g.node(append_to).children.push_back(vn);
                     NodeId vc = g.new_value(value ? value : null_value());
-                    g.node(target).children.push_back(vc);
+                    g.node(append_to).children.push_back(vc);
+                }
+
+                if (wrap_optional) {
+                    g.node(target).children.push_back(wrapper_id);
                 }
 
                 continue;
@@ -518,6 +586,13 @@ populate(Grammar& g, NodeId target, const Value& body) {
     // NodeKind::Choice.
     if (dict_bool(*dv, "backtrack")) {
         g.set_backtrack(target);
+    }
+
+    // "fixed_schema" field — force a Sequence container=Dict to push
+    // a dict scope (not flatten) so consumers in nested sub-rules can
+    // do field-by-name lookups. Only meaningful on Sequence/Dict.
+    if (dict_bool(*dv, "fixed_schema")) {
+        g.set_fixed_schema(target);
     }
 
     // Pretty-print attrs (indent/tab/space/newline/tail) — universal,
