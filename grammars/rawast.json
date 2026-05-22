@@ -377,27 +377,12 @@
   "CONSTANT": {
     "type": "choice",
     "items": [
-      {
-        "expr": {
-          "type": "key",
-          "key": "null",
-          "value": null
-        }
-      },
-      {
-        "expr": {
-          "type": "key",
-          "key": "true",
-          "value": true
-        }
-      },
-      {
-        "expr": {
-          "type": "key",
-          "key": "false",
-          "value": false
-        }
-      }
+      {"expr": {"type": "string"}},
+      {"expr": {"type": "float"}},
+      {"expr": {"type": "int"}},
+      {"expr": {"type": "key", "key": "null",  "value": null}},
+      {"expr": {"type": "key", "key": "true",  "value": true}},
+      {"expr": {"type": "key", "key": "false", "value": false}}
     ]
   },
   "PARSE_EXPR": {
@@ -572,7 +557,7 @@
   },
   "BINDINGS_NONEMPTY": {
     "type": "sequence",
-    "container": "dict",
+    "container": "array",
     "items": [
       {
         "expr": "BIND_ENTRY"
@@ -589,6 +574,8 @@
   },
   "BIND_ENTRY": {
     "type": "sequence",
+    "container": "dict",
+    "fixed_schema": true,
     "items": [
       {
         "expr": {
@@ -597,36 +584,43 @@
         }
       },
       {
-        "expr": "BIND_NAME"
-      },
-      {
-        "expr": {
-          "type": "key",
-          "key": "="
-        }
-      },
-      {
-        "expr": "BIND_RHS"
+        "expr": "BIND_EXPR"
       }
     ]
   },
-  "BIND_NAME": {
+  "BIND_EXPR": {
     "type": "choice",
     "items": [
+      {"expr": "NAME_BIND"},
+      {"expr": "VALUE_BIND"}
+    ]
+  },
+  "NAME_BIND": {
+    "type": "sequence",
+    "items": [
       {
-        "expr": {
-          "type": "identifier"
-        },
-        "bindings": {
-          "": "@"
-        }
+        "expr": {"type": "key", "key": "="},
+        "bindings": [{"name": "var", "value": true}]
       },
       {
-        "expr": {
-          "type": "value",
-          "value": "",
-          "var": true
-        }
+        "expr": "BIND_RHS",
+        "bindings": [{"name": "value", "value": "@"}]
+      }
+    ]
+  },
+  "VALUE_BIND": {
+    "type": "sequence",
+    "items": [
+      {
+        "expr": {"type": "identifier"},
+        "bindings": [{"name": "name", "value": "@"}]
+      },
+      {
+        "expr": {"type": "key", "key": "="}
+      },
+      {
+        "expr": "BIND_RHS",
+        "bindings": [{"name": "value", "value": "@"}]
       }
     ]
   },

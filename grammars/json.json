@@ -15,7 +15,8 @@
   // `bindings` field is OMITTED when empty — bare items collapse to
   // just `{"expr": <X>}`. This matches what the .rawast meta-grammar
   // produces, letting JSON and .rawast forms round-trip cleanly.
-  // Var binding (parsed value becomes dict key) is `{"bindings": {"": "@"}}`.
+  // Bindings is an ordered array of {name, value} entries. Var binding
+  // (parsed value becomes dict key) is `{"bindings": [{"name": "", "value": "@"}]}`.
 
   "VALUE": {
     "type": "choice",
@@ -48,7 +49,7 @@
   "PAIR": {
     "type": "sequence",
     "items": [
-      {"expr": {"type": "string"}, "bindings": {"": "@"}},
+      {"expr": {"type": "string"}, "bindings": [{"name": "", "value": "@"}]},
       {"expr": {"type": "key", "key": ":"}},
       {"expr": "VALUE"}
     ]
