@@ -292,22 +292,21 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
     for (const auto& item : arr->data()) {
         if (!item) return tl::unexpected(kind_label + ": null item in 'items'");
 
-        // Detect binding-wrapper shape.
+        // Detect binding-wrapper shape — two forms accepted:
+        //   * Wrapper: {"expr": <X>, "bindings": [...]}   — EXPR nested.
+        //   * Flat:    {"type": ..., "items": ..., "bindings": [...]}
+        //              EXPR's fields flatten into the item dict at top
+        //              level (the rawast.rawast design draft shape).
+        // Either way, the item-level "bindings" field expands into
+        // Value-name + Value-const sibling pairs around the expr.
+        //
+        // Skip this path if the dict has a recognised legacy `type`
+        // field value (bare/var/binding/binding_const) — those are
+        // handled by the legacy handler below. The new flat form uses
+        // structural type values (sequence/choice/key/parse/...) which
+        // don't collide with the legacy markers.
         if (auto item_dict = std::dynamic_pointer_cast<DictValue>(item)) {
             auto expr_it = item_dict->data().find("expr");
-
-            // New multi-binding form: ITEM dict with `expr` plus an
-            // optional `bindings` dict field (defaults to empty when
-            // absent — bare item). The bindings dict expands into
-            // Value-name markers + Value-const constants around the
-            // expr. Special empty-name key ("" → "@") is the var
-            // sentinel from `:=@` syntax: sets is_name on the expr.
-            // Special value "@" pairs with the expr's parsed value
-            // (at most one such per item).
-            //
-            // Skip this path if the dict ALSO has a recognised legacy
-            // `type` field (bare/var/binding/binding_const) — the
-            // legacy handler below owns it.
             bool has_legacy_type = false;
             if (auto type_it = item_dict->data().find("type");
                 type_it != item_dict->data().end()) {
@@ -319,12 +318,26 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     }
                 }
             }
-            if (expr_it != item_dict->data().end() && !has_legacy_type) {
+
+            // Flat form detection: no `expr` field, but a structural
+            // `type` field is present (sequence/choice/key/parse/etc.).
+            const bool is_flat = (expr_it == item_dict->data().end())
+                                 && item_dict->data().count("type")
+                                 && !has_legacy_type;
+
+            // Take the wrapper path when EITHER an `expr` field is
+            // present (wrapper form) OR the item is a flat-form item.
+            if ((expr_it != item_dict->data().end() && !has_legacy_type)
+                || is_flat) {
                 auto entries_r = extract_bindings(
                     dict_value(*item_dict, "bindings"));
                 if (!entries_r) return tl::unexpected(entries_r.error());
                 const auto& entries = *entries_r;
-                if (!expr_it->second) {
+                // For wrapper form: expr is in the `expr` field.
+                // For flat form:    expr IS the item dict itself
+                //                   (populate() ignores `bindings`).
+                ValuePtr expr_source = is_flat ? item : expr_it->second;
+                if (!expr_source) {
                     return tl::unexpected("multi-binding: null expr");
                 }
 
@@ -365,10 +378,13 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
 
                 // Build the expr first so we can detect is_optional and
                 // scope the bindings inside the same optional unit.
-                auto expr_child = build_inline(g, *expr_it->second);
+                auto expr_child = build_inline(g, *expr_source);
                 if (!expr_child) return tl::unexpected(expr_child.error());
                 if (set_var) g.set_name(*expr_child);
-                apply_pretty_attrs(g, *expr_child, *item_dict);
+                // For wrapper form, pretty attrs live on the wrapper.
+                // For flat form, populate() already applied them to the
+                // expr node (since item dict IS the expr source).
+                if (!is_flat) apply_pretty_attrs(g, *expr_child, *item_dict);
 
                 // Conditional bindings: when the expr is optional AND
                 // there are CONST bindings (e.g. `?X:flag=true`), wrap
