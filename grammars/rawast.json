@@ -11,10 +11,10 @@
   "FILE": {
     "type": "sequence",
     "container": "dict",
-    "items": [
+    "value": [
       {
         "type": "repeat",
-        "item": {
+        "value": {
           "type": "FILE_ENTRY"
         }
       }
@@ -23,7 +23,7 @@
   "FILE_ENTRY": {
     "type": "choice",
     "newline": true,
-    "items": [
+    "value": [
       {
         "type": "USE_DECL"
       },
@@ -40,7 +40,7 @@
   },
   "USE_DECL": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "use"
@@ -62,7 +62,7 @@
   },
   "IGNORE_DECL": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "ignore"
@@ -85,14 +85,14 @@
   "IDENT_LIST": {
     "type": "sequence",
     "container": "array",
-    "items": [
+    "value": [
       {
         "type": "repeat",
         "separator": {
           "type": "key",
           "key": ","
         },
-        "item": {
+        "value": {
           "type": "identifier"
         }
       }
@@ -100,7 +100,7 @@
   },
   "RULE_DEF": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "identifier",
         "bindings": [
@@ -121,7 +121,7 @@
   },
   "EXPR": {
     "type": "choice",
-    "items": [
+    "value": [
       {
         "type": "SEQUENCE_EXPR"
       },
@@ -144,7 +144,7 @@
   },
   "REF": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "<"
@@ -166,7 +166,7 @@
   },
   "SEQUENCE_EXPR": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "sequence",
@@ -195,7 +195,7 @@
         "type": "ITEMS",
         "bindings": [
           {
-            "name": "items",
+            "name": "value",
             "value": "@"
           }
         ]
@@ -208,7 +208,7 @@
   },
   "CONTAINER_KIND": {
     "type": "choice",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "array",
@@ -223,7 +223,7 @@
   },
   "CHOICE_EXPR": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "choice",
@@ -242,7 +242,7 @@
         "type": "ITEMS",
         "bindings": [
           {
-            "name": "items",
+            "name": "value",
             "value": "@"
           }
         ]
@@ -255,7 +255,7 @@
   },
   "REPEAT_EXPR": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "repeat",
@@ -270,7 +270,7 @@
         "type": "ITEM",
         "bindings": [
           {
-            "name": "item",
+            "name": "value",
             "value": "@"
           }
         ]
@@ -282,7 +282,7 @@
   },
   "KEY_EXPR": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "string",
         "bindings": [
@@ -304,7 +304,7 @@
   },
   "CONSTANT": {
     "type": "choice",
-    "items": [
+    "value": [
       {
         "type": "string"
       },
@@ -333,7 +333,7 @@
   },
   "PARSE_EXPR": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "identifier",
         "bindings": [
@@ -348,14 +348,14 @@
   "ITEMS": {
     "type": "sequence",
     "container": "array",
-    "items": [
+    "value": [
       {
         "type": "repeat",
         "separator": {
           "type": "key",
           "key": ","
         },
-        "item": {
+        "value": {
           "type": "ITEM"
         }
       }
@@ -364,7 +364,7 @@
   "ITEM": {
     "type": "sequence",
     "container": "dict",
-    "items": [
+    "value": [
       {
         "expr": {
           "type": "optional",
@@ -394,7 +394,7 @@
       },
       {
         "type": "repeat",
-        "item": {
+        "value": {
           "type": "POSTFIX_ATTR"
         }
       }
@@ -402,7 +402,7 @@
   },
   "POSTFIX_ATTR": {
     "type": "choice",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "indent",
@@ -450,7 +450,7 @@
   },
   "TAIL_ATTR": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "tail"
@@ -473,7 +473,7 @@
   "BINDINGS": {
     "type": "sequence",
     "optional": true,
-    "items": [
+    "value": [
       {
         "type": "BINDINGS_NONEMPTY"
       }
@@ -482,7 +482,7 @@
   "BINDING": {
     "type": "sequence",
     "container": "dict",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": ":"
@@ -494,7 +494,7 @@
   },
   "BIND_EXPR": {
     "type": "choice",
-    "items": [
+    "value": [
       {
         "type": "NAME_BIND"
       },
@@ -505,7 +505,7 @@
   },
   "NAME_BIND": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "=",
@@ -529,7 +529,7 @@
   },
   "VALUE_BIND": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "identifier",
         "bindings": [
@@ -556,7 +556,7 @@
   },
   "BIND_VAL": {
     "type": "choice",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "@",
@@ -569,7 +569,7 @@
   },
   "START_DECL": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "start"
@@ -592,7 +592,7 @@
   "START_VAL": {
     "type": "sequence",
     "container": "dict",
-    "items": [
+    "value": [
       {
         "type": "REF"
       }
@@ -600,14 +600,14 @@
   },
   "KEY_VALUE": {
     "type": "sequence",
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": ":"
       },
       {
         "type": "choice",
-        "items": [
+        "value": [
           {
             "type": "key",
             "key": "@",
@@ -634,13 +634,13 @@
   "BINDINGS_NONEMPTY": {
     "type": "sequence",
     "container": "array",
-    "items": [
+    "value": [
       {
         "type": "BINDING"
       },
       {
         "type": "repeat",
-        "item": {
+        "value": {
           "type": "BINDING"
         }
       }
@@ -649,7 +649,7 @@
   "SEPARATOR_OPT": {
     "type": "sequence",
     "optional": true,
-    "items": [
+    "value": [
       {
         "type": "key",
         "key": "separator"

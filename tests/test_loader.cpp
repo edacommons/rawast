@@ -269,7 +269,7 @@ TEST_CASE("Loaded .rawast grammar parses a choice of parser-name expressions") {
     REQUIRE(type_v);
     CHECK(type_v->data() == "choice");
 
-    auto items_v = std::dynamic_pointer_cast<ArrayValue>(choice_dict->data().at("items"));
+    auto items_v = std::dynamic_pointer_cast<ArrayValue>(choice_dict->data().at("value"));
     REQUIRE(items_v);
     CHECK(items_v->data().size() == 3);
 }
@@ -294,7 +294,7 @@ TEST_CASE("Loaded .rawast grammar parses a sequence with array container") {
     auto cont_v = std::dynamic_pointer_cast<StringValue>(list_dict->data().at("container"));
     REQUIRE(cont_v);
     CHECK(cont_v->data() == "array");
-    REQUIRE(list_dict->data().count("items") == 1);
+    REQUIRE(list_dict->data().count("value") == 1);
 }
 
 TEST_CASE("Loaded .rawast grammar parses a sequence without container") {

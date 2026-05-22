@@ -106,7 +106,7 @@ def test_rawast_format_browses_rawast_file_as_dict():
     # JSON-form would for an equivalent grammar.
     assert data["LIBRARY"]["type"] == "sequence"
     assert data["LIBRARY"]["container"] == "dict"
-    assert len(data["LIBRARY"]["items"]) > 5
+    assert len(data["LIBRARY"]["value"]) > 5
 
 
 def test_from_dict_compiles_runtime_grammar():

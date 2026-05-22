@@ -641,7 +641,11 @@ populate(Grammar& g, NodeId target, const Value& body) {
     }
 
     if (type == "sequence" || type == "choice") {
-        return append_items_array(g, target, dict_value(*dv, "items"), type);
+        // Accept the canonical `value` field (the field name the .rawast
+        // meta-grammar emits) alongside the legacy `items` JSON shape.
+        auto items_val = dict_value(*dv, "value");
+        if (!items_val) items_val = dict_value(*dv, "items");
+        return append_items_array(g, target, items_val, type);
     }
 
     if (type == "repeat") {
@@ -650,8 +654,11 @@ populate(Grammar& g, NodeId target, const Value& body) {
             if (!sep_r) return tl::unexpected(sep_r.error());
             g.set_separator(target, *sep_r);
         }
-        auto item_val = dict_value(*dv, "item");
-        if (!item_val) return tl::unexpected("repeat: missing 'item'");
+        // Accept `value` (canonical) alongside legacy `item` for the
+        // repeat's body.
+        auto item_val = dict_value(*dv, "value");
+        if (!item_val) item_val = dict_value(*dv, "item");
+        if (!item_val) return tl::unexpected("repeat: missing 'item'/'value'");
         auto item_r = build_item(g, *item_val);
         if (!item_r) return tl::unexpected(item_r.error());
         g.node(target).children.push_back(*item_r);

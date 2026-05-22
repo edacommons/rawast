@@ -107,8 +107,8 @@ def test_save_bare_item_emits_no_binding_suffix():
     meta = rawast.rawast_format()
     data = {
         "start": {"type": "X"},
-        "X": {"type": "sequence", "container": "array", "items": [
-            {"type": "repeat", "item": {"type": "Y"}}
+        "X": {"type": "sequence", "container": "array", "value": [
+            {"type": "repeat", "value": {"type": "Y"}}
         ]},
         "Y": {"type": "identifier"},
     }
