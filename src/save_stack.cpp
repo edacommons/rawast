@@ -412,10 +412,12 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             }
             if (found_disc) return true;
         }
-        // Field-presence walk (LEF/DEF prototype's _check_element pattern):
-        // when no Value-const discriminator matched, simulate Value-name
-        // markers updating pending, and require dict-has-field for each
-        // real consumer that follows a pending name marker.
+        // Field-presence walk: when no Value-const discriminator matched,
+        // simulate Value-name markers updating pending, and require
+        // dict-has-field for each real consumer that follows a pending
+        // name marker. Lets alts whose only discriminator is "this
+        // field must exist" (rather than "this field must equal a
+        // constant") still self-discriminate during Choice dispatch.
         if (const DictScope* scope = s.top_dict()) {
             std::string sim_pending;
             bool have_sim_pending = false;
@@ -620,16 +622,16 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         if (n.container == Container::None) {
             // Walk children in order with the same state.
             // Optional sequences: use can_consume as a read-only check
-            // (the LEF/DEF prototype's two-pass pattern) — if any
-            // consumer would fail to find its data, skip the whole
-            // block silently; otherwise commit. Avoids state-restore
-            // bugs from the older trial-output approach.
+            // — if any consumer would fail to find its data, skip the
+            // whole block silently; otherwise commit. Two-pass design
+            // (check then write) avoids the state-restore bugs of an
+            // earlier trial-output approach.
+            //
             // Use-site optional (e.g. `?<RULE>`) lives on the Ref node,
             // not the resolved rule. Walk the Ref chain to detect both.
             if (n.is_optional || node_is_optional_chain(g, node_id)) {
-                // Read-only check (LEF/DEF prototype's _check_element):
-                // if the wrapper's bindings + consumers can't all match
-                // the current state, skip silently.
+                // Read-only check: if the wrapper's bindings + consumers
+                // can't all match the current state, skip silently.
                 if (!can_consume(g, rid, s)) {
                     s.clear_pending();
                     return {};

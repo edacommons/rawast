@@ -74,9 +74,9 @@ TEST_CASE("Choice handles shared-prefix alternatives by default") {
     // Build a Choice between two alternatives that share a leading "a":
     //   alt1: "a" "b"
     //   alt2: "a" "c"
-    // Backtrack is default-on (standard PEG semantics, matches the
-    // LEF/DEF prototype): "ac" parses successfully because alt1 fails on
-    // "b" and the engine rewinds to try alt2, which matches.
+    // Backtrack is default-on (standard PEG semantics): "ac" parses
+    // successfully because alt1 fails on "b" and the engine rewinds
+    // to try alt2, which matches.
     Grammar g;
     NodeId top = g.new_choice();
     g.register_rule("TOP", top);

@@ -1,31 +1,15 @@
 // lefdef.rawast — LEF/DEF grammar (subset)
 //
-// Ported from astrw/lefdefrw/lefdefschema.py. Covers HDR, DESIGN_CMD,
-// UNITS, DIEAREA, ORIENT, ROW_CMD — enough to exercise:
-//   - unordered command sets (`_NSEQ → repeat choice`)
-//   - keyword-tagged dicts (`_STRUCT + _SEQ(..., Type=...)`)
-//   - conditional bindings on optional sub-blocks (Phase 3)
-//   - sized arrays (treated as `repeat <item>`; count validation app-side)
+// Covers HDR, DESIGN_CMD, UNITS, DIEAREA, ORIENT, ROW_CMD — enough to
+// exercise the patterns that matter for EDA grammars:
+//   - keyword-tagged dicts on a statement boundary
+//   - conditional bindings on optional sub-blocks
+//   - delimited coordinate arrays
 //   - shared-prefix Choice (handled by default backtracking)
 //
 // Intentionally omitted (large nested rules): TRACKS_CMD, VIAS,
 // COMPONENTS, PINS, BLOCKAGES, SPECNETS, NETS. Adding any of them is
 // mechanical once the patterns here are accepted.
-//
-// Translation legend:
-//   _KEY("X")               → "X"
-//   _KEY("X", val)          → "X":val
-//   _VAR(item, "Name")      → item:name=@
-//   _SEQ(..., Type="X")     → "FIRST_KEY":type="X" (binding on first key)
-//   _OPT(item)              → ?<item>
-//   _OPT(item, Flag=True)   → ?<item>:flag=true     (Phase 3 conditional)
-//   _CHOICE(...)            → choice { ... }
-//   _STRUCT(SEQ(...))       → sequence dict { ... }
-//   _REPEAT(item)           → repeat <item>
-//   _ARRAY(item)            → sequence array { repeat <item> }
-//   _ARRAY(item, n)         → same — count check moves to app layer
-//   _NSEQ(*items)           → sequence dict { repeat <choice {...}> }
-//   _END_CMD                → ";" newline
 
 use: std, lefdef
 ignore: whitespace, line_comment
@@ -87,8 +71,8 @@ XY: sequence array { "(" space, int space, int space, ")" space }
 
 // === Orientation keywords =================================================
 
-// `_CHOICE(_KEY("N", "North"), ...)` — each alternative matches a one-or
-// two-letter token and emits the canonical name as the choice's value.
+// Each alternative matches a one-or two-letter token and emits the
+// canonical name as the choice's value (LEF/DEF spec orientation set).
 ORIENT: choice {
   "N":"North",
   "S":"South",
@@ -111,14 +95,12 @@ DESIGN_ITEM: choice {
 
 // === ROW command =========================================================
 //
-// Original Python:
-//   "ROW_CMD": _STRUCT(_SEQ(_KEY("ROW"), _VAR(str, "Name"), _VAR(str, "Site"),
-//                _VAR(_ARRAY(int, 2), "Origin"), _VAR("ORIENT", "Orient"),
-//                _OPT(_SEQ(_KEY("DO"), _VAR(int, "NX"),
-//                          _KEY("BY"), _VAR(int, "NY"),
-//                _OPT(_SEQ(_KEY("STEP"), _VAR(int, "DX"), _VAR(int, "DY")))
-//                )),
-//                _END_CMD, Type="Row"))
+//   ROW <name> <site> <x> <y> <orient>
+//       [ DO <nx> BY <ny> [ STEP <dx> <dy> ] ] ;
+//
+// Exercises the conditional binding semantics: the inner DO/BY/STEP
+// chain emits its `nx`/`ny`/`dx`/`dy` fields only when the optional
+// block actually matched.
 
 ROW_CMD: sequence dict {
   "ROW":type="Row" space,
@@ -133,8 +115,8 @@ ROW_CMD: sequence dict {
 // ROW origin: two ints. Same "no enforced count" stance as XY.
 ROW_ORIGIN: sequence array { int space, int space }
 
-// `_OPT(_SEQ(_KEY("DO"), int:NX, _KEY("BY"), int:NY, _OPT(...)))`.
-// No container — its bindings flow up into ROW_CMD's dict.
+// DO/BY clause: optional, may itself contain an optional STEP. No
+// container on the sub-rule — bindings flow up into ROW_CMD's dict.
 ROW_DO_OPT: sequence {
   "DO" space, int:nx=@ space, "BY" space, int:ny=@ space,
   ?<ROW_STEP_OPT>

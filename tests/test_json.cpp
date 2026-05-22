@@ -203,9 +203,10 @@ TEST_CASE("JSON grammar fails on malformed input") {
     CHECK_FALSE(r2);
 }
 
-TEST_CASE("JSON grammar parses the astrw prototype's smoke-test input") {
+TEST_CASE("JSON grammar parses a mixed-shape smoke-test input") {
     auto g = make_json_grammar();
-    // Same string the astrw prototype's main() commented out.
+    // Top-level array exercises ints, floats, exponents, signs,
+    // bare-fraction floats (`.3`), nested arrays, and a nested dict.
     auto r = parse_json(g, R"([[123],[2,-4.1,7],[12],{"abc":[-12]},[null,true,false],-.3,.3,-.1e10,1e2,-1e-3])");
     REQUIRE(r);
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*r);

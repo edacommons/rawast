@@ -14,10 +14,11 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     is_optional_    = n.is_optional;
     is_name_        = n.is_name;
     has_separator_  = n.has_separator;
-    // Backtrack is default-on (standard PEG semantics, matches the
-    // LEF/DEF prototype's _parsed_ok save_ptr/restore_ptr pattern).
-    // The Node::backtrack flag is retained for grammar/lint introspection
-    // but no longer gates runtime behavior.
+    // Backtrack is default-on for Choice frames (standard PEG semantics:
+    // each alternative attempt is wrapped in mark/reject so a partial
+    // match can rewind cleanly). The Node::backtrack flag is retained
+    // for grammar/lint introspection but no longer gates runtime
+    // behavior on Choice.
     is_backtrack_   = (kind_ == NodeKind::Choice) || n.backtrack;
 
     // Value-kind frames pre-seed emitted_ with their own constant; the
