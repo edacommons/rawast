@@ -1,8 +1,5 @@
 // rawast.rawast — meta-grammar for the .rawast format, written in .rawast.
 //
-// DESIGN DRAFT — not yet executable. The engine + loader still need to
-// support bindings as an ordered array and the flattened ITEM shape.
-//
 // Conventions used here:
 //   - A rule body is an ITEM. EXPR's fields flatten into the ITEM's dict
 //     (no separate `expr` field) — the ITEM dict carries `type`, `value`,
