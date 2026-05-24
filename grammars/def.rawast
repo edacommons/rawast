@@ -38,12 +38,19 @@ FILE: sequence dict {
 
 HDR: sequence dict {
   ?<VERSION_CMD>,
+  ?<NAMESCASESENSITIVE_CMD>,
   ?<DIVIDERCHAR_CMD>,
   ?<BUSBITCHARS_CMD>
 }
-VERSION_CMD:     sequence { "VERSION" space,     identifier:version=@ space,   ";" newline }
-DIVIDERCHAR_CMD: sequence { "DIVIDERCHAR" space, string:divider=@ space,       ";" newline }
-BUSBITCHARS_CMD: sequence { "BUSBITCHARS" space, string:bus_bit_chars=@ space, ";" newline }
+VERSION_CMD:            sequence { "VERSION" space,            identifier:version=@ space,            ";" newline }
+NAMESCASESENSITIVE_CMD: sequence { "NAMESCASESENSITIVE" space, <ON_OFF>:names_case_sensitive=@ space, ";" newline }
+DIVIDERCHAR_CMD:        sequence { "DIVIDERCHAR" space,        string:divider=@ space,                ";" newline }
+BUSBITCHARS_CMD:        sequence { "BUSBITCHARS" space,        string:bus_bit_chars=@ space,          ";" newline }
+
+ON_OFF: choice {
+  "ON":true,
+  "OFF":false
+}
 
 // === DESIGN block ========================================================
 
@@ -57,10 +64,16 @@ DESIGN: sequence dict {
 DESIGN_CMD:    sequence { "DESIGN" space, identifier:name=@ space, ";" newline }
 ENDDESIGN_CMD: sequence { "END" space, "DESIGN" newline }
 
-// DESIGN_INFO — UNITS and DIEAREA. Both required, canonical order.
+// DESIGN_INFO — optional TECHNOLOGY, then required UNITS and DIEAREA in
+// canonical order per DEF 5.8 §4.
 DESIGN_INFO: sequence {
+  ?<TECHNOLOGY_CMD>,
   <UNITS_CMD>,
   <DIEAREA_CMD>
+}
+
+TECHNOLOGY_CMD: sequence {
+  "TECHNOLOGY" space, identifier:technology=@ space, ";" newline
 }
 
 UNITS_CMD: sequence {
@@ -96,8 +109,9 @@ ORIENT: choice {
 
 DESIGN_ITEMS: sequence array { repeat <DESIGN_ITEM> }
 DESIGN_ITEM: choice {
-  <ROW_CMD>
-  // TRACKS, VIAS, COMPONENTS, PINS, BLOCKAGES, SPECNETS, NETS:
+  <ROW_CMD>,
+  <TRACKS_CMD>
+  // VIAS, COMPONENTS, PINS, BLOCKAGES, SPECNETS, NETS:
   // omitted in this PoC subset.
 }
 
@@ -131,4 +145,34 @@ ROW_DO_OPT: sequence {
 }
 ROW_STEP_OPT: sequence {
   "STEP" space, int:dx=@ space, int:dy=@ space
+}
+
+// === TRACKS command ======================================================
+//
+//   TRACKS [X | Y] <coord> DO <count> STEP <step> [LAYER <layer>] ;
+//
+// Direct translation of lefdefschema.py:62-73 from the Python prototype.
+// Simplification: the spec allows multiple layer names per LAYER clause;
+// in practice every real TRACKS line in the corpus has exactly one,
+// so this PoC subset takes one identifier. Extending to a layer array
+// is a one-rule change when needed.
+
+TRACKS_CMD: sequence dict {
+  "TRACKS":type="Tracks" space,
+  <TRACKS_DIRECTION>:direction=@ space,
+  int:start=@ space,
+  "DO" space, int:count=@ space,
+  "STEP" space, int:step=@ space,
+  ?<TRACKS_LAYER>,
+  ";" newline
+}
+
+TRACKS_DIRECTION: choice {
+  "X":"Vertical",
+  "Y":"Horizontal"
+}
+
+TRACKS_LAYER: sequence {
+  "LAYER" space,
+  identifier:layer=@ space
 }
