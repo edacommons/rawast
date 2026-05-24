@@ -68,7 +68,7 @@ LIBRARY: sequence dict {
   gds_units:units=@,
   ?<STRUCTURES>:structures=@,
   gds_endlib,
-  ?gds_padding
+  ?gds_padding:padding_bytes=@
 }
 
 STRUCTURES: sequence array {

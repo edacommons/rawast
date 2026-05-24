@@ -365,18 +365,29 @@ class GdsiiPaddingParser : public Parser {
 public:
     GdsiiPaddingParser() : Parser("gds_padding") {}
     ParseResult parse(StreamReader& sr) override {
-        sr.mark();
+        // No mark/accept envelope: this parser cannot fail, so we
+        // never need to rewind. Skipping the mark means consumed
+        // bytes are NOT buffered by StreamReader, keeping memory at
+        // O(1) regardless of padding size (a malicious file with
+        // gigabytes of trailing NULs would otherwise force buffering
+        // of every byte until accept()).
+        std::int64_t count = 0;
         while (auto b = sr.peek()) {
             if (*b != '\0') break;
             sr.get();
+            ++count;
         }
-        sr.accept();
-        return null_value();
+        return std::make_shared<IntValue>(count);
     }
-    SaveResult unparse(const Value&) const override {
-        // On save we emit no padding — the file just ends after END_LIB.
-        // Tools accept unpadded GDSII; 2048-byte alignment is a
-        // historic mag-tape concern, not a hard requirement.
+    SaveResult unparse(const Value& v) const override {
+        // Round-trip: emit the same number of NUL bytes we consumed
+        // on parse. A value constructed from scratch (no
+        // padding_bytes field set) saves with zero padding — valid
+        // GDSII, just not 2,048-byte-aligned.
+        if (auto* iv = dynamic_cast<const IntValue*>(&v)) {
+            if (iv->data() <= 0) return std::string();
+            return std::string(static_cast<std::size_t>(iv->data()), '\0');
+        }
         return std::string();
     }
 };
