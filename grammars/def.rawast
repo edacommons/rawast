@@ -346,9 +346,7 @@ PIN_PORT: sequence dict {
 
 PIN_PORT_ELEM: choice {
   <PIN_PORT_LAYER>:layer=@,
-  <PIN_PLACED_PROP>:placed=@,
-  <PIN_FIXED_PROP>:fixed=@,
-  <PIN_COVER_PROP>:cover=@
+  <PIN_PLACEMENT_PROP>:placement=@
 }
 
 PIN_PORT_LAYER: sequence dict {
@@ -357,14 +355,20 @@ PIN_PORT_LAYER: sequence dict {
   <BBOX>
 }
 
-PIN_PLACED_PROP: sequence dict {
-  "+" space, "PLACED" space, <XY>:at=@, <ORIENT>:orient=@ space
+// Placement is one of COVER / FIXED / PLACED per DEF 5.8 spec
+// (`{COVER pt orient | FIXED pt orient | PLACED pt orient}`). The
+// three differ only in the leading keyword, so they collapse to one
+// rule with a `kind` discriminator in the AST.
+PIN_PLACEMENT_PROP: sequence dict {
+  "+" space,
+  <PIN_PLACEMENT_KIND>:kind=@ space,
+  <XY>:at=@,
+  <ORIENT>:orient=@ space
 }
-PIN_FIXED_PROP: sequence dict {
-  "+" space, "FIXED"  space, <XY>:at=@, <ORIENT>:orient=@ space
-}
-PIN_COVER_PROP: sequence dict {
-  "+" space, "COVER"  space, <XY>:at=@, <ORIENT>:orient=@ space
+PIN_PLACEMENT_KIND: choice {
+  "PLACED":"Placed",
+  "FIXED":"Fixed",
+  "COVER":"Cover"
 }
 
 // === BLOCKAGES section ===================================================
