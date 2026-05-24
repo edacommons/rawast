@@ -237,20 +237,38 @@ TRACKS_LAYER: sequence {
 
 // === PINS section ========================================================
 //
+// DEF 5.8 §"Pins" syntax (PoC subset):
+//
 //   PINS numPins ;
-//     {- pinName + NET netName
-//         [+ DIRECTION direction]
-//         [+ USE use]
-//         [+ PORT]
-//         [+ LAYER layerName (x1 y1) (x2 y2)]
-//         [+ PLACED (x y) orient]
-//       ;}
+//     [- pinName + NET netName
+//         [+ SPECIAL]
+//         [+ DIRECTION {INPUT | OUTPUT | INOUT | FEEDTHRU}]
+//         [+ NETEXPR "netExprPropName defaultNetName"]
+//         [+ SUPPLYSENSITIVITY powerPinName]
+//         [+ GROUNDSENSITIVITY groundPinName]
+//         [+ USE {SIGNAL | POWER | GROUND | CLOCK | TIEOFF |
+//                 ANALOG | SCAN | RESET}]
+//         {[+ PORT]
+//          {+ LAYER layerName [...] (x1 y1) (x2 y2)} ...
+//          [+ COVER (x y) orient | + FIXED (x y) orient |
+//           + PLACED (x y) orient]} ...
+//       ;] ...
 //   END PINS
 //
-// PoC subset of the DEF 5.8 PINS section, covering the form used in
-// the ChipFlow corpus. All clauses after `-` and before `;` start
-// with `+` — shared-prefix Choice handled by default bounded
-// backtracking (§2.4).
+// Notes on spec faithfulness:
+//   - NET is required (spec-mandatory).
+//   - DIRECTION and USE values are closed enums per spec.
+//   - PORTs are a true list — multi-port pins preserve every port's
+//     layer + placement as a separate dict in the `ports` array (no
+//     dict-overwrite data loss).
+//   - All three placement keywords COVER / FIXED / PLACED supported.
+// PoC omissions (M4 work, not blocking any corpus DEF):
+//   - ANTENNA* clauses (~10 variants).
+//   - POLYGON and VIA shapes inside PORT (only LAYER bbox today).
+//   - The full DEF spec lists pre-PORT clauses in a canonical order.
+//     `repeat <PIN_PROP>` is order-agnostic — more permissive than
+//     spec, won't reject spec-conformant files, but also won't catch
+//     out-of-order ones. Strict-order enforcement is M4.
 
 PINS_SECTION: sequence dict {
   "PINS":type="Pins" space,
@@ -262,61 +280,109 @@ PINS_SECTION: sequence dict {
 
 PIN_DEFS: sequence array { repeat <PIN_DEF> }
 
+// NET is required; everything else is pre-PORT optional then a
+// repeating PORT list. The grammar accepts pre-PORT clauses in any
+// order (spec strict-orders them).
 PIN_DEF: sequence dict {
   "-" space,
   identifier:name=@ space,
+  "+" space, "NET" space, identifier:net=@ space,
   repeat <PIN_PROP>,
+  <PIN_PORTS>:ports=@,
   ";" newline
 }
 
 PIN_PROP: choice {
-  <PIN_NET_PROP>,
-  <PIN_DIRECTION_PROP>,
-  <PIN_USE_PROP>,
   <PIN_SPECIAL_KW>,
-  <PIN_PORT_KW>,
-  <PIN_LAYER_PROP>:layer=@,
-  <PIN_PLACED_PROP>:placed=@,
-  <PIN_FIXED_PROP>:fixed=@
+  <PIN_DIRECTION_PROP>,
+  <PIN_NETEXPR_PROP>,
+  <PIN_SUPPLYSENS_PROP>,
+  <PIN_GROUNDSENS_PROP>,
+  <PIN_USE_PROP>
 }
 
-PIN_NET_PROP:       sequence { "+" space, "NET"       space, identifier:net=@ space }
-PIN_DIRECTION_PROP: sequence { "+" space, "DIRECTION" space, identifier:direction=@ space }
-PIN_USE_PROP:       sequence { "+" space, "USE"       space, identifier:use=@ space }
-PIN_SPECIAL_KW:     sequence { "+" space, "SPECIAL":is_special=true space }
-PIN_PORT_KW:        sequence { "+" space, "PORT":has_port=true space }
+PIN_SPECIAL_KW:       sequence { "+" space, "SPECIAL":is_special=true space }
+PIN_NETEXPR_PROP:     sequence { "+" space, "NETEXPR"             space, string:netexpr=@ space }
+PIN_SUPPLYSENS_PROP:  sequence { "+" space, "SUPPLYSENSITIVITY"   space, identifier:supply_sensitivity=@ space }
+PIN_GROUNDSENS_PROP:  sequence { "+" space, "GROUNDSENSITIVITY"   space, identifier:ground_sensitivity=@ space }
 
-// LAYER bbox: layer name + a BBOX corner pair.
-PIN_LAYER_PROP: sequence dict {
+// DIRECTION — closed enum per DEF 5.8 spec.
+PIN_DIRECTION_PROP: sequence {
+  "+" space, "DIRECTION" space,
+  <PIN_DIRECTION_VAL>:direction=@ space
+}
+PIN_DIRECTION_VAL: choice {
+  "INPUT":"Input",
+  "OUTPUT":"Output",
+  "INOUT":"InOut",
+  "FEEDTHRU":"FeedThru"
+}
+
+// USE — closed enum per DEF 5.8 spec.
+PIN_USE_PROP: sequence {
+  "+" space, "USE" space,
+  <PIN_USE_VAL>:use=@ space
+}
+PIN_USE_VAL: choice {
+  "SIGNAL":"Signal",
+  "POWER":"Power",
+  "GROUND":"Ground",
+  "CLOCK":"Clock",
+  "TIEOFF":"TieOff",
+  "ANALOG":"Analog",
+  "SCAN":"Scan",
+  "RESET":"Reset"
+}
+
+// PORT — one or more per PIN; each PORT carries its own LAYER shapes
+// plus at most one placement (COVER / FIXED / PLACED). PORTs are
+// captured as a list, so multi-port pins preserve every port.
+PIN_PORTS: sequence array { repeat <PIN_PORT> }
+
+PIN_PORT: sequence dict {
+  "+" space, "PORT":has_port=true space,
+  repeat <PIN_PORT_ELEM>
+}
+
+PIN_PORT_ELEM: choice {
+  <PIN_PORT_LAYER>:layer=@,
+  <PIN_PLACED_PROP>:placed=@,
+  <PIN_FIXED_PROP>:fixed=@,
+  <PIN_COVER_PROP>:cover=@
+}
+
+PIN_PORT_LAYER: sequence dict {
   "+" space, "LAYER" space,
   identifier:layer=@ space,
   <BBOX>
 }
 
-// PLACED — a single (x y) point and an orientation token.
 PIN_PLACED_PROP: sequence dict {
-  "+" space, "PLACED" space,
-  <XY>:at=@,
-  <ORIENT>:orient=@ space
+  "+" space, "PLACED" space, <XY>:at=@, <ORIENT>:orient=@ space
 }
-
-// FIXED — same shape as PLACED but indicates a fixed (non-movable)
-// pin position. Distinct field in the AST (`fixed` vs `placed`) so
-// the placement type is preserved.
 PIN_FIXED_PROP: sequence dict {
-  "+" space, "FIXED" space,
-  <XY>:at=@,
-  <ORIENT>:orient=@ space
+  "+" space, "FIXED"  space, <XY>:at=@, <ORIENT>:orient=@ space
+}
+PIN_COVER_PROP: sequence dict {
+  "+" space, "COVER"  space, <XY>:at=@, <ORIENT>:orient=@ space
 }
 
 // === BLOCKAGES section ===================================================
 //
-//   BLOCKAGES numBlockages ;
-//     {- LAYER layerName {RECT (x1 y1) (x2 y2)}+ ;}
-//   END BLOCKAGES
+// DEF 5.8 §"Blockages" syntax (PoC subset — LAYER-blockage variant only):
 //
-// PoC subset of the DEF 5.8 BLOCKAGES section, covering the
-// LAYER+RECT form used in the ChipFlow corpus.
+//   BLOCKAGES numBlockages ;
+//     [- LAYER layerName
+//        [+ SLOTS | + FILLS]
+//        [+ PUSHDOWN]
+//        [+ EXCEPTPGNET]
+//        [+ COMPONENT compName]
+//        [+ SPACING minSpacing | + DESIGNRULEWIDTH effectiveWidth]
+//        [+ MASK maskNum]
+//        {RECT (x1 y1) (x2 y2) | POLYGON (x1 y1) (x2 y2) ...} ...
+//      ;] ...
+//     [- PLACEMENT ...]  // PoC: not modelled
+//   END BLOCKAGES
 
 BLOCKAGES_SECTION: sequence dict {
   "BLOCKAGES":type="Blockages" space,
@@ -331,13 +397,45 @@ BLOCKAGE_DEFS: sequence array { repeat <BLOCKAGE_DEF> }
 BLOCKAGE_DEF: sequence dict {
   "-" space, "LAYER" space,
   identifier:layer=@ space,
-  <BLOCKAGE_RECTS>:rects=@,
+  repeat <BLOCKAGE_MOD>,
+  <BLOCKAGE_SHAPES>:shapes=@,
   ";" newline
 }
 
-BLOCKAGE_RECTS: sequence array { repeat+ <BLOCKAGE_RECT> }
+// LAYER-blockage modifier flags (each independently optional).
+BLOCKAGE_MOD: choice {
+  <BLOCKAGE_SLOTS_KW>,
+  <BLOCKAGE_FILLS_KW>,
+  <BLOCKAGE_PUSHDOWN_KW>,
+  <BLOCKAGE_EXCEPTPGNET_KW>,
+  <BLOCKAGE_COMPONENT_PROP>,
+  <BLOCKAGE_SPACING_PROP>,
+  <BLOCKAGE_DESIGNRULEWIDTH_PROP>,
+  <BLOCKAGE_MASK_PROP>
+}
+
+BLOCKAGE_SLOTS_KW:               sequence { "+" space, "SLOTS":is_slots=true space }
+BLOCKAGE_FILLS_KW:               sequence { "+" space, "FILLS":is_fills=true space }
+BLOCKAGE_PUSHDOWN_KW:            sequence { "+" space, "PUSHDOWN":is_pushdown=true space }
+BLOCKAGE_EXCEPTPGNET_KW:         sequence { "+" space, "EXCEPTPGNET":is_exceptpgnet=true space }
+BLOCKAGE_COMPONENT_PROP:         sequence { "+" space, "COMPONENT"       space, identifier:component=@ space }
+BLOCKAGE_SPACING_PROP:           sequence { "+" space, "SPACING"         space, int:min_spacing=@ space }
+BLOCKAGE_DESIGNRULEWIDTH_PROP:   sequence { "+" space, "DESIGNRULEWIDTH" space, int:design_rule_width=@ space }
+BLOCKAGE_MASK_PROP:              sequence { "+" space, "MASK"            space, int:mask_num=@ space }
+
+BLOCKAGE_SHAPES: sequence array { repeat+ <BLOCKAGE_SHAPE> }
+BLOCKAGE_SHAPE: choice {
+  <BLOCKAGE_RECT>,
+  <BLOCKAGE_POLYGON>
+}
 
 BLOCKAGE_RECT: sequence dict {
   "RECT":type="Rect" space,
   <BBOX>
 }
+
+BLOCKAGE_POLYGON: sequence dict {
+  "POLYGON":type="Polygon" space,
+  <POLYGON_POINTS>:points=@
+}
+POLYGON_POINTS: sequence array { repeat+ <XY> }
