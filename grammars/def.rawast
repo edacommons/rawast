@@ -456,10 +456,111 @@ NET_DEF: sequence dict {
 NET_CONNECTIONS: sequence array { repeat <SPECNET_CONNECTION> }
 
 NET_PROP: choice {
-  <NET_USE_PROP>
+  <NET_USE_PROP>,
+  <NET_NONDEFAULTRULE_PROP>,
+  <NET_ROUTED>
 }
 
 NET_USE_PROP: sequence { "+" space, "USE" space, <PIN_USE_VAL>:use=@ space }
+
+NET_NONDEFAULTRULE_PROP: sequence {
+  "+" space, "NONDEFAULTRULE" space,
+  identifier:non_default_rule=@ space
+}
+
+// NETS routing differs from SPECIALNETS routing in two ways per DEF 5.8:
+//   1. No `width` field after layer name (regular nets use the LEF
+//      wire-width default; only SPECIALNETS have an explicit width).
+//   2. Coordinates may use `*` as a placeholder meaning "same as
+//      previous coordinate value" — enables compact axis-aligned
+//      wire encoding.
+NET_ROUTED: sequence dict {
+  "+" space, "ROUTED":routed=true space,
+  <NET_SEGMENTS>:segments=@
+}
+
+NET_SEGMENTS: sequence array {
+  <NET_SEGMENT>,
+  repeat <NET_NEW_SEGMENT>
+}
+
+NET_SEGMENT: sequence dict {
+  identifier:layer=@ space,
+  ?<NET_TAPER>,
+  ?<SPECNET_SHAPE_PROP>,
+  <NET_GEOMETRY>:geometry=@
+}
+
+NET_NEW_SEGMENT: sequence dict {
+  "NEW" space,
+  identifier:layer=@ space,
+  ?<NET_TAPER>,
+  ?<SPECNET_SHAPE_PROP>,
+  <NET_GEOMETRY>:geometry=@
+}
+
+// Per DEF 5.8 spec, a route segment can carry an optional TAPER
+// (bare keyword — use default-rule width from here) or
+// TAPERRULE ruleName (use the named non-default rule from here).
+// They appear between the layer name and the first coordinate.
+NET_TAPER: choice {
+  <NET_TAPER_KW>,
+  <NET_TAPERRULE_PROP>
+}
+
+NET_TAPER_KW:       sequence { "TAPER":is_taper=true space }
+NET_TAPERRULE_PROP: sequence { "TAPERRULE" space, identifier:taper_rule=@ space }
+
+// Geometry alternatives, tried in order:
+//   (a) ( pt ) RECT ( dx1 dy1 dx2 dy2 )  — point with virtual-rect patch
+//   (b) ( pt ) viaName                    — point with via
+//   (c) ( pt ) ( pt ) ...                 — wire path (2+ points)
+// (a) is checked first because the `RECT` literal can also be
+// matched by the lefdef identifier parser; bounded backtracking
+// would otherwise greedily consume `RECT` as a via name.
+NET_GEOMETRY: choice {
+  <NET_PT_WITH_RECT>,
+  <NET_VIA_AT_PT>,
+  <NET_WIRE_PATH>
+}
+
+NET_PT_WITH_RECT: sequence dict {
+  <NET_XY>:at=@,
+  "RECT":has_rect=true space,
+  <NET_RECT_DELTAS>:rect_deltas=@
+}
+
+NET_RECT_DELTAS: sequence array {
+  "(" space,
+  int space, int space, int space, int space,
+  ")" space
+}
+
+NET_VIA_AT_PT: sequence dict {
+  <NET_XY>:at=@,
+  identifier:via=@ space
+}
+
+NET_WIRE_PATH: sequence dict {
+  <NET_POINTS>:points=@
+}
+
+NET_POINTS: sequence array { repeat+ <NET_XY> }
+
+// NET_XY accepts `*` (carry-over) in either coordinate slot, plus
+// an optional third value (extension distance) per DEF 5.8 spec
+// routing-point syntax `( x y ext )`.
+NET_XY: sequence array {
+  "(" space,
+  <NET_COORD> space, <NET_COORD> space,
+  ?<NET_COORD> space,
+  ")" space
+}
+
+NET_COORD: choice {
+  int,
+  "*":"*"
+}
 
 // === ROW command =========================================================
 //
