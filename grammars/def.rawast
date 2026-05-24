@@ -120,6 +120,7 @@ DESIGN_ITEM: choice {
   <GCELLGRID_CMD>,
   <PINS_SECTION>,
   <BLOCKAGES_SECTION>,
+  <FILLS_SECTION>,
   <VIAS_SECTION>,
   <COMPONENTS_SECTION>,
   <NONDEFAULTRULES_SECTION>,
@@ -152,26 +153,313 @@ GCELLGRID_CMD: sequence dict {
 // rule parameterization or context-sensitive matching, so the
 // keyword pair must be inlined per section.
 
+// === VIAS section ========================================================
+//
+// DEF 5.8 §"Vias" syntax (PoC subset — VIARULE-generated form only):
+//
+//   VIAS numVias ;
+//     [- viaName
+//        + VIARULE viaRuleName
+//        + CUTSIZE xSize ySize
+//        + LAYERS botMetalLayer cutLayer topMetalLayer
+//        + CUTSPACING xCutSpacing yCutSpacing
+//        + ENCLOSURE xBotEnc yBotEnc xTopEnc yTopEnc
+//        [+ ROWCOL numCutRows numCutCols]
+//        [+ ORIGIN xOffset yOffset]
+//        [+ OFFSET xBotOffset yBotOffset xTopOffset yTopOffset]
+//        [+ PATTERN cutPattern]
+//      ;] ...
+//   END VIAS
+//
+// PoC omission: the alternative geometry-defined form
+// `{+ RECT layerName (pt pt) | + POLYGON layerName (pt pt pt ...)}`
+// is M4 work. No file in the corpus uses it.
+
 VIAS_SECTION: sequence dict {
   "VIAS":type="Vias" space, int:count=@ space, ";" newline,
+  <VIA_DEFS>:items=@,
   "END" space, "VIAS" newline
 }
+
+VIA_DEFS: sequence array { repeat <VIA_DEF> }
+
+VIA_DEF: sequence dict {
+  "-" space, identifier:name=@ space,
+  "+" space, "VIARULE" space, identifier:via_rule=@ space,
+  "+" space, "CUTSIZE" space, int:cut_size_x=@ space, int:cut_size_y=@ space,
+  "+" space, "LAYERS" space, identifier:bot_layer=@ space, identifier:cut_layer=@ space, identifier:top_layer=@ space,
+  "+" space, "CUTSPACING" space, int:cut_spacing_x=@ space, int:cut_spacing_y=@ space,
+  "+" space, "ENCLOSURE" space, int:bot_enc_x=@ space, int:bot_enc_y=@ space, int:top_enc_x=@ space, int:top_enc_y=@ space,
+  repeat <VIA_OPT_PROP>,
+  ";" newline
+}
+
+VIA_OPT_PROP: choice {
+  <VIA_ROWCOL_PROP>,
+  <VIA_ORIGIN_PROP>,
+  <VIA_OFFSET_PROP>,
+  <VIA_PATTERN_PROP>
+}
+
+VIA_ROWCOL_PROP:  sequence { "+" space, "ROWCOL"  space, int:rowcol_rows=@ space, int:rowcol_cols=@ space }
+VIA_ORIGIN_PROP:  sequence { "+" space, "ORIGIN"  space, int:via_origin_x=@ space, int:via_origin_y=@ space }
+VIA_OFFSET_PROP:  sequence { "+" space, "OFFSET"  space, int:bot_off_x=@ space, int:bot_off_y=@ space, int:top_off_x=@ space, int:top_off_y=@ space }
+VIA_PATTERN_PROP: sequence { "+" space, "PATTERN" space, identifier:via_pattern=@ space }
+// === COMPONENTS section ==================================================
+//
+// DEF 5.8 §"Components" syntax (PoC subset):
+//
+//   COMPONENTS numComps ;
+//     [- compName modelName
+//        [+ EEQMASTER macroName]
+//        [+ SOURCE {NETLIST | DIST | USER | TIMING}]
+//        [+ {FIXED pt orient | COVER pt orient | PLACED pt orient |
+//            UNPLACED}]
+//        [+ WEIGHT weight]
+//        [+ REGION regionName]
+//      ;] ...
+//   END COMPONENTS
+//
+// PoC omissions (M4): HALO, ROUTEHALO, MASKSHIFT, PROPERTY clauses.
+
 COMPONENTS_SECTION: sequence dict {
   "COMPONENTS":type="Components" space, int:count=@ space, ";" newline,
+  <COMPONENT_DEFS>:items=@,
   "END" space, "COMPONENTS" newline
 }
+
+COMPONENT_DEFS: sequence array { repeat <COMPONENT_DEF> }
+
+COMPONENT_DEF: sequence dict {
+  "-" space, identifier:name=@ space,
+  identifier:model=@ space,
+  repeat <COMPONENT_PROP>,
+  ";" newline
+}
+
+COMPONENT_PROP: choice {
+  <COMPONENT_SOURCE_PROP>,
+  <COMPONENT_EEQMASTER_PROP>,
+  <COMPONENT_WEIGHT_PROP>,
+  <COMPONENT_REGION_PROP>,
+  <COMPONENT_UNPLACED_KW>,
+  <PIN_PLACEMENT_PROP>:placement=@
+}
+
+COMPONENT_SOURCE_PROP: sequence { "+" space, "SOURCE" space, <COMPONENT_SOURCE_VAL>:source=@ space }
+COMPONENT_SOURCE_VAL: choice {
+  "NETLIST":"Netlist",
+  "DIST":"Dist",
+  "USER":"User",
+  "TIMING":"Timing"
+}
+
+COMPONENT_EEQMASTER_PROP: sequence { "+" space, "EEQMASTER" space, identifier:eeq_master=@ space }
+COMPONENT_WEIGHT_PROP:    sequence { "+" space, "WEIGHT"    space, int:weight=@ space }
+COMPONENT_REGION_PROP:    sequence { "+" space, "REGION"    space, identifier:region=@ space }
+COMPONENT_UNPLACED_KW:    sequence { "+" space, "UNPLACED":is_unplaced=true space }
+// === NONDEFAULTRULES section =============================================
+//
+// DEF 5.8 §"Non-Default Rules" syntax (PoC subset — LAYER-only):
+//
+//   NONDEFAULTRULES numRules ;
+//     [- ruleName
+//        [+ HARDSPACING]
+//        {+ LAYER layerName WIDTH minWidth
+//           [DIRESPACING diagSpacing]
+//           [SPACING minSpacing]
+//           [WIREEXT wireExt]} ...
+//        [+ VIA viaName] ...
+//        [+ VIARULE viaRuleName] ...
+//        [+ MINCUTS cutLayerName numCuts] ...
+//      ;] ...
+//   END NONDEFAULTRULES
+
 NONDEFAULTRULES_SECTION: sequence dict {
   "NONDEFAULTRULES":type="NonDefaultRules" space, int:count=@ space, ";" newline,
+  <NDR_DEFS>:items=@,
   "END" space, "NONDEFAULTRULES" newline
 }
+
+NDR_DEFS: sequence array { repeat <NDR_DEF> }
+
+NDR_DEF: sequence dict {
+  "-" space, identifier:name=@ space,
+  repeat <NDR_PROP>,
+  ";" newline
+}
+
+NDR_PROP: choice {
+  <NDR_HARDSPACING_KW>,
+  <NDR_LAYER_PROP>:ndr_layer=@,
+  <NDR_VIA_PROP>,
+  <NDR_VIARULE_PROP>
+}
+
+NDR_HARDSPACING_KW: sequence { "+" space, "HARDSPACING":hard_spacing=true space }
+
+NDR_LAYER_PROP: sequence dict {
+  "+" space, "LAYER" space, identifier:layer=@ space,
+  "WIDTH" space, int:width=@ space,
+  repeat <NDR_LAYER_OPT>
+}
+
+NDR_LAYER_OPT: choice {
+  <NDR_LAYER_SPACING>,
+  <NDR_LAYER_DIAGSPACING>,
+  <NDR_LAYER_WIREEXT>
+}
+
+NDR_LAYER_SPACING:     sequence { "SPACING"     space, int:spacing=@      space }
+NDR_LAYER_DIAGSPACING: sequence { "DIAGSPACING" space, int:diag_spacing=@ space }
+NDR_LAYER_WIREEXT:     sequence { "WIREEXT"     space, int:wire_ext=@     space }
+
+NDR_VIA_PROP:     sequence { "+" space, "VIA"     space, identifier:via_name=@     space }
+NDR_VIARULE_PROP: sequence { "+" space, "VIARULE" space, identifier:viarule_name=@ space }
+// === SPECIALNETS section =================================================
+//
+// DEF 5.8 §"Special Nets" syntax (PoC subset):
+//
+//   SPECIALNETS numSpecNets ;
+//     [- netName
+//        [{ ( compName | PIN | * ) pinName }] ...
+//        [+ VOLTAGE volts]
+//        [+ USE { SIGNAL | POWER | GROUND | CLOCK | TIEOFF |
+//                 ANALOG | SCAN | RESET }]
+//        { + ROUTED layerName width [+ SHAPE shape] {(x y) (x y) [viaName] | (x y) viaName} ...
+//          { NEW layerName width [+ SHAPE shape] {(x y) (x y) [viaName] | (x y) viaName} } ...
+//        } ...
+//      ;] ...
+//   END SPECIALNETS
+//
+// PoC omissions (M4):
+//   - FIXEDBUMP / ORIGINAL / PATTERN / ESTCAP / WEIGHT clauses
+//   - SHIELD / FIXED / COVER routing variants (only ROUTED modelled)
+//   - PROPERTY clauses
+
 SPECIALNETS_SECTION: sequence dict {
   "SPECIALNETS":type="SpecialNets" space, int:count=@ space, ";" newline,
+  <SPECNET_DEFS>:items=@,
   "END" space, "SPECIALNETS" newline
 }
+
+SPECNET_DEFS: sequence array { repeat <SPECNET_DEF> }
+
+SPECNET_DEF: sequence dict {
+  "-" space, identifier:name=@ space,
+  <SPECNET_CONNECTIONS>:connections=@,
+  repeat <SPECNET_PROP>,
+  ";" newline
+}
+
+SPECNET_CONNECTIONS: sequence array { repeat <SPECNET_CONNECTION> }
+
+// Connection: `( {compName | PIN | *} pinName )`.
+// `PIN` and `*` flow through as identifier values (lefdef identifier
+// parser accepts `*` as a one-char name); the consumer reads
+// `component` literally.
+SPECNET_CONNECTION: sequence dict {
+  "(" space, identifier:component=@ space, identifier:pin=@ space, ")" space
+}
+
+SPECNET_PROP: choice {
+  <SPECNET_VOLTAGE_PROP>,
+  <SPECNET_USE_PROP>,
+  <SPECNET_ROUTED>
+}
+
+SPECNET_VOLTAGE_PROP: sequence { "+" space, "VOLTAGE" space, int:voltage=@ space }
+SPECNET_USE_PROP:     sequence { "+" space, "USE" space, <PIN_USE_VAL>:use=@ space }
+
+// + ROUTED + NEW continuations as a single segments array.
+SPECNET_ROUTED: sequence dict {
+  "+" space, "ROUTED":routed=true space,
+  <SPECNET_SEGMENTS>:segments=@
+}
+
+SPECNET_SEGMENTS: sequence array {
+  <SPECNET_SEGMENT>,
+  repeat <SPECNET_NEW_SEGMENT>
+}
+
+// A segment's geometry is either:
+//   (a) ( x y ) viaName    — single point at via
+//   (b) ( x y ) ( x y ) ...— two or more points (a wire path)
+// per the spec's `{ ( x y val ) ... | ( x y val ) viaName }`. A naïve
+// `<POINTS> ?identifier:via=@` greedily consumes the next segment's
+// `NEW` keyword as a via name; the Choice approach lets bounded
+// backtracking pick the correct form. Tried in order, so VIA form
+// wins if a single-point + identifier sequence is seen.
+SPECNET_SEGMENT: sequence dict {
+  identifier:layer=@ space,
+  int:width=@ space,
+  ?<SPECNET_SHAPE_PROP>,
+  <SPECNET_GEOMETRY>:geometry=@
+}
+
+SPECNET_NEW_SEGMENT: sequence dict {
+  "NEW" space,
+  identifier:layer=@ space,
+  int:width=@ space,
+  ?<SPECNET_SHAPE_PROP>,
+  <SPECNET_GEOMETRY>:geometry=@
+}
+
+SPECNET_GEOMETRY: choice {
+  <SPECNET_VIA_AT_PT>,
+  <SPECNET_WIRE_PATH>
+}
+
+SPECNET_VIA_AT_PT: sequence dict {
+  <XY>:at=@,
+  identifier:via=@ space
+}
+
+SPECNET_WIRE_PATH: sequence dict {
+  <SPECNET_POINTS>:points=@
+}
+
+SPECNET_SHAPE_PROP: sequence { "+" space, "SHAPE" space, identifier:shape=@ space }
+SPECNET_POINTS: sequence array { repeat+ <XY> }
+// === NETS section ========================================================
+//
+// DEF 5.8 §"Nets" syntax (PoC subset — connection + USE only,
+// no regular-net routing):
+//
+//   NETS numNets ;
+//     [- netName
+//        [{ ( compName | PIN | * ) pinName }] ...
+//        [+ USE { SIGNAL | POWER | GROUND | ... }]
+//      ;] ...
+//   END NETS
+//
+// Regular NETs in production DEFs can also carry + ROUTED routing
+// segments (same grammar as SPECIALNETS). Adding ROUTED here is M4
+// work — the corpus DEFs that need full NET routing are the largest
+// (multi-million-line); the simpler form covers caravel c4m sky130.
+
 NETS_SECTION: sequence dict {
   "NETS":type="Nets" space, int:count=@ space, ";" newline,
+  <NET_DEFS>:items=@,
   "END" space, "NETS" newline
 }
+
+NET_DEFS: sequence array { repeat <NET_DEF> }
+
+NET_DEF: sequence dict {
+  "-" space, identifier:name=@ space,
+  <NET_CONNECTIONS>:connections=@,
+  repeat <NET_PROP>,
+  ";" newline
+}
+
+NET_CONNECTIONS: sequence array { repeat <SPECNET_CONNECTION> }
+
+NET_PROP: choice {
+  <NET_USE_PROP>
+}
+
+NET_USE_PROP: sequence { "+" space, "USE" space, <PIN_USE_VAL>:use=@ space }
 
 // === ROW command =========================================================
 //
@@ -292,13 +580,22 @@ PIN_DEF: sequence dict {
   ";" newline
 }
 
+// Per DEF 5.8 spec, `[ + PORT ]` is optional — a PIN can carry
+// LAYER shapes and a placement directly without the PORT wrapper
+// (older / simpler DEF style, common in OpenROAD output). To
+// support both styles, LAYER and PLACEMENT are accepted both as
+// PIN_PROPs (direct on PIN) and as PIN_PORT_ELEMs (inside an
+// explicit `+ PORT` block). Files with `+ PORT` get multi-port
+// structure; files without get direct PIN-level fields.
 PIN_PROP: choice {
   <PIN_SPECIAL_KW>,
   <PIN_DIRECTION_PROP>,
   <PIN_NETEXPR_PROP>,
   <PIN_SUPPLYSENS_PROP>,
   <PIN_GROUNDSENS_PROP>,
-  <PIN_USE_PROP>
+  <PIN_USE_PROP>,
+  <PIN_PORT_LAYER>:layer=@,
+  <PIN_PLACEMENT_PROP>:placement=@
 }
 
 PIN_SPECIAL_KW:       sequence { "+" space, "SPECIAL":is_special=true space }
@@ -413,13 +710,44 @@ BLOCKAGES_SECTION: sequence dict {
 
 BLOCKAGE_DEFS: sequence array { repeat <BLOCKAGE_DEF> }
 
-BLOCKAGE_DEF: sequence dict {
+BLOCKAGE_DEF: choice {
+  <BLOCKAGE_LAYER_DEF>,
+  <BLOCKAGE_PLACEMENT_DEF>
+}
+
+BLOCKAGE_LAYER_DEF: sequence dict {
   "-" space, "LAYER" space,
   identifier:layer=@ space,
   repeat <BLOCKAGE_MOD>,
   <BLOCKAGE_SHAPES>:shapes=@,
   ";" newline
 }
+
+// PLACEMENT-variant blockage per DEF 5.8 §"Blockages":
+//   - PLACEMENT
+//     [+ SOFT | + PARTIAL maxDensity]
+//     [+ PUSHDOWN]
+//     [+ COMPONENT compName]
+//     { RECT (x1 y1) (x2 y2) } ...
+//   ;
+BLOCKAGE_PLACEMENT_DEF: sequence dict {
+  "-" space, "PLACEMENT":type="PlacementBlockage" space,
+  repeat <BLOCKAGE_PLACEMENT_MOD>,
+  <BLOCKAGE_PLACEMENT_RECTS>:rects=@,
+  ";" newline
+}
+
+BLOCKAGE_PLACEMENT_MOD: choice {
+  <BLOCKAGE_SOFT_KW>,
+  <BLOCKAGE_PARTIAL_PROP>,
+  <BLOCKAGE_PUSHDOWN_KW>,
+  <BLOCKAGE_COMPONENT_PROP>
+}
+
+BLOCKAGE_SOFT_KW:     sequence { "+" space, "SOFT":is_soft=true space }
+BLOCKAGE_PARTIAL_PROP: sequence { "+" space, "PARTIAL" space, <NUMBER>:max_density=@ space }
+
+BLOCKAGE_PLACEMENT_RECTS: sequence array { repeat+ <BLOCKAGE_RECT> }
 
 // LAYER-blockage modifier flags (each independently optional).
 BLOCKAGE_MOD: choice {
@@ -458,3 +786,40 @@ BLOCKAGE_POLYGON: sequence dict {
   <POLYGON_POINTS>:points=@
 }
 POLYGON_POINTS: sequence array { repeat+ <XY> }
+
+// === FILLS section =======================================================
+//
+// DEF 5.8 §"Fills" syntax (PoC subset — LAYER fills with RECT/POLYGON):
+//
+//   FILLS numFills ;
+//     [- LAYER layerName [+ MASK n] [+ OPC]
+//        {RECT (x1 y1) (x2 y2) | POLYGON (x y) (x y) (x y) ...} ...
+//      ;] ...
+//     [- VIA viaName ...] ...   // M4 work
+//   END FILLS
+//
+// Corpus files (output/6_final.def, ihp130_sram/6_final.def) carry
+// millions of single-RECT fill items; the parser must scale to that
+// volume.
+
+FILLS_SECTION: sequence dict {
+  "FILLS":type="Fills" space, int:count=@ space, ";" newline,
+  <FILL_DEFS>:items=@,
+  "END" space, "FILLS" newline
+}
+
+FILL_DEFS: sequence array { repeat <FILL_DEF> }
+
+FILL_DEF: sequence dict {
+  "-" space, "LAYER" space,
+  identifier:layer=@ space,
+  ?<FILL_MASK_PROP>,
+  ?<FILL_OPC_KW>,
+  <FILL_SHAPES>:shapes=@,
+  ";" newline
+}
+
+FILL_MASK_PROP: sequence { "+" space, "MASK" space, int:mask_num=@ space }
+FILL_OPC_KW:    sequence { "+" space, "OPC":is_opc=true space }
+
+FILL_SHAPES: sequence array { repeat+ <BLOCKAGE_SHAPE> }
