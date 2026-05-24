@@ -90,6 +90,12 @@ DIEAREA_POINTS: sequence array { repeat <XY> }
 // [1,2,3] and the app layer rejects.
 XY: sequence array { "(" space, int space, int space, ")" space }
 
+// BBOX — `( x1 y1 ) ( x2 y2 )`, two XY corners. Used wherever a
+// rectangular bounding box is named by two opposite corners (e.g.,
+// BLOCKAGE_RECT, PIN_LAYER_PROP). The `low` / `high` bindings flow
+// into the surrounding dict.
+BBOX: sequence { <XY>:low=@, <XY>:high=@ }
+
 // === Orientation keywords =================================================
 
 // Each alternative matches a one-or two-letter token and emits the
@@ -110,9 +116,61 @@ ORIENT: choice {
 DESIGN_ITEMS: sequence array { repeat <DESIGN_ITEM> }
 DESIGN_ITEM: choice {
   <ROW_CMD>,
-  <TRACKS_CMD>
-  // VIAS, COMPONENTS, PINS, BLOCKAGES, SPECNETS, NETS:
-  // omitted in this PoC subset.
+  <TRACKS_CMD>,
+  <GCELLGRID_CMD>,
+  <PINS_SECTION>,
+  <BLOCKAGES_SECTION>,
+  <VIAS_SECTION>,
+  <COMPONENTS_SECTION>,
+  <NONDEFAULTRULES_SECTION>,
+  <SPECIALNETS_SECTION>,
+  <NETS_SECTION>
+}
+
+// GCELLGRID — single-line statement, same X/Y direction shape as TRACKS.
+GCELLGRID_CMD: sequence dict {
+  "GCELLGRID":type="GCellGrid" space,
+  <TRACKS_DIRECTION>:direction=@ space,
+  int:start=@ space,
+  "DO" space, int:count=@ space,
+  "STEP" space, int:step=@ space,
+  ";" newline
+}
+
+// === Section stubs =======================================================
+//
+// PoC scope: these sections currently accept only the empty form
+// (`SECTION 0 ; END SECTION`). Real placement-and-route output often
+// declares sections as zero-count when the design has none of that
+// kind, so the empty stubs already unblock several real DEFs.
+// Modelling non-empty bodies (VIA_DEF, COMPONENT_DEF, NET_DEF,
+// SPECIALNET_DEF) is future grammar work; the Python prototype
+// `lefdefschema.py` has working schemas for each as a design source.
+//
+// The five rules below have identical shape but differ in their
+// opening keyword and matching END keyword — rawast does not have
+// rule parameterization or context-sensitive matching, so the
+// keyword pair must be inlined per section.
+
+VIAS_SECTION: sequence dict {
+  "VIAS":type="Vias" space, int:count=@ space, ";" newline,
+  "END" space, "VIAS" newline
+}
+COMPONENTS_SECTION: sequence dict {
+  "COMPONENTS":type="Components" space, int:count=@ space, ";" newline,
+  "END" space, "COMPONENTS" newline
+}
+NONDEFAULTRULES_SECTION: sequence dict {
+  "NONDEFAULTRULES":type="NonDefaultRules" space, int:count=@ space, ";" newline,
+  "END" space, "NONDEFAULTRULES" newline
+}
+SPECIALNETS_SECTION: sequence dict {
+  "SPECIALNETS":type="SpecialNets" space, int:count=@ space, ";" newline,
+  "END" space, "SPECIALNETS" newline
+}
+NETS_SECTION: sequence dict {
+  "NETS":type="Nets" space, int:count=@ space, ";" newline,
+  "END" space, "NETS" newline
 }
 
 // === ROW command =========================================================
@@ -175,4 +233,111 @@ TRACKS_DIRECTION: choice {
 TRACKS_LAYER: sequence {
   "LAYER" space,
   identifier:layer=@ space
+}
+
+// === PINS section ========================================================
+//
+//   PINS numPins ;
+//     {- pinName + NET netName
+//         [+ DIRECTION direction]
+//         [+ USE use]
+//         [+ PORT]
+//         [+ LAYER layerName (x1 y1) (x2 y2)]
+//         [+ PLACED (x y) orient]
+//       ;}
+//   END PINS
+//
+// PoC subset of the DEF 5.8 PINS section, covering the form used in
+// the ChipFlow corpus. All clauses after `-` and before `;` start
+// with `+` — shared-prefix Choice handled by default bounded
+// backtracking (§2.4).
+
+PINS_SECTION: sequence dict {
+  "PINS":type="Pins" space,
+  int:count=@ space,
+  ";" newline,
+  <PIN_DEFS>:items=@,
+  "END" space, "PINS" newline
+}
+
+PIN_DEFS: sequence array { repeat <PIN_DEF> }
+
+PIN_DEF: sequence dict {
+  "-" space,
+  identifier:name=@ space,
+  repeat <PIN_PROP>,
+  ";" newline
+}
+
+PIN_PROP: choice {
+  <PIN_NET_PROP>,
+  <PIN_DIRECTION_PROP>,
+  <PIN_USE_PROP>,
+  <PIN_SPECIAL_KW>,
+  <PIN_PORT_KW>,
+  <PIN_LAYER_PROP>:layer=@,
+  <PIN_PLACED_PROP>:placed=@,
+  <PIN_FIXED_PROP>:fixed=@
+}
+
+PIN_NET_PROP:       sequence { "+" space, "NET"       space, identifier:net=@ space }
+PIN_DIRECTION_PROP: sequence { "+" space, "DIRECTION" space, identifier:direction=@ space }
+PIN_USE_PROP:       sequence { "+" space, "USE"       space, identifier:use=@ space }
+PIN_SPECIAL_KW:     sequence { "+" space, "SPECIAL":is_special=true space }
+PIN_PORT_KW:        sequence { "+" space, "PORT":has_port=true space }
+
+// LAYER bbox: layer name + a BBOX corner pair.
+PIN_LAYER_PROP: sequence dict {
+  "+" space, "LAYER" space,
+  identifier:layer=@ space,
+  <BBOX>
+}
+
+// PLACED — a single (x y) point and an orientation token.
+PIN_PLACED_PROP: sequence dict {
+  "+" space, "PLACED" space,
+  <XY>:at=@,
+  <ORIENT>:orient=@ space
+}
+
+// FIXED — same shape as PLACED but indicates a fixed (non-movable)
+// pin position. Distinct field in the AST (`fixed` vs `placed`) so
+// the placement type is preserved.
+PIN_FIXED_PROP: sequence dict {
+  "+" space, "FIXED" space,
+  <XY>:at=@,
+  <ORIENT>:orient=@ space
+}
+
+// === BLOCKAGES section ===================================================
+//
+//   BLOCKAGES numBlockages ;
+//     {- LAYER layerName {RECT (x1 y1) (x2 y2)}+ ;}
+//   END BLOCKAGES
+//
+// PoC subset of the DEF 5.8 BLOCKAGES section, covering the
+// LAYER+RECT form used in the ChipFlow corpus.
+
+BLOCKAGES_SECTION: sequence dict {
+  "BLOCKAGES":type="Blockages" space,
+  int:count=@ space,
+  ";" newline,
+  <BLOCKAGE_DEFS>:items=@,
+  "END" space, "BLOCKAGES" newline
+}
+
+BLOCKAGE_DEFS: sequence array { repeat <BLOCKAGE_DEF> }
+
+BLOCKAGE_DEF: sequence dict {
+  "-" space, "LAYER" space,
+  identifier:layer=@ space,
+  <BLOCKAGE_RECTS>:rects=@,
+  ";" newline
+}
+
+BLOCKAGE_RECTS: sequence array { repeat+ <BLOCKAGE_RECT> }
+
+BLOCKAGE_RECT: sequence dict {
+  "RECT":type="Rect" space,
+  <BBOX>
 }
