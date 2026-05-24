@@ -334,9 +334,24 @@ PIN_USE_VAL: choice {
   "RESET":"Reset"
 }
 
-// PORT — one or more per PIN; each PORT carries its own LAYER shapes
-// plus at most one placement (COVER / FIXED / PLACED). PORTs are
-// captured as a list, so multi-port pins preserve every port.
+// PORT — one or more per PIN. Per DEF 5.8 spec, each PORT carries
+// zero-or-more shape clauses (LAYER / POLYGON / VIA — only LAYER
+// modelled in this PoC) plus at-most-one placement clause
+// (COVER / FIXED / PLACED). Implemented as `repeat <PIN_PORT_ELEM>`
+// over a choice that produces either a LAYER (bound to `layer`)
+// or a PLACEMENT (bound to `placement`).
+//
+// PoC limitations (M4 fixes):
+//   1. Multiple LAYERs per PORT collapse: subsequent LAYER fields
+//      overwrite the previous (dict-overwrite). Real corpus PORTs
+//      typically have one LAYER each, so this isn't hit in
+//      practice. Proper `shapes[]` array support needs an engine
+//      pattern for "repeat element-of-named-class as array-field
+//      while sibling optional contributes named field" — pursued
+//      as M4 grammar work alongside POLYGON / VIA shape support.
+//   2. Spec says at-most-one placement per PORT; grammar accepts
+//      multiple (last one wins on dict-overwrite). Spec-tightening
+//      to exactly-one is an M4 linter / engine extension.
 PIN_PORTS: sequence array { repeat <PIN_PORT> }
 
 PIN_PORT: sequence dict {
