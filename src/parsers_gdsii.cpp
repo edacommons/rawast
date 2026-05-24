@@ -354,6 +354,33 @@ SaveResult GdsiiRecordParser::unparse(const Value& value) const {
 
 namespace {
 
+// GDSII files are written in 2048-byte blocks (legacy mag-tape
+// convention); the final block is padded with NUL bytes after END_LIB.
+// This terminal consumes any number of trailing NULs (including zero)
+// so the LIBRARY rule's trailing padding is absorbed and the engine's
+// end-of-input check passes. Used only at the end of LIBRARY — not
+// added to the grammar's ignore list, since record payloads (DT_STR
+// fields in particular) can legitimately contain NUL bytes mid-file.
+class GdsiiPaddingParser : public Parser {
+public:
+    GdsiiPaddingParser() : Parser("gds_padding") {}
+    ParseResult parse(StreamReader& sr) override {
+        sr.mark();
+        while (auto b = sr.peek()) {
+            if (*b != '\0') break;
+            sr.get();
+        }
+        sr.accept();
+        return null_value();
+    }
+    SaveResult unparse(const Value&) const override {
+        // On save we emit no padding — the file just ends after END_LIB.
+        // Tools accept unpadded GDSII; 2048-byte alignment is a
+        // historic mag-tape concern, not a hard requirement.
+        return std::string();
+    }
+};
+
 // Each spec yields a fresh GdsiiRecordParser instance bound to one
 // record-type / data-type pair. The factory captures the type+dt by
 // value so it remains valid past the spec list's construction.
@@ -420,6 +447,9 @@ ParserGroup make_gdsii_group() {
         gds_spec("gds_format",       0x36, DT_INT16),
         gds_spec("gds_mask",         0x37, DT_STR),
         gds_spec("gds_endmasks",     0x38, DT_NO_DATA),
+        ParserSpec{"gds_padding", []() {
+            return std::make_unique<GdsiiPaddingParser>();
+        }},
     };
     return g;
 }

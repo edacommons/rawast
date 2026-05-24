@@ -619,6 +619,18 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     }
 
     if (parse_finished) {
+        // Start rule produced a complete value; require the rest of
+        // the stream (modulo trailing ignored terminals) to be empty.
+        // Without this check a grammar that matches a prefix would
+        // silently succeed, hiding coverage gaps when the file has
+        // unmodeled content after the matched portion.
+        run_ignore(*this, sr);
+        if (!sr.eof()) {
+            return tl::unexpected(ParseError{
+                sr.position(),
+                "unexpected content after start rule completed"
+            });
+        }
         return result_value;
     }
     return tl::unexpected(max_progress);

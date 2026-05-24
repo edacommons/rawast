@@ -67,7 +67,8 @@ LIBRARY: sequence dict {
   ?<FORMATTYPE>:format_type=@,
   gds_units:units=@,
   ?<STRUCTURES>:structures=@,
-  gds_endlib
+  gds_endlib,
+  gds_padding
 }
 
 STRUCTURES: sequence array {

@@ -1,6 +1,6 @@
-// lef.rawast — LEF grammar (PoC: header only)
+// lef.rawast — LEF grammar (PoC subset)
 //
-// Covers the LEF header per the LEF/DEF 5.8 spec, §1 "Order of LEF
+// Top-level shape per the LEF/DEF 5.8 spec, §1 "Order of LEF
 // Statements":
 //
 //   [VERSION statement]
@@ -17,9 +17,10 @@
 // present, must appear in this canonical order. LEF puts BUSBITCHARS
 // before DIVIDERCHAR, opposite to DEF — see def.rawast.
 //
-// LAYER, VIA, VIARULE, NONDEFAULTRULE, SITE, MACRO bodies, and the
-// closing END LIBRARY are M4-scope additions. The header-only file
-// demonstrates the pattern that the rest of the grammar extends.
+// PoC body coverage: UNITS block and SITE blocks. The smallest real
+// LEFs in the ChipFlow corpus (hybrid_sites.lef, 28 lines) fully
+// parse end-to-end through this grammar. LAYER, VIA, VIARULE,
+// NONDEFAULTRULE, MACRO blocks remain M2/M4 scope.
 
 use: std, lefdef
 ignore: whitespace, line_comment
@@ -29,7 +30,9 @@ start: <FILE>
 // === Top level ============================================================
 
 FILE: sequence dict {
-  <HDR>:hdr=@
+  <HDR>:hdr=@,
+  <LIBRARY_ITEMS>:items=@,
+  ?<END_LIBRARY>
 }
 
 HDR: sequence dict {
@@ -40,3 +43,108 @@ HDR: sequence dict {
 VERSION_CMD:     sequence { "VERSION" space,     identifier:version=@ space,   ";" newline }
 BUSBITCHARS_CMD: sequence { "BUSBITCHARS" space, string:bus_bit_chars=@ space, ";" newline }
 DIVIDERCHAR_CMD: sequence { "DIVIDERCHAR" space, string:divider=@ space,       ";" newline }
+
+END_LIBRARY: sequence { "END" space, "LIBRARY" newline }
+
+LIBRARY_ITEMS: sequence array { repeat <LIBRARY_ITEM> }
+LIBRARY_ITEM: choice {
+  <UNITS_BLOCK>,
+  <SITE_BLOCK>
+  // LAYER, VIA, VIARULE, NONDEFAULTRULE, MACRO, BEGINEXT: M2/M4 scope.
+}
+
+// === UNITS block ==========================================================
+//
+//   UNITS
+//     [DATABASE MICRONS dbu ;]
+//     [CAPACITANCE PICOFARADS factor ;]
+//     [CURRENT MILLIAMPS factor ;]
+//     [RESISTANCE OHMS factor ;]
+//   END UNITS
+//
+// Sub-commands listed in the order observed in real LEFs in the
+// corpus (hybrid_sites, yod_V2.1.0). Per LEF/DEF 5.8 spec each is
+// individually optional. Strict-order limitation will be lifted when
+// the engine grows the NSEQ primitive (M2).
+
+UNITS_BLOCK: sequence dict {
+  "UNITS":type="Units" newline,
+  ?<DATABASE_CMD>,
+  ?<CAPACITANCE_CMD>,
+  ?<CURRENT_CMD>,
+  ?<RESISTANCE_CMD>,
+  "END" space, "UNITS" newline
+}
+
+DATABASE_CMD:    sequence { "DATABASE" space, "MICRONS" space,     int:database_microns=@ space,    ";" newline }
+CAPACITANCE_CMD: sequence { "CAPACITANCE" space, "PICOFARADS" space, int:capacitance_pf=@ space,    ";" newline }
+CURRENT_CMD:     sequence { "CURRENT" space, "MILLIAMPS" space,    int:current_ma=@ space,          ";" newline }
+RESISTANCE_CMD:  sequence { "RESISTANCE" space, "OHMS" space,      int:resistance_ohms=@ space,     ";" newline }
+
+// === SITE block ===========================================================
+//
+//   SITE siteName
+//     [CLASS {PAD | CORE} ;]
+//     [SYMMETRY {X | Y | R90} ... ;]
+//     [ROWPATTERN siteName orient ... ;]
+//     [SIZE width BY height ;]
+//   END siteName
+//
+// Sub-statements in the order observed in the corpus
+// (hybrid_sites.lef uses SYMMETRY → CLASS → SIZE [→ ROWPATTERN]).
+// The LEF spec lists CLASS → SYMMETRY → ROWPATTERN → SIZE canonical
+// order; real files diverge. Strict-order limitation again awaits
+// NSEQ.
+
+SITE_BLOCK: sequence dict {
+  "SITE":type="Site" space,
+  identifier:name=@ newline,
+  ?<SITE_SYMMETRY>,
+  ?<SITE_CLASS>,
+  ?<SITE_SIZE>,
+  ?<SITE_ROWPATTERN>,
+  "END" space, identifier:end_name=@ newline
+}
+
+SITE_SYMMETRY: sequence {
+  "SYMMETRY" space,
+  <SYMMETRY_LIST>:symmetry=@,
+  ";" newline
+}
+SYMMETRY_LIST: sequence array { repeat identifier }
+
+SITE_CLASS: sequence {
+  "CLASS" space,
+  identifier:class=@ space,
+  ";" newline
+}
+
+SITE_SIZE: sequence {
+  "SIZE" space,
+  float:width=@ space,
+  "BY" space,
+  float:height=@ space,
+  ";" newline
+}
+
+SITE_ROWPATTERN: sequence {
+  "ROWPATTERN" space,
+  <ROWPATTERN_LIST>:rowpattern=@,
+  ";" newline
+}
+ROWPATTERN_LIST: sequence array { repeat <ROWPATTERN_PAIR> }
+ROWPATTERN_PAIR: sequence dict {
+  identifier:site=@ space,
+  <SITE_ORIENT>:orient=@ space
+}
+
+SITE_ORIENT: choice {
+  "N":"North",
+  "S":"South",
+  "E":"East",
+  "W":"West",
+  "FN":"FlipNorth",
+  "FS":"FlipSouth",
+  "FE":"FlipEast",
+  "FW":"FlipWest"
+}
