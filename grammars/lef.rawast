@@ -35,23 +35,52 @@ FILE: sequence dict {
   ?<END_LIBRARY>
 }
 
+// LEF spec puts BUSBITCHARS before DIVIDERCHAR; real files (e.g.
+// sky130io_fill.lef) sometimes reverse them. `repeat <HDR_CMD>`
+// accepts each line in any order. Pending NSEQ (M2), this is the
+// pragmatic way to model "these statements, in any order."
 HDR: sequence dict {
   ?<VERSION_CMD>,
-  ?<BUSBITCHARS_CMD>,
-  ?<DIVIDERCHAR_CMD>
+  ?<NAMESCASESENSITIVE_CMD>,
+  ?<NOWIREEXTENSIONATPIN_CMD>,
+  repeat <HDR_CMD>
 }
-VERSION_CMD:     sequence { "VERSION" space,     identifier:version=@ space,   ";" newline }
-BUSBITCHARS_CMD: sequence { "BUSBITCHARS" space, string:bus_bit_chars=@ space, ";" newline }
-DIVIDERCHAR_CMD: sequence { "DIVIDERCHAR" space, string:divider=@ space,       ";" newline }
+HDR_CMD: choice { <BUSBITCHARS_CMD>, <DIVIDERCHAR_CMD> }
+VERSION_CMD:              sequence { "VERSION" space,              identifier:version=@ space,                  ";" newline }
+NAMESCASESENSITIVE_CMD:   sequence { "NAMESCASESENSITIVE" space,   <ON_OFF>:names_case_sensitive=@ space,        ";" newline }
+NOWIREEXTENSIONATPIN_CMD: sequence { "NOWIREEXTENSIONATPIN" space, <ON_OFF>:no_wire_extension_at_pin=@ space,    ";" newline }
+BUSBITCHARS_CMD:          sequence { "BUSBITCHARS" space,          string:bus_bit_chars=@ space,                ";" newline }
+DIVIDERCHAR_CMD:          sequence { "DIVIDERCHAR" space,          string:divider=@ space,                      ";" newline }
+
+ON_OFF: choice {
+  "ON":true,
+  "OFF":false
+}
 
 END_LIBRARY: sequence { "END" space, "LIBRARY" newline }
 
 LIBRARY_ITEMS: sequence array { repeat <LIBRARY_ITEM> }
 LIBRARY_ITEM: choice {
   <UNITS_BLOCK>,
-  <SITE_BLOCK>
-  // LAYER, VIA, VIARULE, NONDEFAULTRULE, MACRO, BEGINEXT: M2/M4 scope.
+  <MANUFACTURINGGRID_CMD>,
+  <SITE_BLOCK>,
+  <MACRO_BLOCK>
+  // LAYER, VIA, VIARULE, NONDEFAULTRULE, BEGINEXT: M2/M4 scope.
 }
+
+MANUFACTURINGGRID_CMD: sequence dict {
+  "MANUFACTURINGGRID":type="ManufacturingGrid" space,
+  <NUMBER>:value=@ space,
+  ";" newline
+}
+
+// LEF coordinates and sizes are written either as integers (e.g.
+// `ORIGIN 0 0 ;`) or as floats with a decimal point (e.g. `SIZE 0.56
+// BY 3.92 ;`). The standard `float` terminal rejects bare integers
+// (to avoid grammar ambiguity with `int`), so a choice rule covers
+// both. Mirrors how CONSTANT in the .rawast meta-grammar handles
+// numeric literals.
+NUMBER: choice { float, int }
 
 // === UNITS block ==========================================================
 //
@@ -121,9 +150,9 @@ SITE_CLASS: sequence {
 
 SITE_SIZE: sequence {
   "SIZE" space,
-  float:width=@ space,
+  <NUMBER>:width=@ space,
   "BY" space,
-  float:height=@ space,
+  <NUMBER>:height=@ space,
   ";" newline
 }
 
@@ -147,4 +176,154 @@ SITE_ORIENT: choice {
   "FS":"FlipSouth",
   "FE":"FlipEast",
   "FW":"FlipWest"
+}
+
+// === MACRO block =========================================================
+//
+//   MACRO macroName
+//     [CLASS class [subclass] ;]
+//     [ORIGIN x y ;]
+//     [FOREIGN cellName x y ;]
+//     [SIZE width BY height ;]
+//     [SYMMETRY {X | Y | R90} ... ;]
+//     [SITE siteName ;]
+//     [PIN ...] ...
+//     [OBS ...]
+//   END macroName
+//
+// PoC subset of the LEF/DEF 5.8 §6 MACRO definition. Optional
+// sub-statements appear in spec-canonical order; the strict-order
+// limitation awaits NSEQ (M2).
+
+MACRO_BLOCK: sequence dict {
+  "MACRO":type="Macro" space,
+  identifier:name=@ newline,
+  repeat <MACRO_PROPERTY>,
+  <MACRO_PINS>:pins=@,
+  ?<MACRO_OBS>,
+  "END" space, identifier:end_name=@ newline
+}
+
+// MACRO sub-statements in any order — same pattern as HDR_CMD.
+// Pending NSEQ (M2), this is the pragmatic way to accept real LEFs
+// that don't follow the spec's CLASS → ORIGIN → FOREIGN → SIZE →
+// SYMMETRY → SITE canonical ordering.
+MACRO_PROPERTY: choice {
+  <MACRO_CLASS>,
+  <MACRO_ORIGIN>,
+  <MACRO_FOREIGN>,
+  <MACRO_SIZE>,
+  <MACRO_SYMMETRY>,
+  <MACRO_SITE_REF>
+}
+
+MACRO_CLASS: sequence {
+  "CLASS" space,
+  <CLASS_LIST>:class=@,
+  ";" newline
+}
+CLASS_LIST: sequence array { repeat identifier }
+
+MACRO_ORIGIN: sequence {
+  "ORIGIN" space,
+  <NUMBER>:origin_x=@ space, <NUMBER>:origin_y=@ space,
+  ";" newline
+}
+
+// FOREIGN — cell name plus optional (x,y) offset. Real LEFs use both
+// forms: `FOREIGN cellName ;` and `FOREIGN cellName 0 0 ;`.
+MACRO_FOREIGN: sequence {
+  "FOREIGN" space,
+  identifier:foreign_cell=@ space,
+  ?<MACRO_FOREIGN_XY>,
+  ";" newline
+}
+MACRO_FOREIGN_XY: sequence {
+  <NUMBER>:foreign_x=@ space, <NUMBER>:foreign_y=@ space
+}
+
+MACRO_SIZE: sequence {
+  "SIZE" space,
+  <NUMBER>:width=@ space,
+  "BY" space,
+  <NUMBER>:height=@ space,
+  ";" newline
+}
+
+MACRO_SYMMETRY: sequence {
+  "SYMMETRY" space,
+  <SYMMETRY_LIST>:symmetry=@,
+  ";" newline
+}
+
+// SITE reference inside a MACRO (not a SITE block definition).
+MACRO_SITE_REF: sequence {
+  "SITE" space, identifier:site=@ space, ";" newline
+}
+
+// === PIN inside MACRO ====================================================
+
+MACRO_PINS: sequence array { repeat <PIN_BLOCK> }
+
+PIN_BLOCK: sequence dict {
+  "PIN":type="Pin" space,
+  identifier:name=@ newline,
+  ?<PIN_DIRECTION>,
+  ?<PIN_USE>,
+  <PIN_PORTS>:ports=@,
+  "END" space, identifier:end_name=@ newline
+}
+
+PIN_DIRECTION: sequence {
+  "DIRECTION" space, identifier:direction=@ space, ";" newline
+}
+
+PIN_USE: sequence {
+  "USE" space, identifier:use=@ space, ";" newline
+}
+
+PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
+
+// PORT is a sequence of layer groups: each group is a LAYER statement
+// followed by one-or-more shapes on that layer.
+
+PORT_BLOCK: sequence dict {
+  "PORT":type="Port" newline,
+  <LAYER_GROUPS>:layer_groups=@,
+  "END" newline
+}
+
+LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> }
+
+LAYER_GROUP: sequence dict {
+  "LAYER" space, identifier:layer=@ space, ";" newline,
+  <SHAPES>:shapes=@
+}
+
+SHAPES: sequence array { repeat <SHAPE> }
+SHAPE: choice {
+  <RECT_SHAPE>,
+  <POLYGON_SHAPE>
+}
+
+RECT_SHAPE: sequence dict {
+  "RECT":type="Rect" space,
+  <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
+  <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
+  ";" newline
+}
+
+POLYGON_SHAPE: sequence dict {
+  "POLYGON":type="Polygon" space,
+  <POLYGON_POINTS>:points=@,
+  ";" newline
+}
+POLYGON_POINTS: sequence array { repeat <NUMBER> }
+
+// === OBS (obstructions) — MACRO-level; same layer-group structure ========
+
+MACRO_OBS: sequence dict {
+  "OBS":type="Obs" newline,
+  <LAYER_GROUPS>:layer_groups=@,
+  "END" newline
 }
