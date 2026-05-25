@@ -65,10 +65,12 @@ DESIGN_CMD:    sequence { "DESIGN" space, identifier:name=@ space, ";" newline }
 ENDDESIGN_CMD: sequence { "END" space, "DESIGN" newline }
 
 // DESIGN_INFO — optional TECHNOLOGY, then required UNITS and DIEAREA in
-// canonical order per DEF 5.8 §4.
+// canonical order per DEF 5.8 §4. PROPERTYDEFINITIONS optionally appears
+// between UNITS and DIEAREA (spec §5).
 DESIGN_INFO: sequence {
   ?<TECHNOLOGY_CMD>,
   <UNITS_CMD>,
+  ?<PROPERTYDEFINITIONS_BLOCK>:property_definitions=@,
   <DIEAREA_CMD>
 }
 
@@ -84,6 +86,64 @@ DIEAREA_CMD: sequence {
   "DIEAREA" space, <DIEAREA_POINTS>:die_area=@, ";" newline
 }
 DIEAREA_POINTS: sequence array { repeat <XY> }
+
+// === PROPERTYDEFINITIONS block ===========================================
+//
+//   PROPERTYDEFINITIONS
+//     {COMPONENTPIN | DESIGN | NET | SPECIALNET | REGION | ROW |
+//      COMPONENT | NONDEFAULTRULE | GROUP}
+//       propName {INTEGER | REAL | STRING} [RANGE min max] [default] ;
+//     ...
+//   END PROPERTYDEFINITIONS
+//
+// Mirrors LEF's PROPERTYDEFINITIONS_BLOCK shape; the object-kind set
+// differs (per DEF 5.8 §5).
+
+PROPERTYDEFINITIONS_BLOCK: sequence dict {
+  "PROPERTYDEFINITIONS":type="PropertyDefinitions" newline,
+  <PROPDEFS>:definitions=@,
+  "END" space, "PROPERTYDEFINITIONS" newline
+}
+
+PROPDEFS: sequence array { repeat <PROPDEF> }
+
+// Discriminate the object kind via a Choice so that "END" — also a
+// valid lefdef identifier — fails the PROPDEF match immediately rather
+// than greedily consuming "END PROPERTYDEFINITIONS …" across three
+// identifier slots before failing on the trailing `;`.
+PROPDEF: sequence dict {
+  <PROPDEF_OBJECT>:object=@ space,
+  identifier:prop_name=@ space,
+  identifier:data_type=@ space,
+  ?<PROPDEF_RANGE>,
+  ?<PROPDEF_DEFAULT>,
+  ";" newline
+}
+
+PROPDEF_OBJECT: choice {
+  "COMPONENTPIN":@,
+  "DESIGN":@,
+  "NET":@,
+  "SPECIALNET":@,
+  "REGION":@,
+  "ROW":@,
+  "COMPONENT":@,
+  "NONDEFAULTRULE":@,
+  "GROUP":@
+}
+
+PROPDEF_RANGE: sequence {
+  "RANGE" space,
+  <NUMBER>:range_min=@ space,
+  <NUMBER>:range_max=@ space
+}
+
+PROPDEF_DEFAULT: choice {
+  string:default_value=@ space,
+  <NUMBER>:default_value=@ space
+}
+
+NUMBER: choice { float, int }
 
 // XY — coordinate pair `( x y )`. Per design, the parser doesn't enforce
 // exactly-2 ints; if input is malformed (`( 1 2 3 )`), it parses as
