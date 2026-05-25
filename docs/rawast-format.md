@@ -167,6 +167,8 @@ Built-in groups (compile-time registered in `librawast`):
 | :--- | :--- |
 | `std` | Common terminal parsers — `identifier`, `qualified_identifier`, `int`, `uint`, `float`, `string`, `whitespace`, `line_comment`, `block_comment` |
 | `gdsii` | All 47 GDSII binary record parsers (`header`, `bgnlib`, …) — referenced bare or group-qualified (`gdsii.header`) |
+| `lefdef` | LEF/DEF-specific `identifier` (accepts hyphens, slashes per real-world naming) and `line_comment` (`#` to EOL) |
+| `tcl` | Tcl terminals modelled on Dodekalogue rules — `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `until_paren`, `escape`, `literal_run` |
 
 Additional groups can be registered from host C++ code via
 `rawast::register_parser_group("name", register_fn)`; see
@@ -193,6 +195,56 @@ start: <VALUE>
 ```
 
 `start` must be a reference (`<NAME>`) to another rule.
+
+### 3.1 Rule-local ignore — `RULE ignore PARSER1 PARSER2 …: <body>`
+
+A rule definition may carry an **ignore-list attribute** between the
+rule name and the colon. The named parsers become the active ignore
+set whenever the parse driver is inside that rule (or any rule it
+calls that doesn't carry its own override):
+
+```rawast
+// Grammar-level "default ignore" — attach it to the start rule.
+start: <SCRIPT>
+SCRIPT ignore tcl.hspace: sequence dict { ... }
+
+// Override on a different rule — its sub-tree uses a different
+// ignore set. Useful when one part of the grammar needs to treat
+// newlines as significant (here: command separators) and another
+// part needs them ignored (here: expression context).
+EXPR ignore tcl.hspace tcl.newline: sequence dict { ... }
+
+// Explicit empty list — override to "ignore nothing", useful for
+// token-internal contexts where whitespace is part of the data.
+WORD_SEGMENTS ignore: sequence dict { ... }
+```
+
+The list is **space-separated, not comma-separated**, and is
+terminated by the `:`. Empty list (`RULE ignore: …`) explicitly
+overrides to "ignore nothing"; rules without the attribute inherit
+their caller's active ignore.
+
+Inheritance semantics: the engine maintains an ignore-stack. On
+entering a rule with an explicit override, the override is pushed;
+on exit it is popped, restoring whatever the caller had active. A
+rule with no `ignore` attribute simply uses the top of the stack.
+This composes naturally — a SCRIPT-context rule that calls a sub-
+rule sees the sub-rule run under SCRIPT's ignore, unless the sub-
+rule overrides.
+
+The standalone top-level `ignore: parser, parser, …` directive
+(from earlier proposal drafts) is **gone** — attaching the ignore
+to the start rule is the single canonical way to express grammar-
+level default ignore. Existing grammars (json, gdsii, lef, def)
+were migrated to the new form in lockstep with this change.
+
+Combined with the `:subparse="<RULE>"` binding (§4.5), the
+ignore-stack lets a single grammar express multiple sub-languages
+each with their own whitespace policy. The Tcl grammar uses this
+pattern: a script context (`tcl.hspace` ignored, newlines
+structural), an expression context (`tcl.hspace` + `tcl.newline`
+both ignored), and a word-internals context (nothing ignored)
+all in one file.
 
 ## 4. Expressions
 
@@ -359,6 +411,28 @@ In the JSON-grammar-format equivalent, the binding desugars to a
 wrapper dict carrying `"type": "binding"` (for `name=@`) or
 `"type": "binding_const"` (for `name=<literal>`); the loader expands
 either into the appropriate Value-kind children. See §8.
+
+**`X:subparse="<RULE>"`** is a special binding key recognised by the
+engine. After X (a Parse-terminal returning a StringValue) succeeds,
+the engine re-invokes the parse loop on the captured string with the
+named rule as the new start. The resulting sub-tree replaces X's
+string value. Same grammar, same engine, different entry point —
+composes languages-within-languages without splitting them into
+separate grammar files:
+
+```
+// Inside a hypothetical Tcl-script context:
+IF_CMD: sequence dict {
+  "if":type="if",
+  tcl.brace_group:cond=@:subparse="EXPR",    // brace content re-parsed
+  tcl.brace_group:body=@:subparse="SCRIPT"   //   through EXPR / SCRIPT
+}
+```
+
+The engine resolves the subparse target's rule name to a NodeId at
+grammar-load time; a missing rule fails the load with a clear error.
+Subparse triggers create a fresh ignore-stack so per-rule ignore
+overrides in the inner context don't leak into the outer parse.
 
 ### 4.5b Pretty-print attributes — postfix flags on items
 
@@ -717,8 +791,6 @@ Conventions:
 
 **Uses:** std
 
-**Ignores:** whitespace, line_comment, block_comment
-
 **Start:** `FILE`
 
 
@@ -779,19 +851,19 @@ FILE := FILE_ENTRY*
 #### FILE_ENTRY
 
 ```ebnf
-FILE_ENTRY := USE_DECL | IGNORE_DECL | START_DECL | RULE_DEF
+FILE_ENTRY := USE_DECL | START_DECL | RULE_DEF
 ```
 
 #### IDENT_LIST
 
 ```ebnf
-IDENT_LIST := *identifier* ( "," *identifier* )*
+IDENT_LIST := *qualified_identifier* ( "," *qualified_identifier* )*
 ```
 
-#### IGNORE_DECL
+#### IGNORE_LIST
 
 ```ebnf
-IGNORE_DECL := "ignore" ":" IDENT_LIST
+IGNORE_LIST := *qualified_identifier**
 ```
 
 #### ITEM
@@ -848,10 +920,22 @@ REF := "<" *identifier* ">"
 REPEAT_EXPR := "repeat" "+"? ITEM SEPARATOR?
 ```
 
+#### RULE_BODY
+
+```ebnf
+RULE_BODY := RULE_IGNORE_ATTR? ":" "?"? EXPR BINDINGS? POSTFIX_ATTR*
+```
+
 #### RULE_DEF
 
 ```ebnf
-RULE_DEF := *identifier* ":" ITEM
+RULE_DEF := *identifier* RULE_BODY
+```
+
+#### RULE_IGNORE_ATTR
+
+```ebnf
+RULE_IGNORE_ATTR := "ignore" IGNORE_LIST
 ```
 
 #### SEPARATOR
