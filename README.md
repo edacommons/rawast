@@ -1,17 +1,37 @@
 # rawast
 
-A data-driven predictive PEG parser engine for structured text *and binary*
-formats, with a bidirectional walk: the same grammar file decodes and
-encodes. Grammars are data, not compiled code — edit a `.rawast` file (or
-its JSON equivalent) and parser behaviour changes with no recompilation.
-A planned `.jast` container format bundles the grammar with a compact
-serialisation so downstream consumers can read any file without prior
-knowledge of its source format.
+Most parsers ship as code: someone writes a grammar in BNF, compiles
+it, links it into every tool that needs it. New format means a new
+parser project, new compile, new tool releases. And every parser builds
+a format-specific AST, even when the caller just wants one field.
+
+rawast inverts this. The parser is one engine; the grammar is **data**
+— a JSON file you load at runtime. The engine reads text and produces a
+JSON-shaped value tree (arrays, dicts, scalars) — the same shape the
+grammar is written in. So one engine reads any format, no recompile,
+and the output is queryable without a format-specific API.
+
+Three properties make this work: it's a structural parser driven by an
+external grammar; the grammar is itself JSON-shaped data the engine can
+read with itself (self-hosting); and the engine is bidirectional — the
+same grammar that parses also re-emits text from a value tree. Binary
+formats slot in by registering terminal parsers; GDSII is the worked
+example.
+
+The `.jast` container builds on this: grammar + parsed tree, serialised
+together in a binary file. "Parse once" — every later consumer reads
+the value tree directly, never re-parses text, and can still emit the
+text form because the grammar travels with the data.
+
+EDA is the first proving ground because the files are large, the
+formats are many, and every tool currently reimplements its own reader.
+The PoC parses real GDSII, LEF, and DEF corpora; funding is being
+sought to harden it. Ships as a C++ engine with Python bindings.
 
 ## History
 
 rawast is the C++ rewrite of an earlier Python prototype (`astrw`,
-2024–2025) that validated the data-driven grammar approach, the
+2023–2025) that validated the data-driven grammar approach, the
 catcher-based value-tree mechanism, and the bidirectional walk. The
 current implementation is the productionisation of those ideas as a
 maintained C++20 codebase; most of the commit history here reflects the
@@ -127,7 +147,7 @@ Shipped groups:
 | Group | Parsers |
 |---|---|
 | `std` | `int`, `float`, `identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
-| `gdsii` | All 47 GDSII record-type parsers (`gds_header`, `gds_bgnlib`, …, `gds_endmasks`) |
+| `gdsii` | All 47 GDSII record-type parsers (`header`, `bgnlib`, …, `endmasks`) — bare names; `gdsii.header` form also resolves |
 
 Shipped grammars:
 
