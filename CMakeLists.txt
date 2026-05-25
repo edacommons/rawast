@@ -105,10 +105,9 @@ if(SKBUILD)
     install(TARGETS _native LIBRARY DESTINATION rawast)
 
     # Bundle the canonical grammars/ directory into the wheel under
-    # rawast/grammars/ so json_format(), rawast_format(), and
-    # grammar_path() resolve at runtime in installed wheels (editable
-    # installs use the python/rawast/grammars symlink to the same
-    # files in the repo).
+    # rawast/grammars/ so Grammar(name) and grammar_path(name) resolve
+    # at runtime in installed wheels (editable installs use the
+    # python/rawast/grammars symlink to the same files in the repo).
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/grammars/
             DESTINATION rawast/grammars
             FILES_MATCHING PATTERN "*.json" PATTERN "*.rawast")
