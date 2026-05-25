@@ -349,6 +349,10 @@
     "type": "sequence",
     "value": [
       {
+        "type": "PARSE_GROUP",
+        "optional": true
+      },
+      {
         "type": "identifier",
         "bindings": [
           {
@@ -356,6 +360,24 @@
             "value": "@"
           }
         ]
+      }
+    ]
+  },
+  "PARSE_GROUP": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "identifier",
+        "bindings": [
+          {
+            "name": "group",
+            "value": "@"
+          }
+        ]
+      },
+      {
+        "type": "key",
+        "key": "."
       }
     ]
   },

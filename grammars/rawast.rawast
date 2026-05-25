@@ -97,7 +97,17 @@ KEY_EXPR: sequence {
 
 KEY_VALUE: sequence { ":", choice { "@":emit=true, <CONSTANT>:value=@ } }
 
-PARSE_EXPR: sequence { identifier:type=@ }
+// Parser reference. Bare form `int` resolves through the bare-name
+// alias the parser registry registers for every group member.
+// Dotted form `gdsii.header` references the same parser via the
+// group-qualified alias the registry also registers. The loader
+// composes `group + "." + type` into the lookup key when both
+// fields are present.
+PARSE_EXPR: sequence {
+  ?<PARSE_GROUP>,
+  identifier:type=@
+}
+PARSE_GROUP: sequence { identifier:group=@, "." }
 
 // ─── Bindings ───────────────────────────────────────────────────────────
 //

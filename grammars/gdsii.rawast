@@ -3,7 +3,7 @@
 //
 // GDSII binary stream format — full structural grammar.
 //
-// The 47 record-type terminals (gds_header, gds_bgnlib, ..., gds_endmasks)
+// The 47 record-type terminals (gdsii.header, gdsii.bgnlib, ..., gdsii.endmasks)
 // are provided by C++ `register_gdsii_parsers(grammar)` — see
 // include/rawast/parsers_gdsii.hpp. Each is a binary-record parser that
 // matches its specific record-type byte and decodes the payload by data
@@ -57,18 +57,18 @@ start: <LIBRARY>
 // ---------------------------------------------------------------------
 
 LIBRARY: sequence dict {
-  gds_header:version=@,
-  gds_bgnlib:timestamp=@,
-  gds_libname:name=@,
-  ?gds_reflibs:reflibs=@,
-  ?gds_fonts:fonts=@,
-  ?gds_attrtable:attributes=@,
-  ?gds_generations:gens=@,
+  gdsii.header:version=@,
+  gdsii.bgnlib:timestamp=@,
+  gdsii.libname:name=@,
+  ?gdsii.reflibs:reflibs=@,
+  ?gdsii.fonts:fonts=@,
+  ?gdsii.attrtable:attributes=@,
+  ?gdsii.generations:gens=@,
   ?<FORMATTYPE>:format_type=@,
-  gds_units:units=@,
+  gdsii.units:units=@,
   ?<STRUCTURES>:structures=@,
-  gds_endlib,
-  ?gds_padding:padding_bytes=@
+  gdsii.endlib,
+  ?gdsii.padding:padding_bytes=@
 }
 
 STRUCTURES: sequence array {
@@ -80,7 +80,7 @@ STRUCTURES: sequence array {
 // ---------------------------------------------------------------------
 
 FORMATTYPE: sequence dict {
-  gds_format:format=@,
+  gdsii.format:format=@,
   ?<MASKS>
 }
 
@@ -88,11 +88,11 @@ FORMATTYPE: sequence dict {
 // dict via the catcher mechanism.
 MASKS: sequence {
   ?<MASK_ARRAY>:masks=@,
-  gds_endmasks
+  gdsii.endmasks
 }
 
 MASK_ARRAY: sequence array {
-  repeat gds_mask
+  repeat gdsii.mask
 }
 
 // ---------------------------------------------------------------------
@@ -100,11 +100,11 @@ MASK_ARRAY: sequence array {
 // ---------------------------------------------------------------------
 
 STRUCTURE: sequence dict {
-  gds_bgnstr:timestamp=@,
-  gds_strname:name=@,
-  ?gds_strclass:class=@,
+  gdsii.bgnstr:timestamp=@,
+  gdsii.strname:name=@,
+  ?gdsii.strclass:class=@,
   ?<ELEMENTS>:elements=@,
-  gds_endstr
+  gdsii.endstr
 }
 
 ELEMENTS: sequence array {
@@ -128,7 +128,7 @@ ELEMENT: sequence dict {
     <BOX_ELEM>
   },
   ?<PROPERTIES>:properties=@,
-  gds_endel
+  gdsii.endel
 }
 
 PROPERTIES: sequence array {
@@ -136,78 +136,78 @@ PROPERTIES: sequence array {
 }
 
 PROPERTY: sequence dict {
-  gds_propattr:name=@,
-  gds_propvalue:value=@
+  gdsii.propattr:name=@,
+  gdsii.propvalue:value=@
 }
 
 // All *_ELEM rules are container-less sequences — their fields flow
 // into the surrounding ELEMENT dict via the catcher mechanism.
 
 BOUNDARY_ELEM: sequence {
-  gds_boundary:element="boundary",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_layer:layer=@,
-  gds_datatype:datatype=@,
-  gds_xy:xy=@
+  gdsii.boundary:element="boundary",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.layer:layer=@,
+  gdsii.datatype:datatype=@,
+  gdsii.xy:xy=@
 }
 
 PATH_ELEM: sequence {
-  gds_path:element="path",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_layer:layer=@,
-  gds_datatype:datatype=@,
-  ?gds_pathtype:pathtype=@,
-  ?gds_width:width=@,
-  ?gds_bgnextn:begin_ext=@,
-  ?gds_endextn:end_ext=@,
-  gds_xy:xy=@
+  gdsii.path:element="path",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.layer:layer=@,
+  gdsii.datatype:datatype=@,
+  ?gdsii.pathtype:pathtype=@,
+  ?gdsii.width:width=@,
+  ?gdsii.bgnextn:begin_ext=@,
+  ?gdsii.endextn:end_ext=@,
+  gdsii.xy:xy=@
 }
 
 SREF_ELEM: sequence {
-  gds_sref:element="sref",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_sname:name=@,
+  gdsii.sref:element="sref",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.sname:name=@,
   ?<STRANS_GROUP>,
-  gds_xy:xy=@
+  gdsii.xy:xy=@
 }
 
 AREF_ELEM: sequence {
-  gds_aref:element="aref",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_sname:name=@,
+  gdsii.aref:element="aref",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.sname:name=@,
   ?<STRANS_GROUP>,
-  gds_colrow:colrow=@,
-  gds_xy:xy=@
+  gdsii.colrow:colrow=@,
+  gdsii.xy:xy=@
 }
 
 TEXT_ELEM: sequence {
-  gds_text:element="text",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_layer:layer=@,
+  gdsii.text:element="text",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.layer:layer=@,
   <TEXTBODY>
 }
 
 NODE_ELEM: sequence {
-  gds_node:element="node",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_layer:layer=@,
-  gds_nodetype:datatype=@,
-  gds_xy:xy=@
+  gdsii.node:element="node",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.layer:layer=@,
+  gdsii.nodetype:datatype=@,
+  gdsii.xy:xy=@
 }
 
 BOX_ELEM: sequence {
-  gds_box:element="box",
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_layer:layer=@,
-  gds_boxtype:datatype=@,
-  gds_xy:xy=@
+  gdsii.box:element="box",
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.layer:layer=@,
+  gdsii.boxtype:datatype=@,
+  gdsii.xy:xy=@
 }
 
 // ---------------------------------------------------------------------
@@ -216,17 +216,17 @@ BOX_ELEM: sequence {
 // ---------------------------------------------------------------------
 
 STRANS_GROUP: sequence {
-  gds_strans:strans=@,
-  ?gds_mag:mag=@,
-  ?gds_angle:angle=@
+  gdsii.strans:strans=@,
+  ?gdsii.mag:mag=@,
+  ?gdsii.angle:angle=@
 }
 
 TEXTBODY: sequence {
-  gds_texttype:datatype=@,
-  ?gds_presentation:presentation=@,
-  ?gds_pathtype:pathtype=@,
-  ?gds_width:width=@,
+  gdsii.texttype:datatype=@,
+  ?gdsii.presentation:presentation=@,
+  ?gdsii.pathtype:pathtype=@,
+  ?gdsii.width:width=@,
   ?<STRANS_GROUP>,
-  gds_xy:xy=@,
-  gds_string:text=@
+  gdsii.xy:xy=@,
+  gdsii.string:text=@
 }
