@@ -189,6 +189,20 @@ public:
     tl::expected<ValuePtr, ParseError> parse_from(
             StreamReader& sr, ValuePool& pool, NodeId start) const;
 
+    // Convenience: parse from a rule name. Looks up the named rule's
+    // body NodeId via the registry; fails if the rule doesn't exist.
+    // Lets application code re-parse arbitrary strings through any
+    // rule in the grammar without depending on the subparse hook:
+    //
+    //   auto result = g.parse_from(sr, "EXPR");
+    //
+    // Equivalent to `parse_from(sr, pool, g.rule_id("EXPR"))` with an
+    // internally-allocated pool plus an explicit error on missing rule.
+    tl::expected<ValuePtr, ParseError> parse_from(
+            StreamReader& sr, const std::string& start_name) const;
+    tl::expected<ValuePtr, ParseError> parse_from(
+            StreamReader& sr, ValuePool& pool, const std::string& start_name) const;
+
     // --- Driver: save direction ----------------------------------------
 
     // Emit `value` as text to `out` using this grammar.

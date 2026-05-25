@@ -330,6 +330,23 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
+        StreamReader& sr, const std::string& start_name) const {
+    ValuePool pool;
+    return parse_from(sr, pool, start_name);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse_from(
+        StreamReader& sr, ValuePool& pool, const std::string& start_name) const {
+    auto it = named_rules_.find(start_name);
+    if (it == named_rules_.end()) {
+        return tl::unexpected(ParseError{
+            sr.position(),
+            "parse_from: no rule named '" + start_name + "'"});
+    }
+    return parse_from(sr, pool, it->second);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         StreamReader& sr, ValuePool& pool, NodeId start) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};

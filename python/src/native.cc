@@ -164,7 +164,25 @@ NB_MODULE(_native, m) {
                 return value_to_python(*r);
             },
             nb::arg("path"),
-            "Parse a file. Returns a Python value (None/bool/int/float/str/list/dict).")
+            "Parse a file from the grammar's default start. Returns a Python "
+            "value (None/bool/int/float/str/list/dict).")
+
+        .def("parse_file",
+            [](rawast::Grammar& g, const std::string& path,
+               const std::string& start) {
+                std::ifstream fs(path, std::ios::binary);
+                if (!fs) {
+                    throw std::runtime_error("cannot open input: " + path);
+                }
+                rawast::StreamReader sr(fs);
+                auto r = g.parse_from(sr, start);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("path"), nb::arg("start"),
+            "Parse a file starting from the named rule instead of the grammar's "
+            "default start. Used for re-parsing arbitrary strings through any "
+            "rule in the grammar.")
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content) {
@@ -175,7 +193,19 @@ NB_MODULE(_native, m) {
                 return value_to_python(*r);
             },
             nb::arg("content"),
-            "Parse a string.")
+            "Parse a string from the grammar's default start.")
+
+        .def("parse_string",
+            [](rawast::Grammar& g, const std::string& content,
+               const std::string& start) {
+                std::istringstream is(content);
+                rawast::StreamReader sr(is);
+                auto r = g.parse_from(sr, start);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("content"), nb::arg("start"),
+            "Parse a string starting from the named rule.")
 
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b) {
@@ -187,7 +217,20 @@ NB_MODULE(_native, m) {
                 return value_to_python(*r);
             },
             nb::arg("data"),
-            "Parse a bytes object. Use for binary grammars (GDSII, etc.).")
+            "Parse a bytes object from the grammar's default start. Use for "
+            "binary grammars (GDSII, etc.).")
+
+        .def("parse_bytes",
+            [](rawast::Grammar& g, nb::bytes b, const std::string& start) {
+                std::string s(b.c_str(), b.size());
+                std::istringstream is(std::move(s));
+                rawast::StreamReader sr(is);
+                auto r = g.parse_from(sr, start);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("data"), nb::arg("start"),
+            "Parse a bytes object starting from the named rule.")
 
         .def("save",
             [](rawast::Grammar& g, nb::handle value, bool pretty) -> nb::object {
