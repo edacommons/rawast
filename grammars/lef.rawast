@@ -63,9 +63,76 @@ LIBRARY_ITEMS: sequence array { repeat <LIBRARY_ITEM> }
 LIBRARY_ITEM: choice {
   <UNITS_BLOCK>,
   <MANUFACTURINGGRID_CMD>,
+  <CLEARANCEMEASURE_CMD>,
+  <USEMINSPACING_CMD>,
+  <PROPERTYDEFINITIONS_BLOCK>,
+  <LAYER_BLOCK>,
+  <VIA_BLOCK>,
+  <VIARULE_BLOCK>,
   <SITE_BLOCK>,
   <MACRO_BLOCK>
-  // LAYER, VIA, VIARULE, NONDEFAULTRULE, BEGINEXT: M2/M4 scope.
+  // NONDEFAULTRULE, BEGINEXT: M2/M4 scope.
+}
+
+// === Header-level statements ============================================
+
+CLEARANCEMEASURE_CMD: sequence dict {
+  "CLEARANCEMEASURE":type="ClearanceMeasure" space,
+  identifier:value=@ space, ";" newline
+}
+
+USEMINSPACING_CMD: sequence dict {
+  "USEMINSPACING":type="UseMinSpacing" space,
+  identifier:object=@ space,
+  identifier:value=@ space, ";" newline
+}
+
+// === PROPERTYDEFINITIONS block ==========================================
+//
+//   PROPERTYDEFINITIONS
+//     {LAYER | LIBRARY | MACRO | VIA | VIARULE | NONDEFAULTRULE | PIN}
+//       propName {INTEGER | REAL | STRING} [rangeOrValue] ;
+//     ...
+//   END PROPERTYDEFINITIONS
+
+PROPERTYDEFINITIONS_BLOCK: sequence dict {
+  "PROPERTYDEFINITIONS":type="PropertyDefinitions" newline,
+  <PROPDEFS>:definitions=@,
+  "END" space, "PROPERTYDEFINITIONS" newline
+}
+
+PROPDEFS: sequence array { repeat <PROPDEF> }
+
+// Discriminate the object kind via a Choice so that "END" — also a
+// valid lefdef identifier — fails the PROPDEF match immediately
+// rather than greedily consuming "END PROPERTYDEFINITIONS MACRO"
+// across three identifier slots before failing on the trailing `;`.
+// Repeat's iteration-boundary backtracking is scheduled as M1
+// follow-on work (§2.4); this grammar shape sidesteps the need.
+PROPDEF: sequence dict {
+  <PROPDEF_OBJECT>:object=@ space,
+  identifier:prop_name=@ space,
+  identifier:data_type=@ space,
+  ?<PROPDEF_DEFAULT>,
+  ";" newline
+}
+
+// Optional default value after the data-type. Real corpus files
+// include a trailing default for STRING-typed properties:
+//   LIBRARY LEF58_VOLTAGEMODE STRING "VOLTAGEMODE ABSOLUTE ; " ;
+PROPDEF_DEFAULT: choice {
+  string:default_value=@ space,
+  <NUMBER>:default_value=@ space
+}
+
+PROPDEF_OBJECT: choice {
+  "LAYER":@,
+  "LIBRARY":@,
+  "MACRO":@,
+  "VIA":@,
+  "VIARULE":@,
+  "NONDEFAULTRULE":@,
+  "PIN":@
 }
 
 MANUFACTURINGGRID_CMD: sequence dict {
@@ -125,14 +192,22 @@ RESISTANCE_CMD:  sequence { "RESISTANCE" space, "OHMS" space,      int:resistanc
 // order; real files diverge. Strict-order limitation again awaits
 // NSEQ.
 
+// SITE sub-statements accepted in any order via `repeat <SITE_PROPERTY>`
+// — real LEFs (e.g. yod_V2.1.0.beta.2.lef) use CLASS → SYMMETRY →
+// SIZE while the LEF/DEF 5.8 spec lists CLASS → SYMMETRY →
+// ROWPATTERN → SIZE canonical. Same pattern as MACRO_BLOCK.
 SITE_BLOCK: sequence dict {
   "SITE":type="Site" space,
   identifier:name=@ newline,
-  ?<SITE_SYMMETRY>,
-  ?<SITE_CLASS>,
-  ?<SITE_SIZE>,
-  ?<SITE_ROWPATTERN>,
+  repeat <SITE_PROPERTY>,
   "END" space, identifier:end_name=@ newline
+}
+
+SITE_PROPERTY: choice {
+  <SITE_SYMMETRY>,
+  <SITE_CLASS>,
+  <SITE_SIZE>,
+  <SITE_ROWPATTERN>
 }
 
 SITE_SYMMETRY: sequence {
@@ -195,12 +270,26 @@ SITE_ORIENT: choice {
 // sub-statements appear in spec-canonical order; the strict-order
 // limitation awaits NSEQ (M2).
 
+// MACRO body structure per LEF/DEF 5.8 §"Macro":
+//   MACRO name
+//     [<sub-properties: CLASS / ORIGIN / FOREIGN / SIZE /
+//                       SYMMETRY / SITE>] ...
+//     [PIN ...] ...
+//     [OBS]
+//     [DENSITY]
+//     [PROPERTY ...] ...
+//   END name
+// PROPERTY clauses appear AT THE END (after PINs and OBS). To keep
+// both pre-PIN and post-PIN PROPERTY positions accepted (real files
+// vary), the pre-PIN repeat already includes MACRO_PROPERTY_KV, and
+// a second repeat picks up trailing PROPERTY clauses.
 MACRO_BLOCK: sequence dict {
   "MACRO":type="Macro" space,
   identifier:name=@ newline,
   repeat <MACRO_PROPERTY>,
   <MACRO_PINS>:pins=@,
   ?<MACRO_OBS>,
+  repeat <MACRO_PROPERTY_KV>,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -214,7 +303,23 @@ MACRO_PROPERTY: choice {
   <MACRO_FOREIGN>,
   <MACRO_SIZE>,
   <MACRO_SYMMETRY>,
-  <MACRO_SITE_REF>
+  <MACRO_SITE_REF>,
+  <MACRO_PROPERTY_KV>
+}
+
+// User-defined PROPERTY clauses — names declared in
+// PROPERTYDEFINITIONS, values typed per the declaration. Per LEF
+// spec, the value can be INTEGER, REAL, or STRING.
+MACRO_PROPERTY_KV: sequence dict {
+  "PROPERTY" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space,
+  ";" newline
+}
+
+PROPERTY_VALUE: choice {
+  <NUMBER>,
+  string
 }
 
 MACRO_CLASS: sequence {
@@ -265,21 +370,89 @@ MACRO_SITE_REF: sequence {
 
 MACRO_PINS: sequence array { repeat <PIN_BLOCK> }
 
+// PIN block — per LEF/DEF 5.8 spec carries DIRECTION / USE plus
+// zero-or-more ANTENNA* clauses (model-specific antenna properties
+// per layer) before its PORTs. PIN_PROPERTY is the open-ended
+// repeat over these optional sub-statements; PORTs follow.
 PIN_BLOCK: sequence dict {
   "PIN":type="Pin" space,
   identifier:name=@ newline,
-  ?<PIN_DIRECTION>,
-  ?<PIN_USE>,
+  repeat <PIN_PROPERTY>,
   <PIN_PORTS>:ports=@,
   "END" space, identifier:end_name=@ newline
 }
 
+PIN_PROPERTY: choice {
+  <PIN_DIRECTION>,
+  <PIN_USE>,
+  <PIN_SHAPE>,
+  <PIN_TAPERRULE>,
+  <PIN_NETEXPR>,
+  <PIN_ANTENNA_PROP>
+}
+
+// DIRECTION per LEF spec:
+//   {INPUT | OUTPUT [TRISTATE] | INOUT | FEEDTHRU}
+// The TRISTATE qualifier after OUTPUT is optional.
 PIN_DIRECTION: sequence {
-  "DIRECTION" space, identifier:direction=@ space, ";" newline
+  "DIRECTION" space, identifier:direction=@ space,
+  ?identifier:direction_modifier=@ space,
+  ";" newline
 }
 
 PIN_USE: sequence {
   "USE" space, identifier:use=@ space, ";" newline
+}
+
+PIN_SHAPE: sequence {
+  "SHAPE" space, identifier:shape=@ space, ";" newline
+}
+
+PIN_TAPERRULE: sequence {
+  "TAPERRULE" space, identifier:taper_rule=@ space, ";" newline
+}
+
+PIN_NETEXPR: sequence {
+  "NETEXPR" space, string:net_expr=@ space, ";" newline
+}
+
+// ANTENNA* properties — the LEF spec defines ~10 variants
+// (ANTENNADIFFAREA, ANTENNAGATEAREA, ANTENNAPARTIALMETALAREA,
+// ANTENNAPARTIALMETALSIDEAREA, ANTENNAMAXAREACAR,
+// ANTENNAMAXSIDEAREACAR, ANTENNAMAXCUTCAR, ANTENNAPARTIALCUTAREA,
+// ANTENNAMODEL, ANTENNAANYDIFFAREA, ...). They all share the same
+// `KEYWORD value [LAYER layerName] ;` shape, so a single generic
+// rule captures the keyword as `antenna_kind`.
+// ANTENNA value is usually a number (area or factor) but for
+// ANTENNAMODEL it's an identifier (OXIDE1 / OXIDE2 / OXIDE3 /
+// OXIDE4). Choice keeps both forms.
+PIN_ANTENNA_PROP: sequence dict {
+  <PIN_ANTENNA_KIND>:antenna_kind=@ space,
+  <PIN_ANTENNA_VALUE>:value=@ space,
+  ?<PIN_ANTENNA_LAYER>,
+  ";" newline
+}
+
+PIN_ANTENNA_VALUE: choice {
+  <NUMBER>,
+  identifier
+}
+
+PIN_ANTENNA_KIND: choice {
+  "ANTENNADIFFAREA":"AntennaDiffArea",
+  "ANTENNAGATEAREA":"AntennaGateArea",
+  "ANTENNAPARTIALMETALAREA":"AntennaPartialMetalArea",
+  "ANTENNAPARTIALMETALSIDEAREA":"AntennaPartialMetalSideArea",
+  "ANTENNAMAXAREACAR":"AntennaMaxAreaCar",
+  "ANTENNAMAXSIDEAREACAR":"AntennaMaxSideAreaCar",
+  "ANTENNAMAXCUTCAR":"AntennaMaxCutCar",
+  "ANTENNAPARTIALCUTAREA":"AntennaPartialCutArea",
+  "ANTENNAANYDIFFAREA":"AntennaAnyDiffArea",
+  "ANTENNAMODEL":"AntennaModel"
+}
+
+PIN_ANTENNA_LAYER: sequence {
+  "LAYER" space, identifier:antenna_layer=@ space
 }
 
 PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
@@ -287,18 +460,40 @@ PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
 // PORT is a sequence of layer groups: each group is a LAYER statement
 // followed by one-or-more shapes on that layer.
 
+// PORT carries an optional CLASS clause before its LAYER groups per
+// LEF/DEF 5.8 spec: `PORT [CLASS {NONE | CORE | BUMP} ;] {LAYER ...} ... END`.
 PORT_BLOCK: sequence dict {
   "PORT":type="Port" newline,
+  ?<PORT_CLASS>,
   <LAYER_GROUPS>:layer_groups=@,
   "END" newline
 }
 
+PORT_CLASS: sequence {
+  "CLASS" space, identifier:port_class=@ space, ";" newline
+}
+
 LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> }
 
+// LAYER declaration inside a PORT or OBS block. Can carry optional
+// SPACING / DESIGNRULEWIDTH / MASK modifiers per LEF/DEF 5.8 spec
+// before the `;`. Followed by 1+ shape clauses (RECT / POLYGON).
 LAYER_GROUP: sequence dict {
-  "LAYER" space, identifier:layer=@ space, ";" newline,
+  "LAYER" space, identifier:layer=@ space,
+  repeat <LAYER_GROUP_MOD>,
+  ";" newline,
   <SHAPES>:shapes=@
 }
+
+LAYER_GROUP_MOD: choice {
+  <LAYER_GROUP_SPACING>,
+  <LAYER_GROUP_DESIGNRULEWIDTH>,
+  <LAYER_GROUP_MASK>
+}
+
+LAYER_GROUP_SPACING:         sequence { "SPACING"         space, <NUMBER>:layer_spacing=@           space }
+LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:layer_design_rule_width=@ space }
+LAYER_GROUP_MASK:            sequence { "MASK"            space, int:layer_mask_num=@               space }
 
 SHAPES: sequence array { repeat <SHAPE> }
 SHAPE: choice {
@@ -326,4 +521,217 @@ MACRO_OBS: sequence dict {
   "OBS":type="Obs" newline,
   <LAYER_GROUPS>:layer_groups=@,
   "END" newline
+}
+
+// === LAYER block (tech LEF) ==============================================
+//
+// LEF/DEF 5.8 §"Layer" definitions — opener + TYPE + many optional
+// property clauses + closer. Real tech LEFs have dozens of clauses
+// per layer covering routing/cut/via/masterslice/implant/overlap
+// types, design-rule constraints, electrical properties, and
+// LEF58_* property assignments.
+//
+// PoC approach: enumerate the common property keywords as a Choice;
+// each clause captures the keyword as `kind` and the trailing
+// `<values>` (numbers, identifiers, or quoted strings) until `;`.
+// Stop-condition is the closing `END <name>`: the keyword Choice
+// excludes "END", so the repeat exits cleanly when it sees the
+// closing.
+//
+// PoC omission: LEF58 spec extensions (PROPERTY name "..."
+// embedded clauses are captured but their internal grammar isn't
+// re-parsed; full LEF58 support is M4 work).
+
+LAYER_BLOCK: sequence dict {
+  "LAYER":type="Layer" space,
+  identifier:name=@ newline,
+  repeat <LAYER_PROPERTY>,
+  "END" space, identifier:end_name=@ newline
+}
+
+LAYER_PROPERTY: sequence dict {
+  <LAYER_KEYWORD>:kind=@ space,
+  <LAYER_VALUES>:values=@,
+  ";" newline
+}
+
+// LAYER value tokens: each can be a number, an identifier (TYPE
+// values like ROUTING / CUT / IMPLANT, sub-keywords like RPERSQ /
+// CPERSQDIST), or a quoted string (PROPERTY values). Repeats
+// until `;`.
+LAYER_VALUES: sequence array { repeat <LAYER_VALUE> }
+LAYER_VALUE: choice {
+  <NUMBER>,
+  string,
+  identifier
+}
+
+// Enumeration of LAYER property keywords. Closed list so that
+// `END` (the block closer) is not mistaken for a property. New
+// LEF58_* and other vendor-specific keywords can be added as
+// needed; this is the PoC subset covering the ChipFlow open-PDK
+// corpus.
+LAYER_KEYWORD: choice {
+  "TYPE":@,
+  "MASK":@,
+  "PITCH":@,
+  "OFFSET":@,
+  "DIRECTION":@,
+  "WIDTH":@,
+  "MINWIDTH":@,
+  "MAXWIDTH":@,
+  "AREA":@,
+  "SPACING":@,
+  "SPACINGTABLE":@,
+  "MINENCLOSEDAREA":@,
+  "MINSTEP":@,
+  "MINCUTS":@,
+  "RESISTANCE":@,
+  "CAPACITANCE":@,
+  "EDGECAPACITANCE":@,
+  "HEIGHT":@,
+  "THICKNESS":@,
+  "ACCURRENTDENSITY":@,
+  "DCCURRENTDENSITY":@,
+  "CURRENTDEN":@,
+  "ANTENNAAREARATIO":@,
+  "ANTENNADIFFAREARATIO":@,
+  "ANTENNACUMAREARATIO":@,
+  "ANTENNACUMDIFFAREARATIO":@,
+  "ANTENNAAREAFACTOR":@,
+  "ANTENNAGATEPLUSDIFF":@,
+  "ANTENNASIDEAREARATIO":@,
+  "ANTENNASIDEAREAFACTOR":@,
+  "ANTENNAMODEL":@,
+  "ENCLOSURE":@,
+  "PREFERENCLOSURE":@,
+  "PROPERTY":@,
+  "STACK":@,
+  "SLOTWIRELENGTH":@,
+  "SLOTWIREWIDTH":@,
+  "MAXIMUMDENSITY":@,
+  "MINIMUMDENSITY":@,
+  "DENSITYCHECKWINDOW":@,
+  "DENSITYCHECKSTEP":@,
+  "FILLACTIVESPACING":@,
+  "MINIMUMCUT":@,
+  "ARRAYSPACING":@,
+  "ANTENNADIFFSIDEAREARATIO":@,
+  "EOLENCLOSURE":@,
+  "PARALLELRUNLENGTH":@,
+  "MINSIZE":@,
+  "WIDTHTABLE":@,
+  "WIREEXTENSION":@,
+  "CORNERONLY":@,
+  "CORNERSPACING":@,
+  "CUTCLASS":@,
+  "EOLKEEPOUT":@,
+  "PARALLELEDGE":@,
+  "RECTONLY":@,
+  "RIGHTWAYONGRIDONLY":@
+}
+
+// === VIA block (tech LEF) ================================================
+//
+// LEF/DEF 5.8 §"Via" — two forms: geometry-based (LAYER + shape
+// patches per layer) and VIARULE-based. The geometry form is what
+// shows up in the open-PDK corpus. The block is closed with
+// `END viaName`.
+//
+//   VIA viaName [DEFAULT]
+//     [+ TOPOFSTACKONLY]
+//     [RESISTANCE value ;]
+//     {LAYER layerName ;
+//        {RECT (x1 y1) (x2 y2) | POLYGON pts ...} ...
+//     } ...
+//   END viaName
+
+VIA_BLOCK: sequence dict {
+  "VIA":type="Via" space,
+  identifier:name=@ space,
+  ?<VIA_DEFAULT_KW>,
+  repeat <VIA_PROPERTY>,
+  "END" space, identifier:end_name=@ newline
+}
+
+// LEF keywords are spec-uppercase ("DEFAULT") but some real tools
+// emit mixed-case ("Default"). Accept both.
+VIA_DEFAULT_KW: sequence {
+  <VIA_DEFAULT_LITERAL>:is_default=true newline
+}
+VIA_DEFAULT_LITERAL: choice {
+  "DEFAULT":@,
+  "Default":@
+}
+
+VIA_PROPERTY: choice {
+  <VIA_RESISTANCE>,
+  <VIA_TOPOFSTACKONLY_KW>,
+  <VIA_LAYER_GROUP>
+}
+
+VIA_RESISTANCE:        sequence { "RESISTANCE" space, <NUMBER>:resistance=@ space, ";" newline }
+VIA_TOPOFSTACKONLY_KW: sequence { "TOPOFSTACKONLY":top_of_stack_only=true space, ";" newline }
+
+// Each LAYER + shape group in a VIA: layer name followed by shapes.
+VIA_LAYER_GROUP: sequence dict {
+  "LAYER" space, identifier:layer=@ space, ";" newline,
+  <VIA_SHAPES>:shapes=@
+}
+
+VIA_SHAPES: sequence array { repeat+ <VIA_SHAPE> }
+VIA_SHAPE: choice {
+  <VIA_RECT>,
+  <VIA_POLYGON>
+}
+
+VIA_RECT: sequence dict {
+  "RECT":type="Rect" space,
+  <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
+  <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
+  ";" newline
+}
+
+VIA_POLYGON: sequence dict {
+  "POLYGON":type="Polygon" space,
+  <POLYGON_POINTS>:points=@,
+  ";" newline
+}
+
+// === VIARULE block (tech LEF) ============================================
+//
+// LEF/DEF 5.8 §"Via Rule" — defines a parameterized via rule
+// referenced from VIAs and from routing tools. Two forms:
+// generate-rules (with CUTSIZE / LAYERS / etc.) and layer-pair
+// rules (just LAYER properties). Corpus form is mostly the
+// LAYER-pair variant with simple property clauses.
+//
+// Permissive structure: opener + body of generic LAYER /
+// keyword-value clauses (reuses LAYER_PROPERTY structure since the
+// allowed keywords overlap heavily) + closer.
+
+VIARULE_BLOCK: sequence dict {
+  "VIARULE":type="ViaRule" space,
+  identifier:name=@ space,
+  ?<VIARULE_GENERATE_KW>,
+  repeat <VIARULE_PROPERTY>,
+  "END" space, identifier:end_name=@ newline
+}
+
+VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }
+
+// VIARULE body items are a flat sequence of: LAYER declarations,
+// LAYER properties (ENCLOSURE / SPACING / etc), and shapes
+// (RECT / POLYGON). Spec-wise the LAYER properties apply to the
+// most recent LAYER declaration; the grammar keeps them flat and
+// leaves grouping to the consumer.
+VIARULE_PROPERTY: choice {
+  <VIARULE_LAYER_DECL>,
+  <VIA_RECT>,
+  <VIA_POLYGON>,
+  <LAYER_PROPERTY>
+}
+
+VIARULE_LAYER_DECL: sequence dict {
+  "LAYER":type="Layer" space, identifier:layer=@ space, ";" newline
 }
