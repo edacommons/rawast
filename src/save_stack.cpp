@@ -370,7 +370,30 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         // important — `int`/`uint` is checked before the generic
         // custom-parser fallback so `{"type":"string"}` doesn't claim
         // to handle an IntValue.
-        if (p == "string" || p == "identifier") return vt == ValueType::String;
+        if (p == "string") return vt == ValueType::String;
+        if (p == "identifier") {
+            // Reject strings the IdentifierParser wouldn't accept on
+            // re-parse (e.g. dotted names like "gdsii.header"). Lets
+            // Choice dispatch pick a `qualified_identifier` catch-all
+            // alt when the value is a dotted name. The check matches
+            // IdentifierParser's default char set: [A-Za-z_][A-Za-z0-9_]*.
+            if (vt != ValueType::String) return false;
+            const auto& s =
+                std::static_pointer_cast<StringValue>(peek_value)->data();
+            if (s.empty()) return false;
+            auto is_lead = [](char c) {
+                return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+            };
+            auto is_cont = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+            };
+            if (!is_lead(s[0])) return false;
+            for (std::size_t i = 1; i < s.size(); ++i) {
+                if (!is_cont(s[i])) return false;
+            }
+            return true;
+        }
+        if (p == "qualified_identifier") return vt == ValueType::String;
         if (p == "int" || p == "uint")
             return vt == ValueType::Int || vt == ValueType::UInt;
         if (p == "float") return vt == ValueType::Real;

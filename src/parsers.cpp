@@ -372,6 +372,73 @@ SaveResult IdentifierParser::unparse(const Value& value) const {
     return sv->data();
 }
 
+// QualifiedIdentifierParser ----------------------------------------------
+
+QualifiedIdentifierParser::QualifiedIdentifierParser()
+    : Parser("qualified_identifier") {}
+
+ParseResult QualifiedIdentifierParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto is_lead = [](char c) {
+        return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+    };
+    auto is_cont = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+    };
+
+    auto first = sr.peek();
+    if (!first || !is_lead(*first)) {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected identifier"});
+    }
+
+    std::string out;
+    out.push_back(*first);
+    sr.get();
+    while (auto c = sr.peek()) {
+        if (!is_cont(*c)) break;
+        out.push_back(*c);
+        sr.get();
+    }
+
+    // Optional `.ident` segments. Each segment requires a full identifier
+    // (`.` alone or `..` aren't valid); on a half-segment we rewind to
+    // before the dot so the surrounding grammar can still match.
+    while (auto dot = sr.peek()) {
+        if (*dot != '.') break;
+        sr.mark();
+        sr.get();   // consume '.'
+        auto next = sr.peek();
+        if (!next || !is_lead(*next)) {
+            sr.reject();   // rewind the dot
+            break;
+        }
+        out.push_back('.');
+        out.push_back(*next);
+        sr.get();
+        while (auto c = sr.peek()) {
+            if (!is_cont(*c)) break;
+            out.push_back(*c);
+            sr.get();
+        }
+        sr.accept();
+    }
+
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult QualifiedIdentifierParser::unparse(const Value& value) const {
+    auto sv = dynamic_cast<const StringValue*>(&value);
+    if (!sv) {
+        return tl::unexpected(SaveError{
+            "QualifiedIdentifierParser::unparse expects StringValue"});
+    }
+    return sv->data();
+}
+
 // LineCommentParser -------------------------------------------------------
 
 LineCommentParser::LineCommentParser() : Parser("line_comment") {}
@@ -454,6 +521,8 @@ void register_std_parser_group() {
         {"int",            [] { return std::make_unique<IntParser>(); }},
         {"float",          [] { return std::make_unique<FloatParser>(); }},
         {"identifier",     [] { return std::make_unique<IdentifierParser>(); }},
+        {"qualified_identifier",
+                           [] { return std::make_unique<QualifiedIdentifierParser>(); }},
         {"string",         [] { return std::make_unique<DoubleQuoteStringParser>(); }},
         {"whitespace",     [] { return std::make_unique<WhitespaceParser>(); }},
         {"line_comment",   [] { return std::make_unique<LineCommentParser>(); }},

@@ -60,15 +60,15 @@ LIBRARY: sequence dict {
   gdsii.header:version=@,
   gdsii.bgnlib:timestamp=@,
   gdsii.libname:name=@,
-  ?gdsii.reflibs:reflibs=@,
+  ?gdsii.reflibs:libs=@,
   ?gdsii.fonts:fonts=@,
   ?gdsii.attrtable:attributes=@,
   ?gdsii.generations:gens=@,
-  ?<FORMATTYPE>:format_type=@,
+  ?<FORMATTYPE>:format=@,
   gdsii.units:units=@,
   ?<STRUCTURES>:structures=@,
   gdsii.endlib,
-  ?gdsii.padding:padding_bytes=@
+  ?gdsii.padding:padding=@
 }
 
 STRUCTURES: sequence array {
@@ -80,7 +80,7 @@ STRUCTURES: sequence array {
 // ---------------------------------------------------------------------
 
 FORMATTYPE: sequence dict {
-  gdsii.format:format=@,
+  gdsii.format:type=@,
   ?<MASKS>
 }
 
@@ -144,7 +144,7 @@ PROPERTY: sequence dict {
 // into the surrounding ELEMENT dict via the catcher mechanism.
 
 BOUNDARY_ELEM: sequence {
-  gdsii.boundary:element="boundary",
+  gdsii.boundary:type="boundary",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.layer:layer=@,
@@ -153,7 +153,7 @@ BOUNDARY_ELEM: sequence {
 }
 
 PATH_ELEM: sequence {
-  gdsii.path:element="path",
+  gdsii.path:type="path",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.layer:layer=@,
@@ -166,7 +166,7 @@ PATH_ELEM: sequence {
 }
 
 SREF_ELEM: sequence {
-  gdsii.sref:element="sref",
+  gdsii.sref:type="sref",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.sname:name=@,
@@ -175,7 +175,7 @@ SREF_ELEM: sequence {
 }
 
 AREF_ELEM: sequence {
-  gdsii.aref:element="aref",
+  gdsii.aref:type="aref",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.sname:name=@,
@@ -185,7 +185,7 @@ AREF_ELEM: sequence {
 }
 
 TEXT_ELEM: sequence {
-  gdsii.text:element="text",
+  gdsii.text:type="text",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.layer:layer=@,
@@ -193,7 +193,7 @@ TEXT_ELEM: sequence {
 }
 
 NODE_ELEM: sequence {
-  gdsii.node:element="node",
+  gdsii.node:type="node",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.layer:layer=@,
@@ -202,7 +202,7 @@ NODE_ELEM: sequence {
 }
 
 BOX_ELEM: sequence {
-  gdsii.box:element="box",
+  gdsii.box:type="box",
   ?gdsii.elflags:flags=@,
   ?gdsii.plex:plex=@,
   gdsii.layer:layer=@,

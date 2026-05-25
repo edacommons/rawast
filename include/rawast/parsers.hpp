@@ -74,6 +74,18 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// `ident('.' ident)*` — a dotted, group-qualified name. Used by the
+// meta-grammar to parse parser references in either bare (`int`) or
+// group-qualified (`gdsii.header`) form as a single StringValue, so the
+// resulting dict shape is flat (`{type: "gdsii.header"}`) and the parser
+// registry's dotted-alias lookup resolves it directly.
+class QualifiedIdentifierParser final : public Parser {
+public:
+    QualifiedIdentifierParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Double-quoted string. Backslash escape sequences are preserved verbatim
 // in the output (this is the pass-through mode from the prototype — the
 // engine does not interpret escapes; higher-level code can if needed).

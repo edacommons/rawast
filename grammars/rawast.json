@@ -349,35 +349,13 @@
     "type": "sequence",
     "value": [
       {
-        "type": "PARSE_GROUP",
-        "optional": true
-      },
-      {
-        "type": "identifier",
+        "type": "qualified_identifier",
         "bindings": [
           {
             "name": "type",
             "value": "@"
           }
         ]
-      }
-    ]
-  },
-  "PARSE_GROUP": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "identifier",
-        "bindings": [
-          {
-            "name": "group",
-            "value": "@"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "."
       }
     ]
   },

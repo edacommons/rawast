@@ -60,7 +60,7 @@ TEST_CASE("GDSII: single record parse — HEADER (INT16)") {
     Grammar g;
     register_gdsii_parsers(g);
     // Top is just the header parser.
-    NodeId top = g.new_parse("gds_header");
+    NodeId top = g.new_parse("gdsii.header");
     g.set_top(top);
 
     // HEADER record: size=6, rec_id=0x0002, payload=[INT16 value 5].
@@ -80,7 +80,7 @@ TEST_CASE("GDSII: single record parse — HEADER (INT16)") {
 TEST_CASE("GDSII: STR record decodes string with trailing null trim") {
     Grammar g;
     register_gdsii_parsers(g);
-    NodeId top = g.new_parse("gds_libname");
+    NodeId top = g.new_parse("gdsii.libname");
     g.set_top(top);
 
     // LIBNAME "MYLIB" — 5 chars + 1 pad = 6 bytes payload, total 10.
@@ -101,7 +101,7 @@ TEST_CASE("GDSII: STR record decodes string with trailing null trim") {
 TEST_CASE("GDSII: NO_DATA record decodes to null_value") {
     Grammar g;
     register_gdsii_parsers(g);
-    NodeId top = g.new_parse("gds_endlib");
+    NodeId top = g.new_parse("gdsii.endlib");
     g.set_top(top);
 
     std::string bytes;
@@ -120,7 +120,7 @@ TEST_CASE("GDSII: REAL64 round-trip via encoder/decoder") {
     // paths against each other.
     Grammar g;
     register_gdsii_parsers(g);
-    NodeId top = g.new_parse("gds_mag");   // MAG is REAL64
+    NodeId top = g.new_parse("gdsii.mag");   // MAG is REAL64
     g.set_top(top);
 
     const double original = 0.001;        // a typical GDSII units value
@@ -148,7 +148,7 @@ TEST_CASE("GDSII: unparse produces wire-identical bytes (round-trip)") {
     original += "MYLIB";
     original.push_back('\0');
 
-    NodeId top = g.new_parse("gds_libname");
+    NodeId top = g.new_parse("gdsii.libname");
     g.set_top(top);
 
     std::istringstream is(original);
@@ -173,11 +173,11 @@ TEST_CASE("GDSII: minimal library parses end-to-end via .rawast grammar") {
         start: <LIBRARY>
 
         LIBRARY: sequence dict {
-          gds_header:version=@,
-          gds_bgnlib:timestamp=@,
-          gds_libname:name=@,
-          gds_units:units=@,
-          gds_endlib
+          gdsii.header:version=@,
+          gdsii.bgnlib:timestamp=@,
+          gdsii.libname:name=@,
+          gdsii.units:units=@,
+          gdsii.endlib
         }
     )RAWAST";
     REQUIRE(load_rawast_grammar_from_string(g, grammar_src));
@@ -361,7 +361,7 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     REQUIRE(elements->data().size() == 1);
     auto elem = std::dynamic_pointer_cast<DictValue>(elements->data()[0]);
     REQUIRE(elem);
-    CHECK(std::dynamic_pointer_cast<StringValue>(elem->data().at("element"))->data() == "boundary");
+    CHECK(std::dynamic_pointer_cast<StringValue>(elem->data().at("type"))->data() == "boundary");
     CHECK(std::dynamic_pointer_cast<IntValue>(elem->data().at("layer"))->data() == 1);
     CHECK(std::dynamic_pointer_cast<IntValue>(elem->data().at("datatype"))->data() == 0);
 
@@ -396,7 +396,7 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     auto top_struct2 = std::dynamic_pointer_cast<DictValue>(structures2->data()[0]);
     auto elements2 = std::dynamic_pointer_cast<ArrayValue>(top_struct2->data().at("elements"));
     auto elem2 = std::dynamic_pointer_cast<DictValue>(elements2->data()[0]);
-    CHECK(std::dynamic_pointer_cast<StringValue>(elem2->data().at("element"))->data() == "boundary");
+    CHECK(std::dynamic_pointer_cast<StringValue>(elem2->data().at("type"))->data() == "boundary");
     CHECK(std::dynamic_pointer_cast<IntValue>(elem2->data().at("layer"))->data() == 1);
 }
 
@@ -409,9 +409,9 @@ TEST_CASE("Parser registry: gdsii group is registered and applicable") {
     Grammar g;
     auto r = apply_parser_group(g, "gdsii");
     REQUIRE(r);
-    // After applying, the gds_header parser must be available.
-    CHECK(g.parser("gds_header") != nullptr);
-    CHECK(g.parser("gds_endlib") != nullptr);
+    // After applying, the gdsii.header parser must be available.
+    CHECK(g.parser("gdsii.header") != nullptr);
+    CHECK(g.parser("gdsii.endlib") != nullptr);
 }
 
 TEST_CASE("Parser registry: unknown group name produces a clear error") {

@@ -718,21 +718,12 @@ populate(Grammar& g, NodeId target, const Value& body) {
         return {};
     }
     n.kind  = NodeKind::Parse;
-    // Parser reference: support both bare (`header`) and group-
-    // qualified (`gdsii.header`) forms. The meta-grammar's
-    // PARSE_EXPR captures the group in an optional `group` field;
-    // the loader composes `group + "." + type` into the parser-
-    // lookup key when present. The parser registry registers each
-    // group member under both bare and dotted aliases, so either
-    // form resolves to the same parser.
-    std::string lookup_name = type;
-    if (auto group_val = dict_value(*dv, "group")) {
-        auto sv = std::dynamic_pointer_cast<StringValue>(group_val);
-        if (sv) {
-            lookup_name = sv->data() + "." + type;
-        }
-    }
-    n.value = make_string(lookup_name);
+    // Parser reference: `type` carries either the bare name (`header`)
+    // or the group-qualified form (`gdsii.header`) — the meta-grammar's
+    // PARSE_EXPR parses both via `qualified_identifier`. The parser
+    // registry registers each group member under both bare and dotted
+    // aliases, so either form resolves directly.
+    n.value = make_string(type);
     if (dict_bool(*dv, "var")) {
         g.set_name(target);
     }

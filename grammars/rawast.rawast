@@ -52,11 +52,6 @@ ITEMS: sequence array { repeat <ITEM> separator "," }
 
 // ─── Expressions ────────────────────────────────────────────────────────
 
-// EXPR alt order matters for save-side dispatch: alternatives with
-// Value-const discriminators (`type=="sequence"` etc.) come before
-// REF and PARSE_EXPR, which match any `{type: NAME}` shape via
-// field-presence only. Without this ordering, REF would claim
-// SEQUENCE_EXPR's data before SEQUENCE_EXPR gets a chance.
 EXPR: choice {
   <SEQUENCE_EXPR>,
   <CHOICE_EXPR>,
@@ -100,14 +95,11 @@ KEY_VALUE: sequence { ":", choice { "@":emit=true, <CONSTANT>:value=@ } }
 // Parser reference. Bare form `int` resolves through the bare-name
 // alias the parser registry registers for every group member.
 // Dotted form `gdsii.header` references the same parser via the
-// group-qualified alias the registry also registers. The loader
-// composes `group + "." + type` into the lookup key when both
-// fields are present.
-PARSE_EXPR: sequence {
-  ?<PARSE_GROUP>,
-  identifier:type=@
-}
-PARSE_GROUP: sequence { identifier:group=@, "." }
+// group-qualified alias the registry also registers. `qualified_identifier`
+// parses both forms as a single token, so the stored shape is
+// `{type: "gdsii.header"}` (flat) and the dotted-alias lookup resolves
+// it directly.
+PARSE_EXPR: sequence { qualified_identifier:type=@ }
 
 // ─── Bindings ───────────────────────────────────────────────────────────
 //
