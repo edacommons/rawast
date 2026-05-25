@@ -165,7 +165,8 @@ Built-in groups (compile-time registered in `librawast`):
 
 | Group name | Provides |
 | :--- | :--- |
-| `gdsii` | All 47 GDSII binary record parsers (`gds_header`, `gds_bgnlib`, …) |
+| `std` | Common terminal parsers — `identifier`, `qualified_identifier`, `int`, `uint`, `float`, `string`, `whitespace`, `line_comment`, `block_comment` |
+| `gdsii` | All 47 GDSII binary record parsers (`header`, `bgnlib`, …) — referenced bare or group-qualified (`gdsii.header`) |
 
 Additional groups can be registered from host C++ code via
 `rawast::register_parser_group("name", register_fn)`; see
@@ -260,21 +261,28 @@ saves repeating the literal:
 "sequence":@       // equivalent to  "sequence":"sequence"
 ```
 
-### 4.4 Parser — `identifier`
+### 4.4 Parser — `identifier` or `group.identifier`
 
 A bare identifier (not in reserved words, not enclosed in `<...>`) names
-a terminal parser registered on the grammar:
+a terminal parser registered on the grammar. The dotted form
+`group.identifier` is the same parser referenced via its group-qualified
+alias — equivalent in every respect to the bare form:
 
 ```
-int        // SignedIntParser
-uint       // UIntParser
-float      // FloatParser
-string     // DoubleQuoteStringParser
-identifier // IdentifierParser  (a future built-in)
+int                 // SignedIntParser (from `use: std`)
+uint                // UIntParser
+float               // FloatParser
+string              // DoubleQuoteStringParser
+identifier          // IdentifierParser
+qualified_identifier// QualifiedIdentifierParser (ident('.' ident)*)
+gdsii.header        // GdsiiHeaderParser — same as `header` once `use: gdsii`
 ```
 
 The set of available parsers is determined by what's been registered
-when the grammar is loaded.
+when the grammar is loaded — primarily by `use:` directives at the top
+of the file. Each group member is registered under both its bare
+`local_name` and the `group.local_name` alias, so either form resolves
+to the same parser.
 
 ### 4.5 Binding — `expression:bind_target`
 
@@ -331,14 +339,21 @@ that label the surrounding element. Example from GDSII:
 
 ```
 BOUNDARY: sequence dict {
-  gds_boundary:element="boundary",        // match the discriminator; emit ("element","boundary")
-  ?gds_elflags:flags=@,
-  ?gds_plex:plex=@,
-  gds_layer:layer=@,
-  gds_datatype:datatype=@,
-  gds_xy:xy=@
+  gdsii.boundary:type="boundary",         // match the discriminator; emit ("type","boundary")
+  ?gdsii.elflags:flags=@,
+  ?gdsii.plex:plex=@,
+  gdsii.layer:layer=@,
+  gdsii.datatype:datatype=@,
+  gdsii.xy:xy=@
 }
 ```
+
+Parser references support two surface forms — bare (`boundary`) and
+group-qualified (`gdsii.boundary`). Both resolve to the same parser:
+the registry registers each group member under its bare `local_name`
+and under `group.local_name`. The dotted form is parsed as a single
+token by `std.qualified_identifier`, so the AST shape stays flat
+(`{type: "gdsii.boundary"}`).
 
 In the JSON-grammar-format equivalent, the binding desugars to a
 wrapper dict carrying `"type": "binding"` (for `name=@`) or
@@ -812,7 +827,7 @@ NAME_BIND := "=" BIND_VAL
 #### PARSE_EXPR
 
 ```ebnf
-PARSE_EXPR := *identifier*
+PARSE_EXPR := *qualified_identifier*
 ```
 
 #### POSTFIX_ATTR
