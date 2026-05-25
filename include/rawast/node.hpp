@@ -107,6 +107,14 @@ public:
     bool        newline_after = false;
     std::string tail;
 
+    // Subparse re-entry. When set on a Parse-kind node, after the terminal
+    // parser succeeds and returns a StringValue, the engine invokes the
+    // parse loop again on that string starting from `subparse_start` —
+    // same grammar, different entry rule. The resulting value replaces
+    // the original string in the value stream. Invalid (default) means
+    // no subparse. Set by the .rawast `subparse=<RULE>` postfix attr.
+    NodeId subparse_start;
+
     std::vector<NodeId> children;
 };
 

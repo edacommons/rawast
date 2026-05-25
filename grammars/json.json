@@ -6,11 +6,6 @@
   // addressable bare (`int`) or qualified (`std.int`).
   "use": ["std"],
 
-  // Strict JSON (RFC 8259): only whitespace is skipped between tokens.
-  // For JSONC tolerance, add "line_comment" and "block_comment" here
-  // (or qualify as "std.line_comment" / "std.block_comment").
-  "ignore": ["whitespace"],
-
   // Items use the multi-binding wrapper form ({expr, bindings?}). The
   // `bindings` field is OMITTED when empty — bare items collapse to
   // just `{"expr": <X>}`. This matches what the .rawast meta-grammar
@@ -18,8 +13,13 @@
   // Bindings is an ordered array of {name, value} entries. Var binding
   // (parsed value becomes dict key) is `{"bindings": [{"name": "", "value": "@"}]}`.
 
+  // Strict JSON (RFC 8259): only whitespace is skipped between tokens.
+  // For JSONC tolerance, add "line_comment" and "block_comment" to
+  // VALUE's rule_ignore. The ignore policy lives on the start rule and
+  // propagates to all callees until something overrides it.
   "VALUE": {
     "type": "choice",
+    "rule_ignore": ["whitespace"],
     "items": [
       {"expr": "STRUCT"},
       {"expr": "LIST"},

@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -165,6 +166,50 @@ void Grammar::add_ignore(std::string parser_name) {
     ignore_names_.push_back(std::move(parser_name));
 }
 
+void Grammar::add_rule_ignore(std::string rule_name,
+                              std::vector<std::string> parser_names) {
+    rule_ignore_names_[std::move(rule_name)] = std::move(parser_names);
+    rule_ignore_dirty_ = true;
+}
+
+void Grammar::set_pending_subparse(NodeId target, std::string rule_name) {
+    pending_subparse_.emplace_back(target, std::move(rule_name));
+}
+
+tl::expected<void, std::string> Grammar::resolve_subparse_refs() {
+    for (const auto& [target, rule_name] : pending_subparse_) {
+        auto it = named_rules_.find(rule_name);
+        if (it == named_rules_.end()) {
+            return tl::unexpected("subparse references undefined rule '" +
+                                  rule_name + "'");
+        }
+        node(target).subparse_start = it->second;
+    }
+    pending_subparse_.clear();
+    return {};
+}
+
+const std::vector<Parser*>* Grammar::rule_ignore(NodeId rule_node) const {
+    if (rule_ignore_dirty_) {
+        rule_ignore_resolved_.clear();
+        for (const auto& [rule_name, parser_names] : rule_ignore_names_) {
+            auto rit = named_rules_.find(rule_name);
+            if (rit == named_rules_.end()) continue;
+            std::vector<Parser*> ps;
+            ps.reserve(parser_names.size());
+            for (const auto& pn : parser_names) {
+                auto pit = parsers_.find(pn);
+                if (pit == parsers_.end()) continue;
+                ps.push_back(pit->second.get());
+            }
+            rule_ignore_resolved_[rit->second.value()] = std::move(ps);
+        }
+        rule_ignore_dirty_ = false;
+    }
+    auto it = rule_ignore_resolved_.find(rule_node.value());
+    return it == rule_ignore_resolved_.end() ? nullptr : &it->second;
+}
+
 void Grammar::on_rule_complete(const std::string& rule_name, RuleCallback cb) {
     auto it = named_rules_.find(rule_name);
     assert(it != named_rules_.end() && "on_rule_complete: unknown rule");
@@ -181,6 +226,9 @@ void Grammar::replace_parser(std::unique_ptr<Parser> p) const {
             ignore_[i] = parsers_[name].get();
         }
     }
+    // The same parser may appear in rule-local override lists; rebuild
+    // them lazily next time rule_ignore() is called.
+    rule_ignore_dirty_ = true;
 }
 
 void Grammar::set_top(NodeId node) {
@@ -228,14 +276,14 @@ Parser* Grammar::parser(const std::string& name) const {
 
 namespace {
 
-void run_ignore(const Grammar& g, StreamReader& sr) {
+void run_ignore(StreamReader& sr, const std::vector<Parser*>& ignores) {
     // Loop until a full pass through the ignore list consumes nothing.
     // This handles arbitrary interleaving of whitespace and comments —
     // e.g. "  // line\n  /* block */\n  " requires multiple cycles
     // because each ignore parser only consumes one contiguous run.
     while (true) {
         const std::size_t before = sr.position().bytes;
-        for (Parser* p : g.ignore()) {
+        for (Parser* p : ignores) {
             (void)p->parse(sr);
         }
         if (sr.position().bytes == before) break;
@@ -278,6 +326,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& pool) const {
+    return parse_from(sr, pool, top_);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse_from(
+        StreamReader& sr, ValuePool& pool, NodeId start) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
     ValuePtr result_value;
@@ -385,6 +438,28 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         }
     };
 
+    // Rule-local ignore overrides ---------------------------------------
+    //
+    // An IgnoreScope captures "stack depth at which this override was
+    // pushed". After every pop, the loop discards scopes whose depth
+    // exceeds the current stack size — i.e. whose owning frame is gone.
+    // The active ignore list is the top of the stack, or the
+    // grammar-level default if the stack is empty.
+    struct IgnoreScope {
+        std::size_t entry_depth;
+        const std::vector<Parser*>* parsers;
+    };
+    std::vector<IgnoreScope> ignore_stack;
+    auto current_ignore = [&]() -> const std::vector<Parser*>& {
+        return ignore_stack.empty() ? ignore() : *ignore_stack.back().parsers;
+    };
+    auto trim_ignore_stack = [&]() {
+        while (!ignore_stack.empty()
+               && ignore_stack.back().entry_depth > stack.size()) {
+            ignore_stack.pop_back();
+        }
+    };
+
     // Wrap a push_node so optional frames pick up a stream mark on entry.
     // Without this, an optional sub-rule that consumes input then fails
     // mid-parse would leave the stream advanced — the "treat as empty"
@@ -402,6 +477,15 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             sr.mark();
             pending_per_mark.emplace_back();
             stack.back().set_has_mark(true);
+        }
+        // Rule-local ignore: if the just-pushed frame's node has an
+        // override registered, push it. Lives for the lifetime of the
+        // frame and any children — trim_ignore_stack() pops it when
+        // the frame goes away.
+        if (!stack.empty()) {
+            if (const auto* ovr = rule_ignore(stack.back().node_id())) {
+                ignore_stack.push_back({stack.size(), ovr});
+            }
         }
     };
 
@@ -539,14 +623,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         // Stack drained without recovery -- top-level parse fails.
     };
 
-    push_with_optional_mark(top_);
+    push_with_optional_mark(start);
 
     while (!stack.empty() && !parse_finished) {
+        // Pop any rule-local ignore scopes whose owning frame has been
+        // popped since the previous iteration.
+        trim_ignore_stack();
         Frame& top = stack.back();
         switch (top.kind()) {
 
         case NodeKind::Key: {
-            run_ignore(*this, sr);
+            run_ignore(sr, current_ignore());
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
@@ -579,7 +666,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         }
 
         case NodeKind::Parse: {
-            run_ignore(*this, sr);
+            run_ignore(sr, current_ignore());
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
@@ -588,10 +675,38 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             assert(p);
             auto r = p->parse(sr);
             if (r) {
+                ValuePtr produced = *r;
+                // Subparse hook: if this Parse node carries a
+                // subparse_start, re-enter the engine on the produced
+                // string with the named rule as entry. Result replaces
+                // the original string value. Failure propagates as a
+                // parse error with the sub-position adjusted into the
+                // outer stream's reference frame (best-effort: we
+                // surface the inner message with a prefix and the
+                // outer stream position).
+                if (n.subparse_start.valid()) {
+                    auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
+                    if (!produced_sv) {
+                        handle_failure(ParseError{
+                            sr.position(),
+                            "subparse requires a string-valued terminal"});
+                        break;
+                    }
+                    std::istringstream sub_is(produced_sv->data());
+                    StreamReader sub_sr(sub_is);
+                    auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
+                    if (!sub_r) {
+                        handle_failure(ParseError{
+                            sr.position(),
+                            "subparse: " + sub_r.error().message});
+                        break;
+                    }
+                    produced = *sub_r;
+                }
                 // Intern the produced primitive so identical content
                 // (same string, same int, etc.) shares a canonical
                 // ValuePtr across the entire parse.
-                ValuePtr canonical = pool.intern(*r);
+                ValuePtr canonical = pool.intern(produced);
                 top.add_value(canonical, top.is_name());
                 if (top.has_current()) {
                     push_with_optional_mark(top.current_child());
@@ -695,7 +810,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
         // Without this check a grammar that matches a prefix would
         // silently succeed, hiding coverage gaps when the file has
         // unmodeled content after the matched portion.
-        run_ignore(*this, sr);
+        run_ignore(sr, current_ignore());
         if (!sr.eof()) {
             return tl::unexpected(ParseError{
                 sr.position(),

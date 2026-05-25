@@ -5,14 +5,10 @@
   "use": [
     "std"
   ],
-  "ignore": [
-    "whitespace",
-    "line_comment",
-    "block_comment"
-  ],
   "FILE": {
     "type": "sequence",
     "container": "dict",
+    "rule_ignore": ["whitespace", "line_comment", "block_comment"],
     "value": [
       {
         "type": "repeat",
@@ -28,9 +24,6 @@
     "value": [
       {
         "type": "USE_DECL"
-      },
-      {
-        "type": "IGNORE_DECL"
       },
       {
         "type": "START_DECL"
@@ -62,28 +55,6 @@
       }
     ]
   },
-  "IGNORE_DECL": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "ignore"
-      },
-      {
-        "type": "key",
-        "key": ":"
-      },
-      {
-        "type": "IDENT_LIST",
-        "bindings": [
-          {
-            "name": "ignore",
-            "value": "@"
-          }
-        ]
-      }
-    ]
-  },
   "IDENT_LIST": {
     "type": "sequence",
     "container": "array",
@@ -95,7 +66,7 @@
           "key": ","
         },
         "value": {
-          "type": "identifier"
+          "type": "qualified_identifier"
         }
       }
     ]
@@ -113,11 +84,81 @@
         ]
       },
       {
+        "type": "RULE_BODY"
+      }
+    ]
+  },
+  "RULE_BODY": {
+    "type": "sequence",
+    "container": "dict",
+    "value": [
+      {
+        "type": "RULE_IGNORE_ATTR",
+        "optional": true
+      },
+      {
         "type": "key",
         "key": ":"
       },
       {
-        "type": "ITEM"
+        "type": "key",
+        "key": "?",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "optional",
+            "value": true
+          }
+        ]
+      },
+      {
+        "type": "EXPR"
+      },
+      {
+        "type": "BINDINGS",
+        "bindings": [
+          {
+            "name": "bindings",
+            "value": "@"
+          }
+        ],
+        "optional": true
+      },
+      {
+        "type": "repeat",
+        "value": {
+          "type": "POSTFIX_ATTR"
+        }
+      }
+    ]
+  },
+  "RULE_IGNORE_ATTR": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "key",
+        "key": "ignore"
+      },
+      {
+        "type": "IGNORE_LIST",
+        "bindings": [
+          {
+            "name": "rule_ignore",
+            "value": "@"
+          }
+        ]
+      }
+    ]
+  },
+  "IGNORE_LIST": {
+    "type": "sequence",
+    "container": "array",
+    "value": [
+      {
+        "type": "repeat",
+        "value": {
+          "type": "qualified_identifier"
+        }
       }
     ]
   },

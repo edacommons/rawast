@@ -342,6 +342,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 }
 
                 bool set_var = false;
+                std::string subparse_name;
                 std::vector<std::pair<std::string, ValuePtr>> at_bindings;
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
@@ -359,6 +360,19 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                                 continue;
                             }
                         }
+                    }
+                    // `:subparse="RULE"` is an engine directive, not a
+                    // runtime emit — capture the rule name and DO NOT
+                    // emit it as a Value-name + Value-const pair. The
+                    // rule is resolved to a NodeId post-load.
+                    if (e.name == "subparse") {
+                        auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                        if (!sv) {
+                            return tl::unexpected(
+                                "subparse: value must be a string naming a rule");
+                        }
+                        subparse_name = sv->data();
+                        continue;
                     }
                     // Value "@" means "bind to expr's parsed value".
                     if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {
@@ -385,6 +399,11 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 // For flat form, populate() already applied them to the
                 // expr node (since item dict IS the expr source).
                 if (!is_flat) apply_pretty_attrs(g, *expr_child, *item_dict);
+                // Stash the subparse target name; resolved after all
+                // rules are loaded (the named rule may come later).
+                if (!subparse_name.empty()) {
+                    g.set_pending_subparse(*expr_child, subparse_name);
+                }
 
                 // Conditional bindings: when the expr is optional AND
                 // there are CONST bindings (e.g. `?X:flag=true`), wrap
@@ -766,38 +785,49 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
         }
     }
 
-    // Apply the explicit ignore-list declaration (top-level "ignore"
-    // field): an array of parser names to call add_ignore() on. Run
-    // AFTER `use:` so that group-registered parsers are resolvable. A
-    // grammar that wants comment tolerance must opt in here — the host
-    // API never adds comment ignores implicitly.
-    if (auto ig_it = root->data().find("ignore"); ig_it != root->data().end()) {
-        auto ig_arr = std::dynamic_pointer_cast<ArrayValue>(ig_it->second);
-        if (!ig_arr) {
-            return tl::unexpected("'ignore' field must be an array of parser names");
-        }
-        for (const auto& entry : ig_arr->data()) {
-            auto sv = std::dynamic_pointer_cast<StringValue>(entry);
-            if (!sv) {
-                return tl::unexpected("'ignore' entries must be parser names");
-            }
-            g.add_ignore(sv->data());
-        }
-    }
-
     // Pass 1: allocate one Node per named rule and register the name. The
     // Node's kind/value/children are filled in pass 2; for now they're
     // placeholders so that build_inline() / populate() can correctly
     // disambiguate bare-string Ref vs. Key by checking has_rule().
     for (const auto& [name, body] : root->data()) {
-        if (name == "start" || name == "use" || name == "ignore") continue;
+        if (name == "start" || name == "use") continue;
         NodeId id = g.new_sequence();   // placeholder
         g.register_rule(name, id);
     }
 
+    // Per-rule ignore overrides. A rule body's `rule_ignore` field is an
+    // array of parser names that the parse driver pushes as the active
+    // ignore set when it enters that rule. Grammar-level "default
+    // ignore" is achieved by attaching `rule_ignore` to the start rule —
+    // the override propagates to all callees until something pushes
+    // its own.
+    for (const auto& [name, body] : root->data()) {
+        if (name == "start" || name == "use") continue;
+        auto body_dict = std::dynamic_pointer_cast<DictValue>(body);
+        if (!body_dict) continue;
+        auto ri_it = body_dict->data().find("rule_ignore");
+        if (ri_it == body_dict->data().end()) continue;
+        auto ri_arr = std::dynamic_pointer_cast<ArrayValue>(ri_it->second);
+        if (!ri_arr) {
+            return tl::unexpected("rule '" + name +
+                                  "': rule_ignore must be an array of parser names");
+        }
+        std::vector<std::string> parsers;
+        parsers.reserve(ri_arr->data().size());
+        for (const auto& entry : ri_arr->data()) {
+            auto sv = std::dynamic_pointer_cast<StringValue>(entry);
+            if (!sv) {
+                return tl::unexpected("rule '" + name +
+                                      "': rule_ignore entries must be parser names");
+            }
+            parsers.push_back(sv->data());
+        }
+        g.add_rule_ignore(name, std::move(parsers));
+    }
+
     // Pass 2: populate each named rule's Node from its body.
     for (const auto& [name, body] : root->data()) {
-        if (name == "start" || name == "use" || name == "ignore") continue;
+        if (name == "start" || name == "use") continue;
         if (!body) {
             return tl::unexpected("rule '" + name + "' has null body");
         }
@@ -837,6 +867,13 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
                               start_name + "'");
     }
     g.set_top(g.new_ref(start_name));
+
+    // Resolve any pending `:subparse="RULE"` references collected while
+    // walking items — the rule may have been defined later than the
+    // referring item, so resolution waits until all rules are
+    // registered.
+    auto sub_r = g.resolve_subparse_refs();
+    if (!sub_r) return tl::unexpected(sub_r.error());
 
     return {};
 }

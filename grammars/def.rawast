@@ -25,13 +25,12 @@
 // see lef.rawast).
 
 use: std, lefdef
-ignore: whitespace, line_comment
 
 start: <FILE>
 
 // === Top level ============================================================
 
-FILE: sequence dict {
+FILE ignore whitespace line_comment: sequence dict {
   <HDR>:hdr=@,
   <DESIGN>:design=@
 }

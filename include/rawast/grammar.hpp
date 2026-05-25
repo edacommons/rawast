@@ -84,6 +84,31 @@ public:
     void register_parser_alias(std::string key, std::unique_ptr<Parser> p);
     void add_ignore(std::string parser_name);
 
+    // Rule-local ignore override. When the parse driver enters the rule
+    // named `rule_name` (via Ref resolution), it temporarily uses the
+    // listed parsers as the active ignore set, restoring the previous
+    // set on rule exit. Parsers must be registered via `use:` before
+    // they can appear in an override list. Empty list = "ignore
+    // nothing for this rule and its callees" — used e.g. for word-
+    // internal contexts where whitespace is literal.
+    //
+    // Set by the .rawast `ignore <RULE>: …` top-level declaration.
+    void add_rule_ignore(std::string rule_name, std::vector<std::string> parser_names);
+
+    // Look up the override for a rule; returns nullptr if none.
+    const std::vector<Parser*>* rule_ignore(NodeId rule_node) const;
+
+    // Record a pending subparse target. The rule name is resolved by
+    // resolve_subparse_refs() after all rules are loaded — necessary
+    // because the named rule may be defined later in the grammar
+    // source than the item that references it.
+    void set_pending_subparse(NodeId target, std::string rule_name);
+
+    // Resolve all pending subparse targets. Called by the loader at
+    // the end of grammar load. Errors if a referenced rule wasn't
+    // defined.
+    tl::expected<void, std::string> resolve_subparse_refs();
+
     // --- Mid-parse hooks: rule callbacks and parser replacement -------
     //
     // Some formats (LEF/DEF, Liberty, Verilog) have preambles that
@@ -157,6 +182,12 @@ public:
     // (find_containers_of) to do value search across the produced tree.
     tl::expected<ValuePtr, ParseError> parse(StreamReader& sr) const;
     tl::expected<ValuePtr, ParseError> parse(StreamReader& sr, ValuePool& pool) const;
+    // Parse from an explicit start node — used by the subparse hook to
+    // re-enter the engine on an item's captured string with a different
+    // entry rule. The same grammar is reused; only the starting point
+    // changes.
+    tl::expected<ValuePtr, ParseError> parse_from(
+            StreamReader& sr, ValuePool& pool, NodeId start) const;
 
     // --- Driver: save direction ----------------------------------------
 
@@ -192,6 +223,19 @@ private:
     mutable std::vector<Parser*> ignore_;
     // Insertion order of ignore_ — replace_parser preserves it.
     std::vector<std::string> ignore_names_;
+    // Per-rule ignore overrides. Key: rule name (also stored as
+    // resolved NodeId after grammar load for O(1) lookup during
+    // parse). Value: parser names; the parsers themselves are resolved
+    // at lookup time so a replace_parser() swap is honoured.
+    std::map<std::string, std::vector<std::string>> rule_ignore_names_;
+    // Resolved view: rule NodeId → parser-pointer list. Built lazily
+    // on first parse(); invalidated by replace_parser().
+    mutable std::map<std::size_t, std::vector<Parser*>> rule_ignore_resolved_;
+    mutable bool rule_ignore_dirty_ = true;
+    // Pending subparse targets — populated by the loader as items
+    // with `:subparse="RULE"` bindings are processed, resolved en
+    // masse by resolve_subparse_refs() at end of grammar load.
+    std::vector<std::pair<NodeId, std::string>> pending_subparse_;
     // Rule-completion callbacks, keyed by the rule's body NodeId
     // (the post-Ref-resolution arena id, which is also Frame::node_id()).
     std::map<std::size_t, std::vector<RuleCallback>> callbacks_by_node_;

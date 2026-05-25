@@ -11,32 +11,58 @@
 //     (empty string) marks a var binding.
 
 use: std
-ignore: whitespace, line_comment, block_comment
 
 start: <FILE>
 
 // ─── Top level ──────────────────────────────────────────────────────────
+//
+// The grammar-level "default ignore" is expressed by attaching an ignore
+// attribute to the start rule (here, FILE). Rule-local overrides live
+// on individual rule definitions. There is no separate top-level
+// `ignore:` directive.
 
-FILE: sequence dict { repeat <FILE_ENTRY> newline }
+FILE ignore whitespace line_comment block_comment: sequence dict {
+  repeat <FILE_ENTRY> newline
+}
 
-FILE_ENTRY: choice { <USE_DECL>, <IGNORE_DECL>, <START_DECL>, <RULE_DEF>}
+FILE_ENTRY: choice { <USE_DECL>, <START_DECL>, <RULE_DEF>}
 
-USE_DECL:    sequence { "use",    ":", <IDENT_LIST>:use=@    }
-IGNORE_DECL: sequence { "ignore", ":", <IDENT_LIST>:ignore=@ }
-IDENT_LIST:  sequence array { repeat identifier separator "," }
+USE_DECL:   sequence { "use", ":", <IDENT_LIST>:use=@ }
+IDENT_LIST: sequence array { repeat qualified_identifier separator "," }
 
 START_DECL: sequence {"start", ":", <START_VAL>:start=@}
 
 START_VAL: sequence dict { <REF> }
 
-// A rule definition: name, colon, body. The body is an ITEM — same shape
-// as items inside a sequence/choice. The (rule-name, ITEM-value) pair
-// bubbles up to FILE's dict.
+// A rule definition: name, optional ignore attribute, colon, body. The
+// ignore attribute (`ignore PARSER1 PARSER2 …`) sits between the rule
+// name and the colon — its parser names become the rule-local ignore
+// override for that rule's subtree. The body is otherwise an ITEM (same
+// shape as items inside a sequence/choice).
 RULE_DEF: sequence {
   identifier:=@,
-  ":",
-  <ITEM>
+  <RULE_BODY>
 }
+
+// RULE_BODY is the rule's value (paired with the rule-name var binding).
+// Same fields as ITEM, plus an optional leading rule_ignore attr.
+RULE_BODY: sequence dict {
+  ?<RULE_IGNORE_ATTR>,
+  ":",
+  ?"?":optional=true,
+  <EXPR>,
+  ?<BINDINGS>:bindings=@,
+  repeat <POSTFIX_ATTR>
+}
+
+// `ignore PARSER1 PARSER2 …` — space-separated parser names, terminated
+// by the next `:` (since `:` isn't a valid identifier char, the
+// repeat naturally stops). Empty list means "ignore nothing".
+RULE_IGNORE_ATTR: sequence {
+  "ignore",
+  <IGNORE_LIST>:rule_ignore=@
+}
+IGNORE_LIST: sequence array { repeat qualified_identifier }
 
 // ─── Items ──────────────────────────────────────────────────────────────
 
