@@ -1,17 +1,32 @@
-// grammars/tcl.rawast — Full Tcl parser, single grammar.
+// grammars/tcl.rawast — Tier-1 Tcl parser.
 //
-// Three logical contexts handled within one grammar via subparse:
+// Two logical contexts handled within one grammar via subparse:
 //   SCRIPT         — main grammar body; ignore tcl.hspace
-//   EXPR           — expression language; ignore tcl.hspace + tcl.newline
 //   WORD_SEGMENTS  — word internals; no ignore (whitespace is literal)
+//
+// Tcl is parsed structurally per the Dodekalogue: a script is a list
+// of commands separated by `;` or newline; each command is a list of
+// words; each word is one of {brace, quoted, bracket, bare}. Bare and
+// quoted words are sub-parsed through WORD_SEGMENTS to split out
+// variable references ($x / ${x} / $arr(idx)), command substitutions
+// ([cmd]), and backslash escapes from literal text. Brace words are
+// opaque per Dodekalogue rule 6; bracket words are nested Tcl
+// scripts (subparse=SCRIPT for command substitution).
+//
+// Command-level semantics — recognising `if` / `while` / `proc` / etc.
+// and dispatching to per-command argument schemas — is downstream
+// (application-layer) concern. The grammar produces a flat
+// `(command, words)` tree; consumers walk it, dispatch on first-word
+// value, and re-invoke `Grammar.parse_string` on relevant args with
+// whichever sub-grammar they need (expr, list, etc.). Keeping command
+// semantics out of the grammar matches the "parse, don't validate"
+// principle the LEF/DEF grammars also follow.
 //
 // Per-rule `ignore <RULE>: …` directives override the grammar-level
 // ignore list when the parse driver enters that rule. A `:subparse=
 // "<RULE>"` binding on an item names a rule to use as the start when
 // re-parsing the item's captured string. Same grammar, same engine,
 // different entry point with the rule's own ignore context.
-// (`subparse` is just a string-valued binding — the meta-grammar
-// carries it automatically; the engine special-cases the key.)
 
 use: std, tcl
 
@@ -33,17 +48,12 @@ COMMANDS: sequence array {
 
 // Wrap in a `dict` container so the null values emitted by the SEPs
 // (tcl.newline returns null_value, `;` is a Key with no value) are
-// caught locally and don't bubble into the COMMANDS array.
+// caught locally and don't bubble into the COMMANDS array. Empty-dict
+// entries between commands are the visible artefact and trivially
+// filtered downstream.
 SEP_RUN: sequence dict { repeat+ <SEP> }
 SEP: choice { ";", tcl.newline }
 
-// Known commands tried first; GENERIC_CMD is the catch-all.
-// Tier 1: every command is a flat word list. Typed-command dispatch
-// (IF_CMD / WHILE_CMD / FOR_CMD / FOREACH_CMD / PROC_CMD / SET_CMD /
-// EXPR_CMD — defined below as Tier 2 sketches) requires word-boundary
-// enforcement on keyword matches so `set` doesn't grab the prefix of
-// `set_cts_config`. That's M2+ work; for now everything routes through
-// GENERIC_CMD.
 COMMAND: choice {
   <COMMENT>,
   <GENERIC_CMD>
@@ -52,95 +62,6 @@ COMMAND: choice {
 COMMENT: sequence dict {
   tcl.comment:type="comment":body=@
 }
-
-// ─── if / elseif / else ────────────────────────────────────────────
-
-IF_CMD: sequence dict {
-  "if":type="if",
-  tcl.brace_group:cond=@:subparse="EXPR",
-  tcl.brace_group:then=@:subparse="SCRIPT",
-  ?<ELSEIF_LIST>:elseif=@,
-  ?<ELSE_CLAUSE>
-}
-
-ELSEIF_LIST: sequence array { repeat+ <ELSEIF_CLAUSE> }
-
-ELSEIF_CLAUSE: sequence dict {
-  "elseif",
-  tcl.brace_group:cond=@:subparse="EXPR",
-  tcl.brace_group:body=@:subparse="SCRIPT"
-}
-
-ELSE_CLAUSE: sequence dict {
-  "else",
-  tcl.brace_group:else=@:subparse="SCRIPT"
-}
-
-// ─── while / for / foreach ─────────────────────────────────────────
-
-WHILE_CMD: sequence dict {
-  "while":type="while",
-  tcl.brace_group:cond=@:subparse="EXPR",
-  tcl.brace_group:body=@:subparse="SCRIPT"
-}
-
-FOR_CMD: sequence dict {
-  "for":type="for",
-  tcl.brace_group:init=@:subparse="SCRIPT",
-  tcl.brace_group:cond=@:subparse="EXPR",
-  tcl.brace_group:step=@:subparse="SCRIPT",
-  tcl.brace_group:body=@:subparse="SCRIPT"
-}
-
-FOREACH_CMD: sequence dict {
-  "foreach":type="foreach",
-  <WORD>:varname=@,
-  <WORD>:list=@,
-  tcl.brace_group:body=@:subparse="SCRIPT"
-}
-
-// ─── proc ───────────────────────────────────────────────────────────
-// proc name {args} {body}. Args list is Tcl's arg-list mini-syntax
-// (default values, optional `args` for varargs) — kept opaque here;
-// a future tcl.proc_args entry rule could subparse it.
-
-PROC_CMD: sequence dict {
-  "proc":type="proc",
-  <WORD>:name=@,
-  tcl.brace_group:args=@,
-  tcl.brace_group:body=@:subparse="SCRIPT"
-}
-
-// ─── set / expr ────────────────────────────────────────────────────
-
-SET_CMD: sequence dict {
-  "set":type="set",
-  <WORD>:varname=@,
-  ?<WORD>:value=@
-}
-
-EXPR_CMD: sequence dict {
-  "expr":type="expr",
-  <EXPR_ARG>:expr=@
-}
-
-// `expr` accepts either a single brace-quoted arg (recommended) or a
-// word list that gets concatenated at runtime. Tier 2 keeps both
-// forms; downstream may normalise.
-EXPR_ARG: choice {
-  <BRACED_EXPR>,
-  <UNBRACED_EXPR>
-}
-
-BRACED_EXPR: sequence dict {
-  tcl.brace_group:braced=true:value=@:subparse="EXPR"
-}
-
-UNBRACED_EXPR: sequence dict {
-  <WORDS>:braced=false:words=@
-}
-
-// ─── Generic (unknown) command ─────────────────────────────────────
 
 GENERIC_CMD: sequence dict {
   <WORDS>:type="command":words=@
@@ -185,154 +106,12 @@ BARE_WORD: sequence dict {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 2. EXPR context — Tcl expression language
-// ═══════════════════════════════════════════════════════════════════
-//
-// Operator precedence (lowest to highest):
-//   ?:                        ternary  (right-assoc)
-//   ||
-//   &&
-//   |
-//   ^
-//   &
-//   == != eq ne in ni
-//   <  >  <= >=
-//   << >>
-//   +  -
-//   *  /  %
-//   **                        (right-assoc)
-//   unary  -  +  !  ~
-//   primary
-//
-// Per `ignore EXPR: tcl.hspace, tcl.newline` above, whitespace
-// (including newlines) is unrestricted between tokens — Tcl expr is
-// whitespace-insensitive.
-
-EXPR ignore tcl.hspace tcl.newline: <TERNARY_OR_OR>
-
-TERNARY_OR_OR: sequence dict {
-  <LOGICAL_OR>:cond=@,
-  ?<TERNARY_TAIL>
-}
-TERNARY_TAIL: sequence dict {
-  "?",
-  <EXPR>:then=@,
-  ":",
-  <EXPR>:else=@
-}
-
-// Left-associative chains: lhs (op rhs)*.
-LOGICAL_OR:   sequence dict { <LOGICAL_AND>:lhs=@,    repeat <OR_RHS>:tail=@   }
-OR_RHS:       sequence dict { "||":op="||",    <LOGICAL_AND>:rhs=@ }
-
-LOGICAL_AND:  sequence dict { <BITWISE_OR>:lhs=@,     repeat <AND_RHS>:tail=@  }
-AND_RHS:      sequence dict { "&&":op="&&",    <BITWISE_OR>:rhs=@ }
-
-BITWISE_OR:   sequence dict { <BITWISE_XOR>:lhs=@,    repeat <BOR_RHS>:tail=@  }
-BOR_RHS:      sequence dict { "|":op="|",      <BITWISE_XOR>:rhs=@ }
-
-BITWISE_XOR:  sequence dict { <BITWISE_AND>:lhs=@,    repeat <XOR_RHS>:tail=@  }
-XOR_RHS:      sequence dict { "^":op="^",      <BITWISE_AND>:rhs=@ }
-
-BITWISE_AND:  sequence dict { <EQUALITY>:lhs=@,       repeat <BAND_RHS>:tail=@ }
-BAND_RHS:     sequence dict { "&":op="&",      <EQUALITY>:rhs=@ }
-
-EQUALITY:     sequence dict { <COMPARISON>:lhs=@,     repeat <EQ_RHS>:tail=@   }
-EQ_RHS:       sequence dict { <EQ_OP>:op=@,    <COMPARISON>:rhs=@ }
-EQ_OP: choice { "==":"==", "!=":"!=", "eq":"eq", "ne":"ne", "in":"in", "ni":"ni" }
-
-COMPARISON:   sequence dict { <SHIFT>:lhs=@,          repeat <CMP_RHS>:tail=@  }
-CMP_RHS:      sequence dict { <CMP_OP>:op=@,   <SHIFT>:rhs=@ }
-CMP_OP: choice { "<=":"<=", ">=":">=", "<":"<", ">":">" }
-
-SHIFT:        sequence dict { <ADDITIVE>:lhs=@,       repeat <SHIFT_RHS>:tail=@ }
-SHIFT_RHS:    sequence dict { <SHIFT_OP>:op=@, <ADDITIVE>:rhs=@ }
-SHIFT_OP: choice { "<<":"<<", ">>":">>" }
-
-ADDITIVE:     sequence dict { <MULTIPLICATIVE>:lhs=@, repeat <ADD_RHS>:tail=@  }
-ADD_RHS:      sequence dict { <ADD_OP>:op=@,   <MULTIPLICATIVE>:rhs=@ }
-ADD_OP: choice { "+":"+", "-":"-" }
-
-MULTIPLICATIVE: sequence dict { <POWER>:lhs=@,        repeat <MUL_RHS>:tail=@  }
-MUL_RHS:      sequence dict { <MUL_OP>:op=@,   <POWER>:rhs=@ }
-MUL_OP: choice { "*":"*", "/":"/", "%":"%" }
-
-// `**` is right-associative.
-POWER: sequence dict {
-  <UNARY>:base=@,
-  ?<POWER_TAIL>
-}
-POWER_TAIL: sequence dict {
-  "**":op="**",
-  <POWER>:exp=@
-}
-
-UNARY: choice {
-  <UNARY_OP_EXPR>,
-  <PRIMARY>
-}
-UNARY_OP_EXPR: sequence dict {
-  <UNARY_OP>:op=@,
-  <UNARY>:operand=@
-}
-UNARY_OP: choice { "-":"-", "+":"+", "!":"!", "~":"~" }
-
-PRIMARY: choice {
-  <PAREN_EXPR>,
-  <FUNC_CALL>,
-  <VAR_REF>,
-  <BRACKET_SUB>,
-  <STRING_LIT>,
-  <NUMBER>,
-  <BOOL_LIT>
-}
-
-PAREN_EXPR: sequence dict {
-  "(", <EXPR>:paren=@, ")"
-}
-
-FUNC_CALL: sequence dict {
-  identifier:func=@,
-  "(",
-  ?<EXPR_LIST>:args=@,
-  ")"
-}
-EXPR_LIST: sequence array { repeat+ <EXPR> separator "," }
-
-// Variable reference inside expr: $name, ${name}, $arr(idx).
-VAR_REF: sequence dict {
-  "$",
-  tcl.var_name:type="var":name=@
-}
-
-// `[cmd args]` — command substitution; sub-parse as SCRIPT.
-BRACKET_SUB: sequence dict {
-  tcl.bracket_sub:type="bracket":value=@:subparse="SCRIPT"
-}
-
-// Double-quoted literal — sub-parse for substitutions.
-STRING_LIT: sequence dict {
-  tcl.quoted_string:type="string":value=@:subparse="WORD_SEGMENTS"
-}
-
-NUMBER: choice { float, int }
-
-BOOL_LIT: choice {
-  "true":true,
-  "false":false,
-  "yes":true,
-  "no":false,
-  "on":true,
-  "off":false
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// 3. WORD_SEGMENTS context — word internals
+// 2. WORD_SEGMENTS context — word internals
 // ═══════════════════════════════════════════════════════════════════
 //
 // Re-parses a bare or quoted word's raw text into a list of segments:
 // literal text, variable references, command substitutions, escapes.
-// Per `ignore WORD_SEGMENTS:` (empty) above, whitespace is literal —
+// Per `ignore WORD_SEGMENTS:` (empty) below, whitespace is literal —
 // nothing is skipped between tokens.
 
 WORD_SEGMENTS ignore: sequence dict {
