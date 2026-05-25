@@ -30,8 +30,8 @@ sought to harden it. Ships as a C++ engine with Python bindings.
 
 ## History
 
-rawast is the C++ rewrite of an earlier Python prototype (`astrw`,
-2023–2025) that validated the data-driven grammar approach, the
+rawast is the C++ rewrite of an earlier Python prototype (2023–2025)
+that validated the data-driven grammar approach, the
 catcher-based value-tree mechanism, and the bidirectional walk. The
 current implementation is the productionisation of those ideas as a
 maintained C++20 codebase; most of the commit history here reflects the
@@ -82,15 +82,14 @@ are documented in `docs/` and in the prototype's history.
 
 ## What's planned
 
-See `docs/rawast-format.md` for the language spec and `PROPOSAL_v2.md`
-(in the project's grant-application directory; not in the public
-repository) for the milestone roadmap. Briefly: M1 finalises the engine
-APIs and the grammar-load linter; M2 ships the `.jast` container format
-and the `Grammar::validate()` API; M3 delivers a CLI, Python bindings
-via nanobind, and a Pydantic-model generator that emits typed Python
-classes from any grammar; M4 publishes the grammar repository, ten
-production-quality grammars (LEF, DEF, Verilog netlist, Liberty, SPEF,
-JSON, TOML, CSV, syslog, Nginx log), and per-grammar PyPI packages.
+See `docs/rawast-format.md` for the language spec. Roadmap in brief:
+M1 finalises the engine APIs and the grammar-load linter; M2 ships the
+`.jast` container format and the `Grammar::validate()` API; M3 delivers
+a CLI, Python bindings via nanobind, and a Pydantic-model generator
+that emits typed Python classes from any grammar; M4 publishes the
+grammar repository, ten production-quality grammars (LEF, DEF, Verilog
+netlist, Liberty, SPEF, JSON, TOML, CSV, syslog, Nginx log), and
+per-grammar PyPI packages.
 
 ## Quickstart (Python)
 
