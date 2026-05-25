@@ -29,7 +29,7 @@ GRAMMARS  = REPO_ROOT / "grammars"
 def test_self_host_save_gdsii_rawast():
     """Parse gdsii.rawast through the meta-grammar, save as .rawast text
     via save, re-parse — the dicts must be equal."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     original = meta.parse_file(str(GRAMMARS / "gdsii.rawast"))
     text     = meta.save(original, pretty=True).decode("utf-8")
     reparsed = meta.parse_string(text)
@@ -39,7 +39,7 @@ def test_self_host_save_gdsii_rawast():
 def test_self_host_save_includes_use_directive():
     """The `use: gdsii` directive at the top of gdsii.rawast must
     survive the round-trip."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     original = meta.parse_file(str(GRAMMARS / "gdsii.rawast"))
     text     = meta.save(original, pretty=True).decode("utf-8")
     assert "use" in text
@@ -69,7 +69,7 @@ def test_json_save_round_trip(value):
 def test_save_dispatches_parse_expr_catch_all():
     """For `{"type":"int"}`, the EXPR Choice picks PARSE_EXPR
     (catch-all alternative)."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     data = {"start": {"type": "X"}, "X": {"type": "int"}}
     text = meta.save(data, pretty=False).decode("utf-8")
     assert "int" in text
@@ -78,7 +78,7 @@ def test_save_dispatches_parse_expr_catch_all():
 def test_save_dispatches_ref_for_ref_dict():
     """In EXPR's choice, a flat ref dict {"type": NAME} picks REF
     (matches the `<identifier>` shape)."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     data = {
         "start": {"type": "X"},
         "X": {"type": "Y"},
@@ -91,7 +91,7 @@ def test_save_dispatches_ref_for_ref_dict():
 def test_save_dispatches_use_decl_via_bare_key():
     """`USE_DECL` matches via key-based dispatch — the bare Key 'use'
     in its grammar tree matches when the current dict key is 'use'."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     data = {
         "start": {"type": "X"},
         "use": ["gdsii"],
@@ -104,7 +104,7 @@ def test_save_dispatches_use_decl_via_bare_key():
 def test_save_bare_item_emits_no_binding_suffix():
     """A flat-form ITEM with no `bindings` field should emit just the
     expr — no `:name=` suffix."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     data = {
         "start": {"type": "X"},
         "X": {"type": "sequence", "container": "array", "value": [

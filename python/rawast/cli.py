@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 
-from . import Grammar, __version__, json_format, rawast_format
+from . import Grammar, __version__
 
 
 def cmd_parse(args: argparse.Namespace) -> int:
@@ -52,7 +52,7 @@ def cmd_lint(args: argparse.Namespace) -> int:
 
 def cmd_docs(args: argparse.Namespace) -> int:
     from .docs import to_markdown
-    meta = json_format() if args.grammar.endswith(".json") else rawast_format()
+    meta = Grammar() if args.grammar.endswith(".json") else Grammar("rawast")
     grammar = meta.parse_file(args.grammar)
     title = args.title or args.grammar
     sys.stdout.write(to_markdown(grammar, title=title,

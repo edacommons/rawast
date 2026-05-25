@@ -232,8 +232,9 @@ NB_MODULE(_native, m) {
             },
             nb::arg("d"),
             "Build a Grammar from a value-tree dict (the form a grammar "
-            "file produces when parsed through json_format() or "
-            "rawast_format()). Inverse of `meta.parse_file(grammar_file)`.")
+            "file produces when parsed through Grammar() — the built-in "
+            "JSONC grammar — or Grammar(\"rawast\") — the .rawast "
+            "meta-grammar). Inverse of `meta.parse_file(grammar_file)`.")
 
         .def_static("json_format_builtin",
             []() {

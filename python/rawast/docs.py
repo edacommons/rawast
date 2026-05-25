@@ -1,7 +1,7 @@
 """Walk a grammar dict and emit Markdown documentation with EBNF-style
 rule bodies.
 
-The grammar dict is the same shape produced by `rawast_format().parse_file(...)`
+The grammar dict is the same shape produced by `Grammar("rawast").parse_file(...)`
 or json-loaded from a *.json grammar.
 
 Quick usage:
@@ -9,7 +9,7 @@ Quick usage:
     import rawast
     from rawast.docs import to_markdown
 
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     g = meta.parse_file(rawast.grammar_path("rawast.rawast"))
     print(to_markdown(g, title="rawast"))
 """

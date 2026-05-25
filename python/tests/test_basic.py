@@ -85,8 +85,8 @@ def test_grammar_path_resolves_bundled_files():
     assert os.path.exists(path), f"{path} should be bundled with rawast"
 
 
-def test_json_format_browses_json_grammar_file_as_dict():
-    g = rawast.json_format()
+def test_grammar_default_browses_json_grammar_file_as_dict():
+    g = rawast.Grammar()
     data = g.parse_file(rawast.grammar_path("json.json"))
     # The grammar definition itself comes through as a Python dict —
     # we can walk it like any other parsed value. Items use the
@@ -99,8 +99,8 @@ def test_json_format_browses_json_grammar_file_as_dict():
     assert "STRUCT" in expr_refs
 
 
-def test_rawast_format_browses_rawast_file_as_dict():
-    g = rawast.rawast_format()
+def test_grammar_rawast_browses_rawast_file_as_dict():
+    g = rawast.Grammar("rawast")
     data = g.parse_file(rawast.grammar_path("gdsii.rawast"))
     # The .rawast meta-grammar produces the same dict shape as the
     # JSON-form would for an equivalent grammar.
@@ -111,7 +111,7 @@ def test_rawast_format_browses_rawast_file_as_dict():
 
 def test_from_dict_compiles_runtime_grammar():
     """Inverse of meta.parse_file: turn a dict back into an executable Grammar."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     data = meta.parse_file(rawast.grammar_path("gdsii.rawast"))
     g = rawast.Grammar.from_dict(data)
     # The reconstituted grammar should lint cleanly (same as the
@@ -121,7 +121,7 @@ def test_from_dict_compiles_runtime_grammar():
 
 def test_from_dict_transformation():
     """The 'grammars are data' story: load → transform → rebuild."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     data = meta.parse_file(rawast.grammar_path("gdsii.rawast"))
 
     # Add a synthetic rule.
@@ -135,7 +135,7 @@ def test_meta_grammar_design_matches_runtime():
     """rawast.rawast (design) and rawast.json (runtime) must encode the
     same dict tree. Parsing rawast.rawast via the runtime meta-grammar
     must yield exactly what rawast.json says — every rule, byte-equal."""
-    meta = rawast.rawast_format()
+    meta = rawast.Grammar("rawast")
     parsed = meta.parse_file(rawast.grammar_path("rawast.rawast"))
     with open(rawast.grammar_path("rawast.json")) as f:
         canonical = json.load(f)

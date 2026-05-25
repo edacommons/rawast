@@ -21,7 +21,7 @@ Basic usage:
 Browse a grammar as data (introspection / Pydantic generation /
 schema export):
 
-    rawast_meta = rawast.rawast_format()
+    rawast_meta = rawast.Grammar("rawast")
     grammar_dict = rawast_meta.parse_file("grammars/gdsii.rawast")
     # grammar_dict["LIBRARY"]["type"] == "sequence"
     # grammar_dict["LIBRARY"]["items"][0] ==
@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import os
 
-from ._native import Grammar, __version__
+from ._native import Grammar as _Grammar, __version__
 
 
 # Path to bundled grammar files. The wheel ships these under
@@ -64,36 +64,37 @@ def grammar_path(name: str) -> str:
     return os.path.join(GRAMMAR_DIR, name)
 
 
-def json_format() -> Grammar:
-    """The JSON grammar.
+class Grammar(_Grammar):
+    """A loaded grammar — drives parse, save, and lint via its methods.
 
-    Parses any JSON document, including JSON-form grammar files. Use
-    this to browse a JSON-form grammar as a Python dict::
+    Construction:
 
-        g = rawast.json_format()
-        grammar_dict = g.parse_file("grammars/lef.json")
+        Grammar()             — built-in JSONC grammar (JSON + comments).
+        Grammar("json")       — bundled grammar; tries grammars/json.json
+                                first, then grammars/json.rawast.
+        Grammar.load(path)    — load from an explicit filesystem path.
+        Grammar.from_dict(d)  — build from an in-memory grammar dict.
+
+    All factories return objects with the same instance methods
+    (`parse_file`, `parse_string`, `parse_bytes`, `save`, `lint`).
     """
-    return Grammar.json_format_builtin()
 
-
-def rawast_format() -> Grammar:
-    """The `.rawast` meta-grammar.
-
-    Parses `.rawast` source text into the same dict shape that
-    `json_format()` produces for JSON-form grammar files. Use this to
-    browse a `.rawast` file as data::
-
-        g = rawast.rawast_format()
-        grammar_dict = g.parse_file("grammars/gdsii.rawast")
-    """
-    return Grammar.load(grammar_path("rawast.json"))
+    def __new__(cls, name=None):
+        if name is None:
+            return _Grammar.json_format_builtin()
+        for ext in (".json", ".rawast"):
+            path = os.path.join(GRAMMAR_DIR, name + ext)
+            if os.path.exists(path):
+                return _Grammar.load(path)
+        raise FileNotFoundError(
+            f"no bundled grammar named '{name}' "
+            f"(searched for '{name}.json' and '{name}.rawast' in {GRAMMAR_DIR})"
+        )
 
 
 __all__ = [
     "Grammar",
     "GRAMMAR_DIR",
     "grammar_path",
-    "json_format",
-    "rawast_format",
     "__version__",
 ]
