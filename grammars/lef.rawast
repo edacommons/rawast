@@ -69,6 +69,7 @@ LIBRARY_ITEM: choice {
   <LAYER_BLOCK>,
   <VIA_BLOCK>,
   <VIARULE_BLOCK>,
+  <SPACING_BLOCK>,
   <SITE_BLOCK>,
   <MACRO_BLOCK>
   // NONDEFAULTRULE, BEGINEXT: M2/M4 scope.
@@ -86,6 +87,34 @@ USEMINSPACING_CMD: sequence dict {
   identifier:object=@ space,
   identifier:value=@ space, ";" newline
 }
+
+// === SPACING block (tech LEF top-level inter-layer spacing) ============
+//
+// LEF/DEF 5.8 §"Spacing" — top-level SAMENET inter-layer spacing
+// rules. Distinct from per-layer SPACING (inside a LAYER block).
+//
+//   SPACING
+//     {SAMENET layerName1 layerName2 minSpacing [STACK] ;} ...
+//   END SPACING
+
+SPACING_BLOCK: sequence dict {
+  "SPACING":type="Spacing" newline,
+  <SAMENET_RULES>:items=@,
+  "END" space, "SPACING" newline
+}
+
+SAMENET_RULES: sequence array { repeat <SAMENET_RULE> }
+
+SAMENET_RULE: sequence dict {
+  "SAMENET" space,
+  identifier:layer1=@ space,
+  identifier:layer2=@ space,
+  <NUMBER>:min_spacing=@ space,
+  ?<SAMENET_STACK_KW>,
+  ";" newline
+}
+
+SAMENET_STACK_KW: sequence { "STACK":is_stack=true space }
 
 // === PROPERTYDEFINITIONS block ==========================================
 //
@@ -557,13 +586,23 @@ LAYER_PROPERTY: sequence dict {
 
 // LAYER value tokens: each can be a number, an identifier (TYPE
 // values like ROUTING / CUT / IMPLANT, sub-keywords like RPERSQ /
-// CPERSQDIST), or a quoted string (PROPERTY values). Repeats
-// until `;`.
+// CPERSQDIST), a quoted string (PROPERTY values), or a
+// parenthesized list of values (PWL piecewise-linear functions,
+// nested coordinate groups). Repeats until `;`.
 LAYER_VALUES: sequence array { repeat <LAYER_VALUE> }
 LAYER_VALUE: choice {
   <NUMBER>,
   string,
-  identifier
+  identifier,
+  <LAYER_PAREN_GROUP>
+}
+
+// Parenthesized value group: `( <values> )` — used for PWL
+// piecewise-linear functions like
+//   ANTENNACUMDIFFAREARATIO PWL ( ( 0 200 ) ( 0.159 200 ) ... ) ;
+// Recursive — inner parens are themselves parenthesized groups.
+LAYER_PAREN_GROUP: sequence array {
+  "(" space, repeat <LAYER_VALUE>, ")" space
 }
 
 // Enumeration of LAYER property keywords. Closed list so that
@@ -647,11 +686,18 @@ LAYER_KEYWORD: choice {
 //   END viaName
 
 VIA_BLOCK: sequence dict {
-  "VIA":type="Via" space,
+  <VIA_KW>:type=@ space,
   identifier:name=@ space,
   ?<VIA_DEFAULT_KW>,
   repeat <VIA_PROPERTY>,
   "END" space, identifier:end_name=@ newline
+}
+
+// LEF keyword spec-uppercase ("VIA") but some real tools emit
+// mixed-case ("Via"). Accept both.
+VIA_KW: choice {
+  "VIA":@,
+  "Via":@
 }
 
 // LEF keywords are spec-uppercase ("DEFAULT") but some real tools
@@ -711,11 +757,19 @@ VIA_POLYGON: sequence dict {
 // allowed keywords overlap heavily) + closer.
 
 VIARULE_BLOCK: sequence dict {
-  "VIARULE":type="ViaRule" space,
+  <VIARULE_KW>:type=@ space,
   identifier:name=@ space,
   ?<VIARULE_GENERATE_KW>,
+  ?<VIA_DEFAULT_KW>,
   repeat <VIARULE_PROPERTY>,
   "END" space, identifier:end_name=@ newline
+}
+
+// LEF keyword spec-uppercase ("VIARULE") but some real tools emit
+// mixed-case ("ViaRULE"). Accept both.
+VIARULE_KW: choice {
+  "VIARULE":@,
+  "ViaRULE":@
 }
 
 VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }

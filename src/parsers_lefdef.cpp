@@ -12,13 +12,18 @@ namespace {
 
 // Stop characters for identifier consumption. Whitespace stops via the
 // !isgraph check; everything below is also a stop:
-//   `; ( ) " + -`
+//   `; ( ) " +`
 // `#` is NOT a stop — see header note on comment handling.
+// `-` is NOT a stop either — LEF allows hyphens inside identifier
+// names (e.g. `Via1Array-0`, `SD_GATE-Array`). DEF's `-` record
+// separator (`- name + NET ...`) is consumed as a literal token by
+// the structural grammar BEFORE the identifier parser is invoked
+// on `name`, so the identifier parser never sees the leading `-`.
 bool is_identifier_stop(char c) {
     switch (c) {
     case ' ': case '\t': case '\n': case '\r':
     case ';': case '(': case ')': case '"':
-    case '+': case '-':
+    case '+':
         return true;
     default:
         return false;
