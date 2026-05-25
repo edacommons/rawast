@@ -57,28 +57,58 @@ are documented in `docs/` and in the prototype's history.
 - **Mid-parse hooks**: `on_rule_complete` + `replace_parser` for
   context-sensitive formats whose preambles configure later tokenisation
   (e.g. LEF/DEF `DIVIDERCHAR`).
-- **`.rawast` grammar language** — concise hand-written DSL for grammars,
-  fully self-hosted (the `.rawast` parser is itself loaded from a
-  `.rawast`-described grammar).
+- **Subparse + rule-local ignore overrides** — two engine primitives
+  for composing languages-within-languages in a single grammar file.
+  `:subparse="<RULE>"` on a Parse-terminal item re-invokes the parse
+  loop on the captured string with a different rule as start; same
+  grammar, fresh ignore-stack, fully recursive. `RULE ignore X Y: …`
+  attaches a rule-local ignore override; the parse driver pushes the
+  override on rule entry and pops on exit; rules without an override
+  inherit the caller's active ignore. Together they make multi-context
+  grammars (script + embedded expression + token-internals split-out)
+  a single-file artefact rather than three loosely coupled grammars.
+  Demonstrated by the Tcl grammar (below).
+- **`.rawast` grammar language** — concise hand-written DSL for
+  grammars, fully self-hosted (the `.rawast` parser is itself loaded
+  from a `.rawast`-described grammar).
 - **`use:` directive** — grammars declare which terminal-parser groups
   they need; the loader resolves names against a static registry of
   built-in groups.
 - **Working grammars in the repo**:
   - `grammars/json.json` — full JSON with array/dict containers.
-  - `grammars/rawast.json` — the `.rawast` meta-grammar (self-host).
+  - `grammars/rawast.json` / `grammars/rawast.rawast` — the
+    `.rawast` meta-grammar (self-host).
   - `grammars/gdsii.rawast` — the GDSII binary IC-layout format. All
     47 record types, the seven element kinds, full structural schema.
-    Real production GDSII files from open-PDK chip flows (GF180MCU and
-    IHP130) parse cleanly; synthetic round-trip tests cover save back
-    to byte-identical output.
+    Parses 1,171 / 1,171 real production GDSII files from open-PDK
+    chip flows (Sky130, GF180MCU, IHP130, asap7, gf180, ihp-sg13g2).
+    Synthetic round-trip tests cover save back to byte-identical
+    output (including 2,048-byte alignment padding).
+  - `grammars/lef.rawast` — LEF tech-file format (LAYER /
+    VIA / VIARULE / PROPERTYDEFINITIONS / SPACING + MACRO / PIN /
+    PORT / OBS cell bodies). Parses 507 / 507 real LEFs across
+    seven PDK / open-platform sources.
+  - `grammars/def.rawast` — DEF placement-and-route file format
+    (PINS / BLOCKAGES / VIAS / COMPONENTS / NONDEFAULTRULES /
+    SPECIALNETS / NETS / FILLS / GCELLGRID / PROPERTYDEFINITIONS).
+    Parses 14 / 14 production DEFs including four 4.1–4.8M-line
+    placement-and-route outputs.
+  - `grammars/tcl.rawast` — Tcl Tier-1 structural parser
+    (commands → words; word flavours split out; substitution
+    segments isolated). Uses the new subparse + rule-local-ignore
+    primitives. Parses 1,440 / 1,440 OpenROAD flow-script `.tcl`
+    files in 1.7 s.
 - **Bidirectional grammar conversion**: the `.rawast` meta-grammar
   loads grammars as data (`Grammar.from_dict`, `meta.parse_file`) and
   writes them back via the same save engine. Parse a `.rawast` file,
   modify the AST, emit it back as canonical `.rawast` text — round-
   trips structurally identical.
-- **Test suite**: 200+ tests covering the engine, loader, JSON
-  round-trip, GDSII round-trip, linter, callbacks, pretty-print, and
-  the `use:` directive.
+- **Test suite**: 235 tests (206 C++ doctest + 29 Python pytest)
+  covering the engine, loader, JSON round-trip, GDSII round-trip,
+  linter, callbacks, pretty-print, the `use:` directive, subparse,
+  and per-rule ignore. Plus 3,132 real production files across
+  GDSII / LEF / DEF / Tcl parsing 100% end-to-end (see proposal
+  §2.6 for the corpus breakdown).
 
 ## What's planned
 
@@ -123,18 +153,45 @@ json_g = rawast.Grammar.load("grammars/json.json")
 print(json_g.save(gdsii.parse_file("layout.gds")).decode("utf-8"))
 ```
 
-### Parser groups, `use:`, and ignore declarations
+Re-parse arbitrary strings through any rule in the grammar — useful
+for context-dependent sub-languages (Tcl brace bodies, Liberty
+attribute mini-languages):
 
-Every grammar declares the parsers it needs and which of them to skip
-between tokens. The host loader never injects parsers or ignores
-implicitly. Two top-level fields drive this:
+```python
+tcl = rawast.Grammar.load("grammars/tcl.rawast")
+ast = tcl.parse_file("flow.tcl")
+for cmd in ast.get("commands", []):
+    if not cmd or cmd.get("type") != "command":
+        continue
+    # If the first word is "if", treat the body argument (a brace
+    # word) as a nested Tcl script and re-parse it:
+    words = cmd["words"]
+    first = words[0]["value"]["segments"][0].get("value")
+    if first == "if" and len(words) >= 3 and words[2]["type"] == "brace":
+        body = tcl.parse_string(words[2]["value"], start="SCRIPT")
+```
 
-- **`"use"`**: an array of parser-group names (e.g. `["std"]`,
-  `["std", "gdsii"]`). Each named group is registered globally at
-  process start; `use:` makes its parsers addressable in the grammar.
-- **`"ignore"`**: an array of parser names whose matches are silently
-  consumed between tokens (whitespace, comments, …). Names can be
-  bare (`"whitespace"`) or qualified (`"std.whitespace"`).
+`start="RULE"` works on `parse_string`, `parse_file`, and
+`parse_bytes`.
+
+### Parser groups, `use:`, and ignore policy
+
+Every grammar declares the parsers it needs (`use:`) and attaches the
+ignore policy to whichever rule should be the default-active scope —
+typically the start rule. The host loader never injects parsers or
+ignores implicitly.
+
+**`use:`** — array of parser-group names (`["std"]`, `["std", "gdsii"]`,
+etc.). Each named group is registered globally at process start; `use:`
+makes its parsers addressable in the grammar.
+
+**`RULE ignore PARSER1 PARSER2 …: <body>`** — a per-rule attribute
+declaring the ignore list for that rule's sub-tree. The parse driver
+maintains an ignore-stack; on rule entry an explicit override is
+pushed and on exit popped. Rules without the attribute inherit the
+caller's active ignore. Empty list (`RULE ignore: …`) means
+"ignore nothing" — useful for token-internal contexts where
+whitespace is part of the data.
 
 Each parser is addressable under **two names**: bare (`int`) and
 qualified (`std.int`). Bare works when unambiguous; qualified is
@@ -145,48 +202,50 @@ Shipped groups:
 
 | Group | Parsers |
 |---|---|
-| `std` | `int`, `float`, `identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
-| `gdsii` | All 47 GDSII record-type parsers (`header`, `bgnlib`, …, `endmasks`) — bare names; `gdsii.header` form also resolves |
+| `std` | `int`, `uint`, `float`, `identifier`, `qualified_identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
+| `gdsii` | All 47 GDSII record-type parsers (`header`, `bgnlib`, …, `endmasks`) — bare or `gdsii.header` form |
+| `lefdef` | LEF/DEF-specific `identifier` (hyphens, slashes accepted) and `line_comment` (`#`-to-EOL) |
+| `tcl` | Tcl terminals modelled on Dodekalogue rules — `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `until_paren`, `escape`, `literal_run` |
 
 Shipped grammars:
 
-```json
-// grammars/json.json — strict JSON (RFC 8259)
+```
+# grammars/json.json — strict JSON (RFC 8259)
 { "start": "VALUE",
   "use":    ["std"],
-  "ignore": ["whitespace"],
+  "VALUE":  { "type": "choice",
+              "rule_ignore": ["whitespace"],   // attached to start rule
+              "items": [ ... ] },
   ... }
 ```
 
-```json
-// grammars/rawast.json — JSONC meta-grammar
-{ "start": "FILE",
-  "use":    ["std"],
-  "ignore": ["whitespace", "line_comment", "block_comment"],
-  ... }
+```
+# grammars/rawast.rawast — JSONC meta-grammar (self-host)
+use: std
+start: <FILE>
+FILE ignore whitespace line_comment block_comment: sequence dict { ... }
 ```
 
 ```
 # grammars/gdsii.rawast — binary, no ignores
 use: gdsii
 start: <LIBRARY>
-...
+LIBRARY: sequence dict { ... }
+```
+
+```
+# grammars/tcl.rawast — multi-context grammar with subparse +
+# rule-local ignore overrides
+use: std, tcl
+start: <SCRIPT>
+SCRIPT ignore tcl.hspace: sequence dict { ... }
+WORD_SEGMENTS ignore: sequence dict { ... }    // override to ignore nothing
 ```
 
 The in-memory `make_json_grammar()` (C++) is **JSONC by construction**
 — it applies the `std` group internally and adds whitespace + comments
 to its ignore list. This is the bootstrap grammar used to read JSON-
 form grammar files (which typically carry inline `//` and `/* */` docs).
-
-In Python, `Grammar.load(path)` reads `use:` and `ignore:` from the
-file and applies them. Nothing is added implicitly — what the grammar
-declares is what it accepts.
-
-> The `.rawast` text format does not yet have syntactic `ignore:` or
-> structured `use:` array directives parallel to JSON form (only
-> `use: <group>` single-token). Text grammars authored in `.rawast`
-> that need ignore declarations should use JSON form for now;
-> bringing parity to `.rawast` is M1 scope.
 
 ## Build (C++ library and tests)
 
