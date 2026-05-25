@@ -22,28 +22,30 @@ start: <SCRIPT>
 // ═══════════════════════════════════════════════════════════════════
 
 SCRIPT ignore tcl.hspace: sequence dict {
-  <COMMANDS>:commands=@
-}
-
-COMMANDS: sequence array {
   ?<SEP_RUN>,
-  repeat <COMMAND> separator <SEP_RUN>,
+  <COMMANDS>:commands=@,
   ?<SEP_RUN>
 }
 
-SEP_RUN: sequence { repeat+ <SEP> }
+COMMANDS: sequence array {
+  repeat <COMMAND> separator <SEP_RUN>
+}
+
+// Wrap in a `dict` container so the null values emitted by the SEPs
+// (tcl.newline returns null_value, `;` is a Key with no value) are
+// caught locally and don't bubble into the COMMANDS array.
+SEP_RUN: sequence dict { repeat+ <SEP> }
 SEP: choice { ";", tcl.newline }
 
 // Known commands tried first; GENERIC_CMD is the catch-all.
+// Tier 1: every command is a flat word list. Typed-command dispatch
+// (IF_CMD / WHILE_CMD / FOR_CMD / FOREACH_CMD / PROC_CMD / SET_CMD /
+// EXPR_CMD — defined below as Tier 2 sketches) requires word-boundary
+// enforcement on keyword matches so `set` doesn't grab the prefix of
+// `set_cts_config`. That's M2+ work; for now everything routes through
+// GENERIC_CMD.
 COMMAND: choice {
   <COMMENT>,
-  <IF_CMD>,
-  <WHILE_CMD>,
-  <FOR_CMD>,
-  <FOREACH_CMD>,
-  <PROC_CMD>,
-  <SET_CMD>,
-  <EXPR_CMD>,
   <GENERIC_CMD>
 }
 
@@ -338,15 +340,22 @@ WORD_SEGMENTS ignore: sequence dict {
 }
 
 SEGMENTS: sequence array {
-  repeat+ <SEGMENT>
+  repeat <SEGMENT>
 }
 
 SEGMENT: choice {
   <VAR_SEG>,
   <BRACKET_SEG>,
   <ESCAPE_SEG>,
-  <LITERAL_SEG>
+  <LITERAL_SEG>,
+  <DOLLAR_LITERAL>
 }
+
+// Catch-all: a `$` not followed by a valid variable name (rare —
+// regex anchors like `$` at end of string, or `$` followed by a
+// digit-only token before Tcl 8.6). VAR_SEG is tried first; this
+// alternative fires only after bounded-rewind on VAR_SEG failure.
+DOLLAR_LITERAL: sequence dict { "$":type="literal":value="$" }
 
 VAR_SEG: sequence dict {
   "$",
