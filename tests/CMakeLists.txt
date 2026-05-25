@@ -27,14 +27,8 @@ add_executable(rawast_tests
     test_gdsii.cpp
 )
 
-# Tests reference grammar files via relative path from the test working
-# directory; set the working directory so "grammars/json.json" resolves
-# from the project root regardless of where ctest is invoked from.
 set_target_properties(rawast_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-)
-set_tests_properties(${doctest_tests} PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
 target_link_libraries(rawast_tests
@@ -45,5 +39,9 @@ target_link_libraries(rawast_tests
 
 target_compile_features(rawast_tests PRIVATE cxx_std_20)
 
+# Tests reference grammar files via relative path (e.g. "grammars/json.json"),
+# so the working directory must be the project root. Pass it through
+# doctest_discover_tests rather than a post-hoc set_tests_properties on
+# ${doctest_tests} — that variable isn't populated until the helper runs.
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
-doctest_discover_tests(rawast_tests)
+doctest_discover_tests(rawast_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

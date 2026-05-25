@@ -261,8 +261,11 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     // full nested structure: LIBRARY -> structures[] -> STRUCTURE ->
     //                       elements[] -> ELEMENT (boundary).
     //
-    // No explicit register_gdsii_parsers() call — the grammar's
-    // `use: gdsii` directive triggers it automatically.
+    // `use: gdsii` in the grammar file resolves the parser group, but
+    // the group must already be in the global registry — pre-register
+    // it so this test works in isolation (no prior gdsii test having
+    // touched the registry).
+    register_gdsii_parser_group();
     Grammar g;
     REQUIRE(load_rawast_grammar_from_file(g, "grammars/gdsii.rawast"));
 
@@ -401,6 +404,9 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
 }
 
 TEST_CASE("Parser registry: gdsii group is registered and applicable") {
+    register_gdsii_parser_group();   // idempotent — ensure the group is in
+                                     // the registry when this test runs in
+                                     // isolation (no prior gdsii test).
     CHECK(parser_group_exists("gdsii"));
 
     auto names = registered_parser_groups();
