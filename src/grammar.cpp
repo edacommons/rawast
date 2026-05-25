@@ -7,6 +7,9 @@
 #include "frame.hpp"
 
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
+#include <map>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -280,6 +283,57 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     ValuePtr result_value;
     bool parse_finished = false;   // true once the top frame pops successfully
 
+    // Trace mode: enabled via `RAWAST_TRACE` env var. When set, the
+    // parse driver emits per-frame events to stderr with byte/line
+    // positions and rule names — useful for grammar debugging
+    // ("which rule were you in when you failed?"). Zero cost when
+    // off: one env-var read at parse start, one bool check at each
+    // instrumentation site. See docs/debugging.md.
+    const bool trace_enabled = std::getenv("RAWAST_TRACE") != nullptr;
+
+    // Reverse map NodeId → rule name, built once at parse start when
+    // tracing is enabled. Used by node_label() to produce
+    // human-readable trace messages. Empty when tracing is off (no
+    // allocation cost).
+    std::map<std::uint32_t, std::string> node_to_rule;
+    if (trace_enabled) {
+        for (const auto& [name, id] : named_rules_) {
+            node_to_rule[id.value()] = name;
+        }
+    }
+
+    auto node_label = [&](NodeId id) -> std::string {
+        auto it = node_to_rule.find(id.value());
+        if (it != node_to_rule.end()) return it->second;
+        // Anonymous (inline) node — show kind + node id for context.
+        const Node& n = nodes_[id.value()];
+        const char* kind = "?";
+        switch (n.kind) {
+            case NodeKind::Sequence: kind = "seq"; break;
+            case NodeKind::Choice:   kind = "choice"; break;
+            case NodeKind::Repeat:   kind = "repeat"; break;
+            case NodeKind::Key:      kind = "key"; break;
+            case NodeKind::Parse:    kind = "parse"; break;
+            case NodeKind::Ref:      kind = "ref"; break;
+            case NodeKind::Value:    kind = "value"; break;
+        }
+        return std::string{kind} + "#" + std::to_string(id.value());
+    };
+
+    auto trace_pos = [&]() -> std::string {
+        auto p = sr.position();
+        return "L" + std::to_string(p.line)
+             + ":C" + std::to_string(p.column);
+    };
+
+    auto trace = [&](const std::string& msg) {
+        if (!trace_enabled) return;
+        // Indent by stack depth so the trace is visually nested.
+        std::cerr << "[" << trace_pos() << "] ";
+        for (std::size_t i = 0; i < stack.size(); ++i) std::cerr << "  ";
+        std::cerr << msg << "\n";
+    };
+
     // Rule-callback machinery -------------------------------------------
     //
     // pending_per_mark[i] is the queue of callbacks-to-fire that
@@ -338,6 +392,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     // mark/reject around alternative attempts.
     auto push_with_optional_mark = [&](NodeId id) {
         push_node(stack, *this, id);
+        if (trace_enabled && !stack.empty()) {
+            const auto& f = stack.back();
+            std::string opt = f.is_optional() ? " ?" : "";
+            trace("PUSH " + node_label(f.node_id()) + opt);
+        }
         if (!stack.empty() && stack.back().is_optional()
             && !stack.back().has_mark()) {
             sr.mark();
@@ -408,10 +467,16 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
     // optional failing — never giving the Choice a chance to try
     // remaining alts.
     auto handle_failure = [&](const ParseError& err) {
+        if (trace_enabled) {
+            trace("FAIL: " + err.message);
+        }
         note_progress(max_progress, err);
         while (!stack.empty()) {
             Frame popped = std::move(stack.back());
             stack.pop_back();
+            if (trace_enabled) {
+                trace("  unwind " + node_label(popped.node_id()));
+            }
 
             if (popped.kind() == NodeKind::Choice) {
                 // The just-failed alternative was wrapped in a mark by
@@ -423,6 +488,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
                     popped.set_has_mark(false);
                 }
                 if (popped.step_next()) {
+                    if (trace_enabled) {
+                        trace("  retry " + node_label(popped.node_id())
+                              + " next-alt");
+                    }
                     stack.push_back(std::move(popped));
                     return;
                 }
@@ -481,6 +550,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
+            if (trace_enabled) trace("  key \"" + sv->data() + "\"");
             KeyParser p(sv->data());
             auto r = p.parse(sr);
             if (r) {
@@ -513,6 +583,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& p
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
+            if (trace_enabled) trace("  parse:" + sv->data());
             Parser* p = parser(sv->data());
             assert(p);
             auto r = p->parse(sr);
