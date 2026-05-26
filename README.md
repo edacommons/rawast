@@ -21,10 +21,13 @@ the same grammar that parses also re-emits text from a value tree.
 Binary formats slot in by registering terminal parsers; **GDSII** —
 the standard binary format for IC layout — is the worked example.
 
-The `.jast` container builds on this: grammar + parsed tree, serialised
-together in a binary file. "Parse once" — every later consumer reads
-the value tree directly, never re-parses text, and can still emit the
-text form because the grammar travels with the data.
+The planned `.jast` container builds on this: grammar + parsed tree,
+serialised together in a binary file. "Parse once" — every later
+consumer reads the value tree directly, never re-parses text, and can
+still emit the text form because the grammar travels with the data.
+The format is designed and specified; the engine that will read and
+write it is the bidirectional walk that already handles source-text
+parse and save today. See *What's planned* below.
 
 EDA is the first proving ground because the files are large, the
 formats are many, and every tool currently reimplements its own reader
