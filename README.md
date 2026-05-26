@@ -213,9 +213,11 @@ ignore policy to whichever rule should be the default-active scope —
 typically the start rule. The host loader never injects parsers or
 ignores implicitly.
 
-**`use:`** — array of parser-group names (`["std"]`, `["std", "gdsii"]`,
-etc.). Each named group is registered globally at process start; `use:`
-makes its parsers addressable in the grammar.
+**`use:`** — list of parser-group names. In `.rawast` form,
+comma-separated bare identifiers (`use: std`, `use: std, gdsii`); in
+JSON form, a JSON array (`"use": ["std", "gdsii"]`). Each named group
+is registered globally at process start; `use:` makes its parsers
+addressable in the grammar.
 
 **`RULE ignore PARSER1 PARSER2 …: <body>`** — a per-rule attribute
 declaring the ignore list for that rule's sub-tree. The parse driver
