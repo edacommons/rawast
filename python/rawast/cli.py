@@ -61,6 +61,17 @@ def cmd_docs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_schema(args: argparse.Namespace) -> int:
+    from .schema import to_markdown
+    meta = Grammar() if args.grammar.endswith(".json") else Grammar("rawast")
+    grammar = meta.parse_file(args.grammar)
+    title = args.title or args.grammar
+    sys.stdout.write(to_markdown(grammar, title=title,
+                                 heading_level=args.heading_level))
+    sys.stdout.write("\n")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="rawast",
@@ -104,6 +115,19 @@ def main(argv: list[str] | None = None) -> int:
                              "Per-rule headings are one level deeper. Bump to "
                              "nest the output inside an existing section.")
     p_docs.set_defaults(func=cmd_docs)
+
+    p_schema = sub.add_parser(
+        "schema",
+        help="Render a grammar's value-tree shape as Markdown (dict fields, "
+             "array elements, choice alternatives — the shape a producer "
+             "tool must build to call `save()`)",
+    )
+    p_schema.add_argument("grammar", help="Grammar file (.rawast or .json)")
+    p_schema.add_argument("--title", help="Document title (defaults to the grammar path)")
+    p_schema.add_argument("--heading-level", type=int, default=1,
+                          help="Markdown heading level for the title (default 1). "
+                               "Per-rule headings are one level deeper.")
+    p_schema.set_defaults(func=cmd_schema)
 
     args = parser.parse_args(argv)
     return args.func(args)

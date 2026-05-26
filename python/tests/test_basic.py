@@ -140,3 +140,46 @@ def test_meta_grammar_design_matches_runtime():
     with open(rawast.grammar_path("rawast.json")) as f:
         canonical = json.load(f)
     assert parsed == canonical
+
+
+def test_schema_generator_emits_markdown_for_every_bundled_grammar():
+    """`rawast.schema.to_markdown` walks any loaded grammar dict and
+    emits a value-tree-shape Markdown reference. Smoke-test against
+    every bundled grammar (json, rawast, gdsii, lef, def, tcl)."""
+    from rawast.schema import to_markdown
+    meta = rawast.Grammar("rawast")
+    json_meta = rawast.Grammar()
+    cases = [
+        ("json.json",   json_meta),
+        ("rawast.rawast", meta),
+        ("gdsii.rawast", meta),
+        ("lef.rawast",   meta),
+        ("def.rawast",   meta),
+        ("tcl.rawast",   meta),
+    ]
+    for name, loader in cases:
+        data = loader.parse_file(rawast.grammar_path(name))
+        md = to_markdown(data, title=name)
+        assert "value-tree shape" in md
+        assert "**Start rule:**" in md
+        # Every grammar declares at least one rule, so the per-rule
+        # heading marker must appear.
+        assert "\n## " in md, f"no per-rule headings for {name}"
+
+
+def test_schema_generator_describes_json_paircase():
+    """The JSON PAIR rule binds a string as a dict key via the
+    `{"name": "", "value": "@"}` var-marker convention; the schema
+    generator should render that as a dynamic-key dict entry whose
+    value is `VALUE`."""
+    from rawast.schema import to_markdown
+    g = rawast.Grammar()
+    data = g.parse_file(rawast.grammar_path("json.json"))
+    md = to_markdown(data, title="JSON")
+    # The PAIR section should reference VALUE as the value side of
+    # the dynamic-key entry, not the `":"` structural key.
+    pair_idx = md.find("## PAIR")
+    next_idx = md.find("\n## ", pair_idx + 1)
+    pair_section = md[pair_idx:next_idx]
+    assert "VALUE" in pair_section
+    assert '":"' not in pair_section  # `:` is structural, skipped
