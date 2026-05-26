@@ -224,7 +224,7 @@ TEST_CASE("grammars/rawast.json loads cleanly") {
     auto g = make_rawast_target();
     auto r = load_json_grammar_from_file(g, "grammars/rawast.json");
     REQUIRE(r);
-    CHECK(g.has_rule("FILE"));
+    CHECK(g.has_rule("GRAMMAR"));
     CHECK(g.has_rule("RULE_DEF"));
     CHECK(g.has_rule("EXPR"));
     CHECK(g.has_rule("SEQUENCE_EXPR"));

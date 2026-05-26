@@ -26,13 +26,13 @@
 
 use: std, lefdef
 
-start: <FILE>
+start: <DESIGN>
 
 // === Top level ============================================================
 
-FILE ignore whitespace line_comment: sequence dict {
+DESIGN ignore whitespace line_comment: sequence dict {
   <HDR>:hdr=@,
-  <DESIGN>:design=@
+  <DESIGN_BLOCK>:design_block=@
 }
 
 HDR: sequence dict {
@@ -51,9 +51,9 @@ ON_OFF: choice {
   "OFF":false
 }
 
-// === DESIGN block ========================================================
+// === DESIGN_BLOCK — the "DESIGN ... END DESIGN" section ===================
 
-DESIGN: sequence dict {
+DESIGN_BLOCK: sequence dict {
   <DESIGN_CMD>,
   <DESIGN_INFO>,
   <DESIGN_ITEMS>:items=@,

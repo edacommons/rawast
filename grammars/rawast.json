@@ -1,11 +1,11 @@
 {
   "start": {
-    "type": "FILE"
+    "type": "GRAMMAR"
   },
   "use": [
     "std"
   ],
-  "FILE": {
+  "GRAMMAR": {
     "type": "sequence",
     "container": "dict",
     "rule_ignore": ["whitespace", "line_comment", "block_comment"],
@@ -13,13 +13,13 @@
       {
         "type": "repeat",
         "value": {
-          "type": "FILE_ENTRY",
+          "type": "GRAMMAR_ENTRY",
           "newline": true
         }
       }
     ]
   },
-  "FILE_ENTRY": {
+  "GRAMMAR_ENTRY": {
     "type": "choice",
     "value": [
       {

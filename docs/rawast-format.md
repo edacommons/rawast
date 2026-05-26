@@ -804,7 +804,7 @@ output shape for producers.
 
 **Uses:** std
 
-**Start:** `FILE`
+**Start:** `GRAMMAR`
 
 
 #### BINDING
@@ -855,16 +855,16 @@ CONTAINER_KIND := "array" | "dict"
 EXPR := SEQUENCE_EXPR | CHOICE_EXPR | REPEAT_EXPR | KEY_EXPR | REF | PARSE_EXPR
 ```
 
-#### FILE
+#### GRAMMAR
 
 ```ebnf
-FILE := FILE_ENTRY*
+GRAMMAR := GRAMMAR_ENTRY*
 ```
 
-#### FILE_ENTRY
+#### GRAMMAR_ENTRY
 
 ```ebnf
-FILE_ENTRY := USE_DECL | START_DECL | RULE_DEF
+GRAMMAR_ENTRY := USE_DECL | START_DECL | RULE_DEF
 ```
 
 #### IDENT_LIST

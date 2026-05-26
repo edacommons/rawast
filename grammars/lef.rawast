@@ -24,11 +24,11 @@
 
 use: std, lefdef
 
-start: <FILE>
+start: <LIBRARY>
 
 // === Top level ============================================================
 
-FILE ignore whitespace line_comment: sequence dict {
+LIBRARY ignore whitespace line_comment: sequence dict {
   <HDR>:hdr=@,
   <LIBRARY_ITEMS>:items=@,
   ?<END_LIBRARY>

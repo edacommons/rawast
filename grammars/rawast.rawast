@@ -5,27 +5,27 @@
 //     (no separate `expr` field) — the ITEM dict carries `type`, `value`,
 //     `container`, etc., plus the optional flag, bindings, and postfix attrs.
 //   - A rule is just a named ITEM: `identifier:=@` sets the rule name as
-//     pending in FILE's dict; <ITEM>'s value pairs with it.
+//     pending in GRAMMAR's dict; <ITEM>'s value pairs with it.
 //   - Optional is an ITEM-level prefix: `?` before an item sets `optional: true`.
 //   - Bindings are an ordered array of {name, value} entries; `name: ""`
 //     (empty string) marks a var binding.
 
 use: std
 
-start: <FILE>
+start: <GRAMMAR>
 
 // ─── Top level ──────────────────────────────────────────────────────────
 //
 // The grammar-level "default ignore" is expressed by attaching an ignore
-// attribute to the start rule (here, FILE). Rule-local overrides live
+// attribute to the start rule (here, GRAMMAR). Rule-local overrides live
 // on individual rule definitions. There is no separate top-level
 // `ignore:` directive.
 
-FILE ignore whitespace line_comment block_comment: sequence dict {
-  repeat <FILE_ENTRY> newline
+GRAMMAR ignore whitespace line_comment block_comment: sequence dict {
+  repeat <GRAMMAR_ENTRY> newline
 }
 
-FILE_ENTRY: choice { <USE_DECL>, <START_DECL>, <RULE_DEF>}
+GRAMMAR_ENTRY: choice { <USE_DECL>, <START_DECL>, <RULE_DEF>}
 
 USE_DECL:   sequence { "use", ":", <IDENT_LIST>:use=@ }
 IDENT_LIST: sequence array { repeat qualified_identifier separator "," }
