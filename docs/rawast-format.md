@@ -632,10 +632,16 @@ STRUCT: sequence dict {
 
 ### 6.2 A CSV grammar in `.rawast`
 
-```
-start: <FILE>
+The convention used by the bundled grammars (and recommended for new
+ones) is to name the start rule after what the parsed value tree
+actually *is* — `VALUE` for JSON, `LIBRARY` for GDSII / LEF, `DESIGN`
+for DEF, `SCRIPT` for Tcl, `GRAMMAR` for the rawast meta-grammar. A
+CSV file is a table of rows, so `TABLE`:
 
-FILE: sequence array {
+```
+start: <TABLE>
+
+TABLE: sequence array {
   repeat <ROW> separator "\n"
 }
 

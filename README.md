@@ -256,8 +256,8 @@ Shipped grammars:
 ```
 # grammars/rawast.rawast — JSONC meta-grammar (self-host)
 use: std
-start: <FILE>
-FILE ignore whitespace line_comment block_comment: sequence dict { ... }
+start: <GRAMMAR>
+GRAMMAR ignore whitespace line_comment block_comment: sequence dict { ... }
 ```
 
 ```
