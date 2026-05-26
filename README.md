@@ -195,6 +195,11 @@ for cmd in ast.get("commands", []):
     words = cmd["words"]
     first = words[0]["value"]["segments"][0].get("value")
     if first == "if" and len(words) >= 3 and words[2]["type"] == "brace":
+        # Re-enter the parser at the SCRIPT rule on the brace body.
+        # SCRIPT happens to be the tcl grammar's default start rule,
+        # so passing `start="SCRIPT"` here is explicit but redundant;
+        # pass a different rule name (e.g. start="WORD_SEGMENTS") to
+        # re-enter at a sub-language's entry point instead.
         body = tcl.parse_string(words[2]["value"], start="SCRIPT")
 ```
 
