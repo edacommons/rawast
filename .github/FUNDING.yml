@@ -8,4 +8,4 @@
 # Add additional platforms (open_collective, patreon, custom URL, etc.)
 # as separate keys when applicable.
 
-github: lanserge
+github: [lanserge]
