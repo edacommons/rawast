@@ -1,22 +1,25 @@
 # rawast
 
-Most parsers ship as code: someone writes a grammar in BNF, compiles
-it, links it into every tool that needs it. New format means a new
-parser project, new compile, new tool releases. And every parser builds
-a format-specific AST, even when the caller just wants one field.
+**A universal bidirectional grammar-driven engine for structured text
+and binary formats.** Every EDA tool, today, reimplements its own
+readers for LEF, DEF, GDSII, Liberty, and every other format the field
+uses — and every one of them re-parses the same files. rawast inverts
+that: **one engine, grammars as data files, and a binary container
+that distributes parsed data so downstream consumers never re-parse
+text at all.** Ships as a C++20 library with Python bindings.
 
-rawast inverts this. The parser is one engine; the grammar is **data**
-— a JSON file you load at runtime. The engine reads text and produces a
-JSON-shaped value tree (arrays, dicts, scalars) — the same shape the
-grammar is written in. So one engine reads any format, no recompile,
-and the output is queryable without a format-specific API.
+The parser is one engine; the grammar is **data** — a JSON / `.rawast`
+file you load at runtime. The engine reads text or bytes and produces
+a JSON-shaped value tree (arrays, dicts, scalars). One engine reads
+any format, no recompile. The output is queryable without a
+format-specific API.
 
 Three properties make this work: it's a structural parser driven by an
-external grammar; the grammar is itself JSON-shaped data the engine can
-read with itself (self-hosting); and the engine is bidirectional — the
-same grammar that parses also re-emits text from a value tree. Binary
-formats slot in by registering terminal parsers; GDSII is the worked
-example.
+external grammar; the grammar is itself JSON-shaped data the engine
+can read with itself (self-hosting); and the engine is bidirectional —
+the same grammar that parses also re-emits text from a value tree.
+Binary formats slot in by registering terminal parsers; **GDSII** —
+the standard binary format for IC layout — is the worked example.
 
 The `.jast` container builds on this: grammar + parsed tree, serialised
 together in a binary file. "Parse once" — every later consumer reads
@@ -24,9 +27,10 @@ the value tree directly, never re-parses text, and can still emit the
 text form because the grammar travels with the data.
 
 EDA is the first proving ground because the files are large, the
-formats are many, and every tool currently reimplements its own reader.
-The PoC parses real GDSII, LEF, and DEF corpora; funding is being
-sought to harden it. Ships as a C++ engine with Python bindings.
+formats are many, and every tool currently reimplements its own reader
+and writer. The PoC parses 100% of a 3,132-file production corpus
+across four formats (GDSII / LEF / DEF / Tcl); funding is being sought
+to turn the PoC into shippable infrastructure.
 
 ## History
 
@@ -54,9 +58,6 @@ are documented in `docs/` and in the prototype's history.
 - **Value model**: typed AST (`null`/`bool`/`int`/`uint`/`real`/`string`/
   `array`/`dict`) with primitive interning and back-references for
   post-parse value search.
-- **Mid-parse hooks**: `on_rule_complete` + `replace_parser` for
-  context-sensitive formats whose preambles configure later tokenisation
-  (e.g. LEF/DEF `DIVIDERCHAR`).
 - **Subparse + rule-local ignore overrides** — two engine primitives
   for composing languages-within-languages in a single grammar file.
   `:subparse="<RULE>"` on a Parse-terminal item re-invokes the parse
@@ -103,23 +104,38 @@ are documented in `docs/` and in the prototype's history.
   writes them back via the same save engine. Parse a `.rawast` file,
   modify the AST, emit it back as canonical `.rawast` text — round-
   trips structurally identical.
-- **Test suite**: 235 tests (206 C++ doctest + 29 Python pytest)
+- **Test suite**: 237 tests (206 C++ doctest + 31 Python pytest)
   covering the engine, loader, JSON round-trip, GDSII round-trip,
-  linter, callbacks, pretty-print, the `use:` directive, subparse,
-  and per-rule ignore. Plus 3,132 real production files across
-  GDSII / LEF / DEF / Tcl parsing 100% end-to-end (see proposal
-  §2.6 for the corpus breakdown).
+  linter, pretty-print, the `use:` directive, subparse, per-rule
+  ignore, and the data-shape schema generator. Plus 3,132 real
+  production files across GDSII / LEF / DEF / Tcl parsing 100%
+  end-to-end.
 
 ## What's planned
 
-See `docs/rawast-format.md` for the language spec. Roadmap in brief:
-M1 finalises the engine APIs and the grammar-load linter; M2 ships the
-`.jast` container format and the `Grammar::validate()` API; M3 delivers
-a CLI, Python bindings via nanobind, and a Pydantic-model generator
-that emits typed Python classes from any grammar; M4 publishes the
-grammar repository, ten production-quality grammars (LEF, DEF, Verilog
-netlist, Liberty, SPEF, JSON, TOML, CSV, syslog, Nginx log), and
-per-grammar PyPI packages.
+See `docs/rawast-format.md` for the language spec. The roadmap to 1.0:
+
+- **Typed Python developer surface.** A structural-validation API for
+  host-constructed value trees with path-aware errors; a Pydantic-model
+  generator emitting typed Python classes from any grammar; the data-
+  shape reference generator productionised. Sub-parse-aware error
+  reporting and an expanded grammar linter.
+- **The `.jast` binary container.** A self-describing binary file
+  carrying manifest + grammar + value tree with one internal value
+  pool, plus primitive value interning wired through the in-memory
+  parse path. Value-search API; pretty-print save mode. Downstream
+  consumers mmap the structured tree from disk — no re-parsing.
+- **Cross-platform distribution.** CMake + GitHub Actions builds on
+  Linux / macOS / Windows; PyPI wheels; `find_package(rawast)` for
+  C++ consumers; CLI rounded out with `.jast` compile / decompile,
+  validate, pretty, diff; first-cut user documentation.
+- **Community grammar repository at 1.0.** Polished, spec-audited
+  grammars for **LEF, DEF, Verilog netlist, SDC, SPICE netlist, JSON,
+  TOML** (Liberty, SPEF, and SDF as stretch). Each shipped grammar
+  with an auto-generated EBNF reference page, an auto-generated data-
+  shape reference page, and a structural test corpus. Outreach to
+  open-source EDA project maintainers; a `.jast` PDK proof-of-concept
+  with measured download-size and cold-ingestion comparisons.
 
 ## Quickstart (Python)
 
@@ -278,14 +294,20 @@ docs/                language and architecture documentation
 tests/               doctest-based C++ test suite
 python/              Python binding + CLI (nanobind extension module)
   src/native.cc        binding implementation
-  rawast/              Python package
+  rawast/              Python package (CLI in cli.py; docs/schema
+                       generators in docs.py / schema.py)
   tests/               pytest suite
+examples/            small worked examples (parse → modify → save, etc.)
 ```
 
 ## Documentation
 
 - [`docs/rawast-format.md`](docs/rawast-format.md) — the `.rawast`
   grammar language specification.
+- [`examples/`](examples/) — small worked examples.
+- [`SECURITY.md`](SECURITY.md) — vulnerability-reporting policy.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to build, test, and
+  submit changes.
 
 ## License
 
