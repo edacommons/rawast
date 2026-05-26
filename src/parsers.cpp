@@ -3,7 +3,9 @@
 
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <charconv>
+#include <cstdlib>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -210,11 +212,15 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     }
 
     sr.accept();
-    double result;
-    auto [ptr, ec] = std::from_chars(digits.data(),
-                                     digits.data() + digits.size(),
-                                     result);
-    if (ec != std::errc{}) {
+    // std::from_chars for floating-point is unimplemented in libc++ on
+    // macOS as of Xcode 16.4 (the overload is explicitly deleted), so
+    // use std::strtod for portability. `digits` is a std::string, so
+    // `c_str()` gives a null-terminated buffer.
+    errno = 0;
+    char* end_ptr = nullptr;
+    double result = std::strtod(digits.c_str(), &end_ptr);
+    if (errno == ERANGE ||
+        end_ptr != digits.c_str() + digits.size()) {
         return tl::unexpected(ParseError{start, "floating-point conversion failed"});
     }
     return make_real(result);

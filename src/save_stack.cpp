@@ -412,9 +412,10 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         if (n.container == Container::Dict) {
             if (!peek_value || peek_value->type() != ValueType::Dict) return false;
             // Check (Value-name, Value-const | Key-with-Value-child)
-            // discriminator pairs — all must match.
+            // discriminator pairs — all must match. If no explicit
+            // discriminator exists, this alt is a dict-shaped catch-all
+            // (matches any dict).
             const auto* dict = dynamic_cast<const DictValue*>(peek_value.get());
-            bool found_disc = false;
             for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
                 const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
@@ -426,10 +427,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 auto it = dict->data().find(name_sv->data());
                 if (it == dict->data().end()) return false;
                 if (!values_equal_v2(it->second, cv.get())) return false;
-                found_disc = true;
             }
-            // If no explicit discriminator exists, this alt is a
-            // dict-shaped catch-all (matches any dict).
             return true;
         }
         // container=None: prefer discriminator pairs against the
