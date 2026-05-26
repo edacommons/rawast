@@ -1,0 +1,11 @@
+# GitHub Sponsors funding configuration for rawast.
+#
+# Renders a "Sponsor" button on the repository header that links to the
+# personal Sponsors page below. The button only appears when the named
+# account has Sponsors enabled — adding this file before enrolment is
+# harmless.
+#
+# Add additional platforms (open_collective, patreon, custom URL, etc.)
+# as separate keys when applicable.
+
+github: [lanserge]
