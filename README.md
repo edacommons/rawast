@@ -127,9 +127,10 @@ per-grammar PyPI packages.
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 rawast --help
-rawast lint  grammars/gdsii.rawast
-rawast parse grammars/json.json file.json
-rawast docs  grammars/gdsii.rawast   # EBNF-flavoured Markdown reference
+rawast lint   grammars/gdsii.rawast
+rawast parse  grammars/json.json file.json
+rawast docs   grammars/gdsii.rawast   # EBNF-flavoured Markdown reference (grammar input syntax)
+rawast schema grammars/gdsii.rawast   # value-tree-shape Markdown reference (dict / array / choice — what a producer tool builds before save())
 ```
 
 Module use:

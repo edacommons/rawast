@@ -787,6 +787,19 @@ Conventions:
 - `A ( sep A )*` — a separator-form repeat.
 - `A | B | C` — choice.
 
+A companion view describing the *value-tree shape* the grammar produces
+(dict fields, array element shapes, choice alternatives, optional /
+constant bindings) is available via `rawast schema`:
+
+```sh
+rawast schema grammars/rawast.rawast --title "rawast — value-tree shape" \
+    > docs/rawast-shape.md
+```
+
+The two views share a single source (the grammar dict): `rawast docs`
+reads it as input syntax for consumers; `rawast schema` reads it as
+output shape for producers.
+
 ### Rules
 
 **Uses:** std
