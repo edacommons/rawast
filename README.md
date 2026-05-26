@@ -154,19 +154,29 @@ Module use:
 ```python
 import rawast
 
-g = rawast.Grammar.load("grammars/json.json")
+g = rawast.Grammar("json")    # bundled grammar by short name
 ast = g.parse_string('{"name": "alice", "items": [1, 2, 3]}')
 # ast == {"name": "alice", "items": [1, 2, 3]}
 
-text = g.save(ast)        # bytes — works for binary grammars too
-issues = g.lint()         # warnings about ambiguous Choices, if any
+text = g.save(ast)            # bytes — works for binary grammars too
+issues = g.lint()             # warnings about ambiguous Choices, if any
+```
+
+The bundled grammars are addressable by short name: `Grammar("json")`,
+`Grammar("rawast")`, `Grammar("gdsii")`, `Grammar("lef")`,
+`Grammar("def")`, `Grammar("tcl")`. To load your own grammar from
+disk, use `Grammar.load`:
+
+```python
+g = rawast.Grammar.load("path/to/my_format.rawast")
+ast = g.parse_file("input.txt")
 ```
 
 Cross-format conversion in three lines:
 
 ```python
-gdsii = rawast.Grammar.load("grammars/gdsii.rawast")
-json_g = rawast.Grammar.load("grammars/json.json")
+gdsii  = rawast.Grammar("gdsii")
+json_g = rawast.Grammar("json")
 print(json_g.save(gdsii.parse_file("layout.gds")).decode("utf-8"))
 ```
 
@@ -175,7 +185,7 @@ for context-dependent sub-languages (Tcl brace bodies, Liberty
 attribute mini-languages):
 
 ```python
-tcl = rawast.Grammar.load("grammars/tcl.rawast")
+tcl = rawast.Grammar("tcl")
 ast = tcl.parse_file("flow.tcl")
 for cmd in ast.get("commands", []):
     if not cmd or cmd.get("type") != "command":
