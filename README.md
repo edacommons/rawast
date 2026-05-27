@@ -147,6 +147,11 @@ hood — you need a **C++20 compiler** (GCC 11+, Clang 14+, or Apple
 Clang 14+) and **CMake** (3.20+) available on your `PATH` first. No
 separate `cmake` step is required for Python use.
 
+All Python build dependencies (`scikit-build-core`, `nanobind`) and
+C++ dependencies (`tl::expected`) are pulled automatically by pip and
+CMake. rawast itself has **no runtime Python dependencies** —
+`import rawast` works cleanly with zero extra packages installed.
+
 ```sh
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
