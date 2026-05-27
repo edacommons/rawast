@@ -142,6 +142,11 @@ See `docs/rawast-format.md` for the language spec. The roadmap to 1.0:
 
 ## Quickstart (Python)
 
+`pip install` compiles the C++ engine via scikit-build-core under the
+hood — you need a **C++20 compiler** (GCC 11+, Clang 14+, or Apple
+Clang 14+) and **CMake** (3.20+) available on your `PATH` first. No
+separate `cmake` step is required for Python use.
+
 ```sh
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
