@@ -190,8 +190,16 @@ MACRO spec_macro
     PROPERTY prop_pin_i 7 ;
     ANTENNAGATEAREA 0.05 LAYER met1 ;
     PORT
-      LAYER met1 ;
-        RECT 2 0 3 1 ;
+      CLASS CORE ;
+      LAYER met1 EXCEPTPGNET SPACING 0.05 DESIGNRULEWIDTH 0.1 MASK 2 ;
+        WIDTH 0.12 ;
+        RECT MASK 1 2 0 3 1 ;
+        RECT ITERATE 0 0 1 1 2 3 0.5 0.5 ;
+        POLYGON 5 0 6 0 6 1 5.5 1.2 5 1 ;
+        PATH 7 0 7 1 8 1 8 0 ;
+        VIA 9 0 spec_via_geom ;
+      LAYER met2 ;
+        RECT 10 0 11 1 ;
     END
   END SIG_IN
   OBS

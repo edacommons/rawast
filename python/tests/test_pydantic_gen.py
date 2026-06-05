@@ -630,6 +630,36 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert sig_in["value"] == 0.05
     assert sig_in["antenna_layer"] == "met1"
 
+    # Phase 6: full PORT/OBS layerGeometries.
+    sig_port = sig_in["ports"][0]
+    assert sig_port["port_class"] == "CORE"   # PORT CLASS modifier
+    met1_group = sig_port["layer_groups"][0]
+    # LAYER-level modifiers: EXCEPTPGNET / SPACING / DESIGNRULEWIDTH / MASK
+    # plus the separate WIDTH statement.
+    assert met1_group["except_pg_net"] is True
+    assert met1_group["layer_spacing"] == 0.05
+    assert met1_group["layer_design_rule_width"] == 0.1
+    assert met1_group["layer_mask_num"] == 2
+    assert met1_group["layer_default_width"] == 0.12
+
+    shapes = met1_group["shapes"]
+    assert [s["type"] for s in shapes] == ["Rect", "Rect", "Polygon",
+                                            "Path", "ViaPlacement"]
+    # RECT with MASK
+    assert shapes[0]["mask_num"] == 1
+    # RECT with ITERATE + stepPattern captured as nested dict
+    assert shapes[1]["is_iterate"] is True
+    assert shapes[1]["step_pattern"] == {"step_num_x": 2, "step_num_y": 3,
+                                          "step_x": 0.5, "step_y": 0.5}
+    # POLYGON point list
+    assert shapes[2]["points"] == [5, 0, 6, 0, 6, 1, 5.5, 1.2, 5, 1]
+    # PATH point list
+    assert shapes[3]["points"] == [7, 0, 7, 1, 8, 1, 8, 0]
+    # VIA placement: x, y, via_name
+    assert shapes[4]["x"] == 9
+    assert shapes[4]["y"] == 0
+    assert shapes[4]["via_name"] == "spec_via_geom"
+
     # OBS captured.
     assert macro["obs"]["type"] == "Obs"
 

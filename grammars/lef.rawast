@@ -648,44 +648,105 @@ PORT_CLASS: sequence {
 LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> }
 
 // LAYER declaration inside a PORT or OBS block. Can carry optional
-// SPACING / DESIGNRULEWIDTH / MASK modifiers per LEF/DEF 5.8 spec
-// before the `;`. Followed by 1+ shape clauses (RECT / POLYGON).
+// EXCEPTPGNET / SPACING / DESIGNRULEWIDTH / MASK modifiers per LEF/DEF
+// 5.8 spec before the `;`, then optional WIDTH statement, then 1+
+// shape clauses (RECT / POLYGON / PATH / VIA placement).
 LAYER_GROUP: sequence dict {
   "LAYER" space, identifier:layer=@ space,
   repeat <LAYER_GROUP_MOD>,
   ";" newline,
+  ?<LAYER_WIDTH_CMD>,
   <SHAPES>:shapes=@
 }
 
 LAYER_GROUP_MOD: choice {
+  <LAYER_GROUP_EXCEPTPGNET>,
   <LAYER_GROUP_SPACING>,
   <LAYER_GROUP_DESIGNRULEWIDTH>,
   <LAYER_GROUP_MASK>
 }
 
+LAYER_GROUP_EXCEPTPGNET:     sequence { "EXCEPTPGNET":except_pg_net=true space }
 LAYER_GROUP_SPACING:         sequence { "SPACING"         space, <NUMBER>:layer_spacing=@           space }
 LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:layer_design_rule_width=@ space }
 LAYER_GROUP_MASK:            sequence { "MASK"            space, int:layer_mask_num=@               space }
 
+// Per-LAYER-group WIDTH statement — sets the default wire width for
+// subsequent shapes (separate from LAYER's MASK / SPACING modifiers).
+LAYER_WIDTH_CMD: sequence {
+  "WIDTH" space, <NUMBER>:layer_default_width=@ space, ";" newline
+}
+
 SHAPES: sequence array { repeat <SHAPE> }
 SHAPE: choice {
   <RECT_SHAPE>,
-  <POLYGON_SHAPE>
+  <POLYGON_SHAPE>,
+  <PATH_SHAPE>,
+  <VIA_PLACEMENT>
+}
+
+// MASK modifier (per-shape mask number, separate from layer-level MASK).
+MASK_MOD: sequence {
+  "MASK" space, int:mask_num=@ space
+}
+
+// ITERATE prefix marker. When present, the shape becomes a step-
+// repeated array of itself; the step pattern follows the geometry.
+ITERATE_PREFIX: sequence {
+  "ITERATE":is_iterate=true space,
+  ?<MASK_MOD>
+}
+
+// stepPattern per LEF/DEF 5.8 — `numX numY xStep yStep` trailing
+// the geometry when ITERATE was declared.
+STEP_PATTERN: sequence dict {
+  int:step_num_x=@ space, int:step_num_y=@ space,
+  <NUMBER>:step_x=@ space, <NUMBER>:step_y=@ space
 }
 
 RECT_SHAPE: sequence dict {
   "RECT":type="Rect" space,
+  ?<MASK_MOD>,
+  ?<ITERATE_PREFIX>,
   <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
   <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
+  ?<STEP_PATTERN>:step_pattern=@,
   ";" newline
 }
 
 POLYGON_SHAPE: sequence dict {
   "POLYGON":type="Polygon" space,
+  ?<MASK_MOD>,
+  ?<ITERATE_PREFIX>,
   <POLYGON_POINTS>:points=@,
+  ?<STEP_PATTERN>:step_pattern=@,
   ";" newline
 }
 POLYGON_POINTS: sequence array { repeat <NUMBER> }
+
+// PATH — segmented line with point list per LEF/DEF 5.8 §"Path".
+PATH_SHAPE: sequence dict {
+  "PATH":type="Path" space,
+  ?<MASK_MOD>,
+  ?<ITERATE_PREFIX>,
+  <PATH_POINTS>:points=@,
+  ?<STEP_PATTERN>:step_pattern=@,
+  ";" newline
+}
+PATH_POINTS: sequence array { repeat+ <NUMBER> }
+
+// VIA placement inside a port / obs layer group: `VIA [MASK n] pt
+// viaName ;` per LEF/DEF 5.8. Distinct from VIA_BLOCK definitions
+// and VIA_LAYER_GROUP at VIA-definition level.
+VIA_PLACEMENT: sequence dict {
+  "VIA":type="ViaPlacement" space,
+  ?<MASK_MOD>,
+  ?<ITERATE_PREFIX>,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  identifier:via_name=@ space,
+  ?<STEP_PATTERN>:step_pattern=@,
+  ";" newline
+}
 
 // === OBS (obstructions) — MACRO-level; same layer-group structure ========
 
