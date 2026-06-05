@@ -214,16 +214,21 @@ RESISTANCE_CMD:  sequence { "RESISTANCE" space, "OHMS" space,      int:resistanc
 //     [SIZE width BY height ;]
 //   END siteName
 //
-// Sub-statements in the order observed in the corpus
-// (hybrid_sites.lef uses SYMMETRY → CLASS → SIZE [→ ROWPATTERN]).
-// The LEF spec lists CLASS → SYMMETRY → ROWPATTERN → SIZE canonical
-// order; real files diverge. Strict-order limitation again awaits
-// NSEQ.
-
-// SITE sub-statements accepted in any order via `repeat <SITE_PROPERTY>`
-// — real LEFs (e.g. yod_V2.1.0.beta.2.lef) use CLASS → SYMMETRY →
-// SIZE while the LEF/DEF 5.8 spec lists CLASS → SYMMETRY →
-// ROWPATTERN → SIZE canonical. Same pattern as MACRO_BLOCK.
+// Spec deviation, knowingly tolerated:
+//   - LEF/DEF 5.8 §"Site" marks `CLASS` and `SIZE` as REQUIRED (no
+//     brackets in the spec BNF), and orders sub-statements
+//     canonically as CLASS → SYMMETRY → ROWPATTERN → SIZE. The
+//     current `repeat <SITE_PROPERTY>` formulation makes both
+//     required clauses optional and accepts them in any order.
+//   - This is deliberate: real corpora diverge from canonical order
+//     (hybrid_sites.lef opens with SYMMETRY; yod_V2.1.0.beta.2.lef
+//     uses CLASS → SYMMETRY → SIZE), and a SITE missing CLASS or
+//     SIZE is malformed but the grammar can't enforce "at least one
+//     of each, in any order" without the NSEQ primitive (M2 scope).
+//   - Spec-strict tightening — CLASS-required-first, SIZE-required-
+//     last — is deferred until NSEQ lands (M2). Until then the
+//     downstream Pydantic model has `class`, `width`, `height` as
+//     Optional even though the spec says required.
 SITE_BLOCK: sequence dict {
   "SITE":type="Site" space,
   identifier:name=@ newline,
@@ -677,7 +682,6 @@ LAYER_KEYWORD: choice {
 // `END viaName`.
 //
 //   VIA viaName [DEFAULT]
-//     [+ TOPOFSTACKONLY]
 //     [RESISTANCE value ;]
 //     {LAYER layerName ;
 //        {RECT (x1 y1) (x2 y2) | POLYGON pts ...} ...
@@ -711,12 +715,10 @@ VIA_DEFAULT_LITERAL: choice {
 
 VIA_PROPERTY: choice {
   <VIA_RESISTANCE>,
-  <VIA_TOPOFSTACKONLY_KW>,
   <VIA_LAYER_GROUP>
 }
 
-VIA_RESISTANCE:        sequence { "RESISTANCE" space, <NUMBER>:resistance=@ space, ";" newline }
-VIA_TOPOFSTACKONLY_KW: sequence { "TOPOFSTACKONLY":top_of_stack_only=true space, ";" newline }
+VIA_RESISTANCE: sequence { "RESISTANCE" space, <NUMBER>:resistance=@ space, ";" newline }
 
 // Each LAYER + shape group in a VIA: layer name followed by shapes.
 VIA_LAYER_GROUP: sequence dict {
