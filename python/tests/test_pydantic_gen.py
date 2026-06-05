@@ -341,6 +341,62 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     assert "properties" in mod.ViaruleBlock.model_fields
 
 
+def test_sky130_sram_macro_parses_losslessly(tmp_path):
+    """A real OpenRAM-generated SRAM macro (sky130_sram_1kbyte_1rw1r_8x1024_8)
+    exercises a much richer MACRO body than the inline test fixtures:
+    51 PINs across IN / OUT / INOUT with bracketed bus names
+    (`din0[0]`, `addr0[3]`, …), power pins with USE POWER + SHAPE
+    ABUTMENT, multi-layer-group PORTs (power rails span met3 + met4),
+    and an OBS section with ~150 RECT shapes across four metal
+    layers. Lossless-parse regression guard for MACRO / PIN / PORT /
+    OBS / LAYER-group-of-shapes — the patterns that real cell
+    libraries lean on.
+    """
+    pytest.importorskip("pydantic")
+    sram_path = REPO_ROOT / "python" / "tests" / "data" / "sky130_sram_1kbyte.lef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(sram_path))
+
+    macros = [it for it in parsed["items"] if it.get("type") == "Macro"]
+    assert len(macros) == 1
+    macro = macros[0]
+    assert macro["name"] == "sky130_sram_1kbyte_1rw1r_8x1024_8"
+    assert macro["class"] == ["BLOCK"]
+    assert set(macro["symmetry"]) == {"X", "Y", "R90"}
+
+    # All 51 PINs present (8 data-in + 10 addr0 + 10 addr1 + …).
+    pins = macro["pins"]
+    assert len(pins) >= 50, f"PIN list lost entries: only {len(pins)}"
+    pin_names = {p["name"] for p in pins}
+    assert "din0[0]" in pin_names  # bracketed identifier round-tripped
+    assert "addr0[9]" in pin_names
+    assert "clk0" in pin_names
+    assert "vccd1" in pin_names
+
+    # Power pin: USE POWER + SHAPE ABUTMENT both catcher-flattened to PIN.
+    vccd1 = next(p for p in pins if p["name"] == "vccd1")
+    assert vccd1["direction"] == "INOUT"
+    assert vccd1["use"] == "POWER"
+    assert vccd1["shape"] == "ABUTMENT"
+    # Multi-layer-group PORT: vccd1 spans met3 + met4 in 4 layer groups.
+    assert len(vccd1["ports"]) == 1
+    layer_groups = vccd1["ports"][0]["layer_groups"]
+    assert len(layer_groups) >= 4
+
+    # OBS section captured (the regression target — `?<MACRO_OBS>:obs=@`).
+    assert macro["obs"]["type"] == "Obs"
+    obs_groups = macro["obs"]["layer_groups"]
+    assert len(obs_groups) >= 4  # met1 + met2 + met3 + met4
+    total_shapes = sum(len(g["shapes"]) for g in obs_groups)
+    assert total_shapes >= 100, f"OBS lost shapes: only {total_shapes}"
+
+    # Generated Pydantic validates against the parsed dict (no extra
+    # fields rejected by extra="forbid").
+    mod = _generate_lef_models(tmp_path)
+    model = mod.Library.model_validate(parsed)
+    assert model is not None
+
+
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     """Per design: rules like SITE_SIZE, SITE_CLASS, VERSION_CMD have
     no standalone class — their fields appear in the parent."""
