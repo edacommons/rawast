@@ -72,6 +72,15 @@ def cmd_schema(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pydantic(args: argparse.Namespace) -> int:
+    from .pydantic_gen import to_pydantic
+    meta = Grammar() if args.grammar.endswith(".json") else Grammar("rawast")
+    grammar = meta.parse_file(args.grammar)
+    doc = args.module_doc or f"Pydantic models generated from {args.grammar}."
+    sys.stdout.write(to_pydantic(grammar, module_doc=doc))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="rawast",
@@ -128,6 +137,19 @@ def main(argv: list[str] | None = None) -> int:
                           help="Markdown heading level for the title (default 1). "
                                "Per-rule headings are one level deeper.")
     p_schema.set_defaults(func=cmd_schema)
+
+    p_pydantic = sub.add_parser(
+        "pydantic",
+        help="Generate Pydantic v2 model source for a grammar — emits a "
+             "Python module whose models mirror the grammar's parse/save "
+             "dict shape exactly (round-trip: parse → validate → dump "
+             "yields the same dict). Output goes to stdout; redirect "
+             "to a file.",
+    )
+    p_pydantic.add_argument("grammar", help="Grammar file (.rawast or .json)")
+    p_pydantic.add_argument("--module-doc",
+                            help="Docstring for the generated module")
+    p_pydantic.set_defaults(func=cmd_pydantic)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -57,3 +57,8 @@ RAWAST_BUILD_TESTS = "OFF"
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+
+[dependency-groups]
+dev = [
+    "pydantic>=2.13.4",
+]
