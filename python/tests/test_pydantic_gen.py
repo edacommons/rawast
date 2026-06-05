@@ -547,6 +547,40 @@ def test_lef_spec_coverage_phase1(tmp_path):
                         if p["kind"] == "PROPERTY")
     assert routing_prop["values"] == ["LEF58_TYPE", "TYPE ROUTING ;"]
 
+    # Phase 3: VIA, VIARULE, NONDEFAULTRULE.
+    via = next(it for it in items
+               if it.get("type") == "VIA" and it.get("name") == "spec_via_geom")
+    assert via["is_default"] is True
+    # First property is RESISTANCE, then three LAYER groups.
+    assert via["properties"][0]["type"] == "Resistance"
+    assert via["properties"][0]["value"] == 50
+    assert [p.get("layer") for p in via["properties"][1:]] == ["li1", "mcon", "met1"]
+
+    viarules = {it["name"]: it for it in items if it.get("type") == "VIARULE"}
+    assert "spec_viarule_pair" in viarules
+    assert viarules["spec_viarule_gen"]["is_generate"] is True
+
+    ndr = next(it for it in items if it.get("type") == "NonDefaultRule")
+    assert ndr["name"] == "spec_ndr"
+    prop_types = [p.get("type") for p in ndr["properties"]]
+    assert prop_types == ["HardSpacing", "Layer", "Layer", "Via",
+                          "ViaRule", "MinCuts"]
+    # HARDSPACING marker.
+    assert ndr["properties"][0]["is_hard_spacing"] is True
+    # Per-LAYER properties catcher-flatten into the LAYER sub-block dict.
+    li1_layer = ndr["properties"][1]
+    assert li1_layer == {"type": "Layer", "layer": "li1",
+                         "width": 0.34, "spacing": 0.34}
+    met1_layer = ndr["properties"][2]
+    assert met1_layer["diag_spacing"] == 0.5
+    assert met1_layer["wire_ext"] == 0.05
+    # VIA / VIARULE references and MINCUTS.
+    assert ndr["properties"][3] == {"type": "Via", "via": "spec_via_geom"}
+    assert ndr["properties"][4] == {"type": "ViaRule",
+                                    "viarule": "spec_viarule_gen"}
+    assert ndr["properties"][5] == {"type": "MinCuts",
+                                    "cut_layer": "mcon", "num_cuts": 2}
+
     # Generated Pydantic validates the whole thing under extra="forbid".
     mod = _generate_lef_models(tmp_path)
     model = mod.Library.model_validate(parsed)

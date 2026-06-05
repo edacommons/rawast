@@ -67,12 +67,13 @@ LIBRARY_ITEM: choice {
   <FIXEDMASK_CMD>,
   <PROPERTYDEFINITIONS_BLOCK>,
   <LAYER_BLOCK>,
-  <VIA_BLOCK>,
   <VIARULE_BLOCK>,
+  <VIA_BLOCK>,
   <SPACING_BLOCK>,
   <SITE_BLOCK>,
+  <NONDEFAULTRULE_BLOCK>,
   <MACRO_BLOCK>
-  // NONDEFAULTRULE, BEGINEXT, MAXVIASTACK: M2/M4 scope.
+  // BEGINEXT, MAXVIASTACK: M2/M4 scope.
 }
 
 // FIXEDMASK ; — library-level marker per LEF/DEF 5.8 §"FixedMask".
@@ -855,4 +856,81 @@ VIARULE_PROPERTY: choice {
 
 VIARULE_LAYER_DECL: sequence dict {
   "LAYER":type="Layer" space, identifier:layer=@ space, ";" newline
+}
+
+// === NONDEFAULTRULE block (tech LEF) =====================================
+//
+// LEF/DEF 5.8 §"NonDefault Rule" — per-net rules overriding default
+// LAYER widths/spacings, with optional HARDSPACING marker, per-LAYER
+// width/spacing/diagspacing/wireext properties, VIA / VIARULE
+// references, and MINCUTS overrides. Spec shape:
+//
+//   NONDEFAULTRULE ruleName
+//     [+ HARDSPACING]
+//     {+ LAYER layerName WIDTH minWidth
+//        [DIAGSPACING diagSpacing]
+//        [SPACING minSpacing]
+//        [WIREEXT wireExt] ;} ...
+//     [+ VIA viaName] ...
+//     [+ VIARULE viaRuleName] ...
+//     [+ MINCUTS cutLayerName numCuts] ...
+//   END ruleName
+//
+// (The `+`-prefix syntax is DEF NDR; LEF NDR uses plain keywords
+// without `+`.)
+NONDEFAULTRULE_BLOCK: sequence dict {
+  "NONDEFAULTRULE":type="NonDefaultRule" space,
+  identifier:name=@ newline,
+  <NDR_PROPERTIES>:properties=@,
+  "END" space, identifier:end_name=@ newline
+}
+
+NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> }
+
+// Choice ordering: VIARULE before VIA, MINCUTS before any other M-prefix.
+NDR_PROPERTY: choice {
+  <NDR_HARDSPACING>,
+  <NDR_LAYER>,
+  <NDR_VIARULE_REF>,
+  <NDR_VIA_REF>,
+  <NDR_MINCUTS>
+}
+
+NDR_HARDSPACING: sequence dict {
+  "HARDSPACING":type="HardSpacing":is_hard_spacing=true space, ";" newline
+}
+
+// LAYER sub-block: name then a free-order list of WIDTH/SPACING/
+// DIAGSPACING/WIREEXT properties (spec mandates WIDTH first; we're
+// permissive here too).
+NDR_LAYER: sequence dict {
+  "LAYER":type="Layer" space, identifier:layer=@ space,
+  repeat <NDR_LAYER_PROP>,
+  ";" newline
+}
+
+NDR_LAYER_PROP: choice {
+  <NDR_LAYER_WIDTH>,
+  <NDR_LAYER_SPACING>,
+  <NDR_LAYER_DIAGSPACING>,
+  <NDR_LAYER_WIREEXT>
+}
+
+NDR_LAYER_WIDTH:       sequence { "WIDTH"       space, <NUMBER>:width=@ space }
+NDR_LAYER_SPACING:     sequence { "SPACING"     space, <NUMBER>:spacing=@ space }
+NDR_LAYER_DIAGSPACING: sequence { "DIAGSPACING" space, <NUMBER>:diag_spacing=@ space }
+NDR_LAYER_WIREEXT:     sequence { "WIREEXT"     space, <NUMBER>:wire_ext=@ space }
+
+NDR_VIA_REF: sequence dict {
+  "VIA":type="Via" space, identifier:via=@ space, ";" newline
+}
+
+NDR_VIARULE_REF: sequence dict {
+  "VIARULE":type="ViaRule" space, identifier:viarule=@ space, ";" newline
+}
+
+NDR_MINCUTS: sequence dict {
+  "MINCUTS":type="MinCuts" space,
+  identifier:cut_layer=@ space,
+  int:num_cuts=@ space, ";" newline
 }

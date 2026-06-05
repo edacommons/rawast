@@ -117,4 +117,44 @@ LAYER spec_implant
   SPACING 0.18 ;
 END spec_implant
 
+# === Phase 3: VIA, VIARULE, NONDEFAULTRULE ===
+
+VIA spec_via_geom DEFAULT
+   RESISTANCE 50 ;
+   LAYER li1 ;
+     RECT -0.085 -0.085 0.085 0.085 ;
+   LAYER mcon ;
+     RECT -0.085 -0.085 0.085 0.085 ;
+   LAYER met1 ;
+     RECT -0.145 -0.115 0.145 0.115 ;
+END spec_via_geom
+
+VIARULE spec_viarule_pair
+   LAYER li1 ;
+   ENCLOSURE 0 0 ;
+   LAYER met1 ;
+   ENCLOSURE 0.06 0.03 ;
+   LAYER mcon ;
+   RECT -0.085 -0.085 0.085 0.085 ;
+   SPACING 0.36 BY 0.36 ;
+END spec_viarule_pair
+
+VIARULE spec_viarule_gen GENERATE
+   LAYER li1 ;
+   ENCLOSURE 0 0 ;
+   LAYER met1 ;
+   ENCLOSURE 0.06 0.03 ;
+   LAYER mcon ;
+   RECT -0.085 -0.085 0.085 0.085 ;
+END spec_viarule_gen
+
+NONDEFAULTRULE spec_ndr
+   HARDSPACING ;
+   LAYER li1 WIDTH 0.34 SPACING 0.34 ;
+   LAYER met1 WIDTH 0.28 SPACING 0.28 DIAGSPACING 0.5 WIREEXT 0.05 ;
+   VIA spec_via_geom ;
+   VIARULE spec_viarule_gen ;
+   MINCUTS mcon 2 ;
+END spec_ndr
+
 END LIBRARY
