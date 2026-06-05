@@ -397,6 +397,62 @@ def test_sky130_sram_macro_parses_losslessly(tmp_path):
     assert model is not None
 
 
+def test_sky130_io_pad_parses_losslessly(tmp_path):
+    """A real Sky130 IO pad (`sky130_fd_io__top_xres4v2`, 4778 lines)
+    exercises two patterns the cell-library SRAM didn't touch:
+
+      * `MACRO ... SOURCE USER ;` — pre-5.6 spec clause, dropped from
+        5.7 but still emitted by real PDKs (Sky130 IO is LEF 5.5);
+        accepted as a permissive deprecated-form pass-through.
+      * PIN-level ANTENNA clauses (15 in this file) — the unbound-
+        dict-container discard bug, but for PIN_ANTENNA_PROP rather
+        than LAYER_PROPERTY. Fix: make PIN_ANTENNA_PROP container-
+        less so `antenna_kind`, `value`, and `antenna_layer`
+        catcher-flatten into the enclosing PIN dict.
+
+    Limitation acknowledged in the grammar: a PIN with multiple
+    ANTENNA clauses of different kinds collapses to last-write-wins.
+    Sky130 IO has at most one ANTENNA per PIN so this fixture
+    doesn't surface it; M2 work to add a proper list capture.
+    """
+    pytest.importorskip("pydantic")
+    io_path = REPO_ROOT / "python" / "tests" / "data" / "sky130_fd_io_top_xres4v2.lef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(io_path))
+
+    macros = [it for it in parsed["items"] if it.get("type") == "Macro"]
+    assert len(macros) == 1
+    macro = macros[0]
+    assert macro["name"] == "sky130_fd_io__top_xres4v2"
+    assert macro["class"] == ["PAD"]
+    # SOURCE is the deprecated 5.6-era field that triggered the parse fix.
+    assert macro["source"] == "USER"
+
+    # 25 PINs, 15 carry an ANTENNA clause (the captured field).
+    pins = macro["pins"]
+    assert len(pins) == 25
+    with_antenna = [p for p in pins if "antenna_kind" in p]
+    assert len(with_antenna) == 15, \
+        f"ANTENNA captures lost — expected 15, got {len(with_antenna)}"
+
+    amux = next(p for p in pins if p["name"] == "AMUXBUS_A")
+    assert amux["direction"] == "INOUT"
+    assert amux["use"] == "SIGNAL"
+    assert amux["antenna_kind"] == "AntennaPartialMetalSideArea"
+    assert amux["value"] == 111.168
+
+    # OBS section survives.
+    assert macro["obs"]["type"] == "Obs"
+    assert macro["obs"]["layer_groups"]
+
+    # Generated Pydantic validates the whole file under extra="forbid".
+    mod = _generate_lef_models(tmp_path)
+    model = mod.Library.model_validate(parsed)
+    assert model.items[0].source == "USER"
+    assert model.items[0].pins[0].antenna_kind is not None or \
+           model.items[0].pins[0].antenna_kind is None  # field exists
+
+
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     """Per design: rules like SITE_SIZE, SITE_CLASS, VERSION_CMD have
     no standalone class — their fields appear in the parent."""

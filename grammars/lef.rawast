@@ -355,7 +355,18 @@ MACRO_PROPERTY: choice {
   <MACRO_SIZE>,
   <MACRO_SYMMETRY>,
   <MACRO_SITE_REF>,
+  <MACRO_SOURCE>,
   <MACRO_PROPERTY_KV>
+}
+
+// SOURCE was a MACRO sub-statement in LEF 5.6 and earlier; the spec
+// dropped it post-5.6 but real PDKs still emit it (Sky130 5.5 IO
+// pads use `SOURCE USER ;`). Accepted as a permissive deprecated-
+// form pass-through so we can parse real corpus files.
+MACRO_SOURCE: sequence {
+  "SOURCE" space,
+  identifier:source=@ space,
+  ";" newline
 }
 
 // User-defined PROPERTY clauses — names declared in
@@ -477,7 +488,15 @@ PIN_NETEXPR: sequence {
 // ANTENNA value is usually a number (area or factor) but for
 // ANTENNAMODEL it's an identifier (OXIDE1 / OXIDE2 / OXIDE3 /
 // OXIDE4). Choice keeps both forms.
-PIN_ANTENNA_PROP: sequence dict {
+//
+// Container-less (no `dict`) so `antenna_kind`, `value`, and
+// `antenna_layer` catcher-flatten into the enclosing PIN dict.
+// Limitation: a PIN with multiple ANTENNA clauses of different
+// kinds collapses to last-write-wins (only the final kind/value
+// survives). Real-corpus check (Sky130 IO) shows each PIN has at
+// most one ANTENNA clause, so this is acceptable for now;
+// proper list-of-antennas capture is M2 work.
+PIN_ANTENNA_PROP: sequence {
   <PIN_ANTENNA_KIND>:antenna_kind=@ space,
   <PIN_ANTENNA_VALUE>:value=@ space,
   ?<PIN_ANTENNA_LAYER>,
