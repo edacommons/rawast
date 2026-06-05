@@ -5,12 +5,37 @@
 # emit. Real fixtures (Sky130 tech/SRAM/IO) catch regressions in
 # common patterns; this file is the spec-completeness counterpart.
 #
-# Built incrementally — each phase adds the next spec section and the
-# accompanying test asserts the captured fields. Phase 1 covers the
-# header (every sub-statement), UNITS (all 8 sub-statements),
-# MANUFACTURINGGRID, USEMINSPACING, CLEARANCEMEASURE,
-# PROPERTYDEFINITIONS (every object kind × every data type, plus
-# RANGE), and a SITE block with every sub-statement.
+# Phase coverage (each phase = one commit, test extended pass by pass):
+#   1. Header (VERSION / NAMESCASESENSITIVE / NOWIREEXTENSIONATPIN /
+#      BUSBITCHARS / DIVIDERCHAR), UNITS (all 8 sub-statements),
+#      MANUFACTURINGGRID, USEMINSPACING ×2, CLEARANCEMEASURE,
+#      FIXEDMASK, PROPERTYDEFINITIONS (every object × type × RANGE),
+#      SITE with ROWPATTERN.
+#   2. LAYER blocks for every TYPE the spec discriminates: ROUTING /
+#      CUT / MASTERSLICE / OVERLAP / IMPLANT, each with its property
+#      set, plus LEF58_TYPE PROPERTY clauses.
+#   3. VIA (geometry form with DEFAULT), VIARULE (LAYER-pair +
+#      GENERATE), NONDEFAULTRULE (HARDSPACING / per-LAYER props /
+#      VIA / VIARULE references / MINCUTS).
+#   4. MACRO with every body sub-statement: CLASS / FIXEDMASK /
+#      FOREIGN / EEQ / ORIGIN / SOURCE / SIZE / SYMMETRY / SITE /
+#      PIN / OBS / DENSITY / PROPERTY (trailing).
+#   5. PIN sub-statements: DIRECTION OUTPUT TRISTATE / USE / SHAPE /
+#      TAPERRULE / NETEXPR / SUPPLYSENSITIVITY / GROUNDSENSITIVITY /
+#      MUSTJOIN / PIN-level PROPERTY / single ANTENNA clause.
+#   6. PORT/OBS layerGeometries: PORT CLASS / LAYER with
+#      EXCEPTPGNET/SPACING/DESIGNRULEWIDTH/MASK / per-LAYER WIDTH /
+#      RECT with MASK / RECT with ITERATE + stepPattern / POLYGON /
+#      PATH / VIA placement.
+#   7. MAXVIASTACK (with RANGE), BEGINEXT/ENDEXT (syntactic frame).
+#
+# Known limitations (documented at the grammar sites):
+#   - Multiple ANTENNA / PROPERTY clauses per PIN collapse via the
+#     catcher (last-write-wins).
+#   - BEGINEXT inner content is not captured (no raw-text primitive
+#     in the engine yet).
+#   - SITE_BLOCK accepts CLASS / SIZE in any order (spec mandates
+#     them required and ordered; NSEQ work pending).
 
 VERSION 5.8 ;
 NAMESCASESENSITIVE ON ;
@@ -34,6 +59,7 @@ CLEARANCEMEASURE EUCLIDEAN ;
 USEMINSPACING OBS ON ;
 USEMINSPACING PIN OFF ;
 FIXEDMASK ;
+MAXVIASTACK 4 RANGE met1 met5 ;
 
 PROPERTYDEFINITIONS
   LAYER          prop_layer_i  INTEGER ;
@@ -217,5 +243,10 @@ MACRO spec_macro
   PROPERTY prop_macro_r 3.14 ;
   PROPERTY prop_macro_s "hello" ;
 END spec_macro
+
+# === Phase 7: vendor-extension wrapper ===
+
+BEGINEXT "spec_vendor_ext"
+ENDEXT
 
 END LIBRARY

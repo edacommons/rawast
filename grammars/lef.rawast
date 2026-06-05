@@ -65,6 +65,7 @@ LIBRARY_ITEM: choice {
   <CLEARANCEMEASURE_CMD>,
   <USEMINSPACING_CMD>,
   <FIXEDMASK_CMD>,
+  <MAXVIASTACK_CMD>,
   <PROPERTYDEFINITIONS_BLOCK>,
   <LAYER_BLOCK>,
   <VIARULE_BLOCK>,
@@ -72,8 +73,34 @@ LIBRARY_ITEM: choice {
   <SPACING_BLOCK>,
   <SITE_BLOCK>,
   <NONDEFAULTRULE_BLOCK>,
-  <MACRO_BLOCK>
-  // BEGINEXT, MAXVIASTACK: M2/M4 scope.
+  <MACRO_BLOCK>,
+  <BEGINEXT_BLOCK>
+}
+
+// MAXVIASTACK maxStack [RANGE bottomLayer topLayer] ; — caps the
+// number of VIAs that can stack vertically. Per LEF/DEF 5.8 spec.
+MAXVIASTACK_CMD: sequence dict {
+  "MAXVIASTACK":type="MaxViaStack" space,
+  int:max_stack=@ space,
+  ?<MAXVIASTACK_RANGE>,
+  ";" newline
+}
+
+MAXVIASTACK_RANGE: sequence {
+  "RANGE" space,
+  identifier:max_via_stack_bot=@ space,
+  identifier:max_via_stack_top=@ space
+}
+
+// BEGINEXT "extName" ... ENDEXT — opaque vendor-extension wrapper.
+// The grammar currently captures only the syntactic frame (name +
+// open/close keywords); the inner content is not modeled (each
+// vendor uses its own extension language). A future "raw-until"
+// primitive could capture the inner block as a string.
+BEGINEXT_BLOCK: sequence dict {
+  "BEGINEXT":type="BeginExt" space,
+  string:name=@ newline,
+  "ENDEXT" newline
 }
 
 // FIXEDMASK ; — library-level marker per LEF/DEF 5.8 §"FixedMask".

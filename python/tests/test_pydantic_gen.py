@@ -660,6 +660,15 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert shapes[4]["y"] == 0
     assert shapes[4]["via_name"] == "spec_via_geom"
 
+    # Phase 7: MAXVIASTACK and BEGINEXT.
+    mvs = next(it for it in items if it.get("type") == "MaxViaStack")
+    assert mvs["max_stack"] == 4
+    assert mvs["max_via_stack_bot"] == "met1"
+    assert mvs["max_via_stack_top"] == "met5"
+
+    ext = next(it for it in items if it.get("type") == "BeginExt")
+    assert ext["name"] == "spec_vendor_ext"
+
     # OBS captured.
     assert macro["obs"]["type"] == "Obs"
 
