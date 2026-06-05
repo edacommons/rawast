@@ -604,12 +604,31 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert len(density["layers"][0]["rects"]) == 2
     assert density["layers"][0]["rects"][0]["density"] == 0.4
 
-    # PIN exists with USE POWER / SHAPE ABUTMENT.
-    assert len(macro["pins"]) == 1
-    vdd = macro["pins"][0]
-    assert vdd["name"] == "VDD"
+    # Phase 5: PINs exercising every sub-statement.
+    assert len(macro["pins"]) == 2
+    vdd = next(p for p in macro["pins"] if p["name"] == "VDD")
     assert vdd["use"] == "POWER"
     assert vdd["shape"] == "ABUTMENT"
+
+    sig_in = next(p for p in macro["pins"] if p["name"] == "SIG_IN")
+    assert sig_in["direction"] == "OUTPUT"
+    assert sig_in["direction_modifier"] == "TRISTATE"  # OUTPUT TRISTATE
+    assert sig_in["use"] == "SIGNAL"
+    assert sig_in["shape"] == "FEEDTHRU"
+    assert sig_in["taper_rule"] == "tapered"
+    assert sig_in["net_expr"] == "net_expr_prop net_default"
+    assert sig_in["supply_sensitivity"] == "VDD"
+    assert sig_in["ground_sensitivity"] == "VSS"
+    assert sig_in["must_join"] == "OTHER_PIN"
+    # PIN-level PROPERTY clauses (single-instance via catcher — m2 work
+    # to capture a list of PROPERTY clauses per PIN).
+    assert sig_in["pin_prop_name"] == "prop_pin_i"
+    assert sig_in["pin_prop_value"] == 7
+    # ANTENNA clause (single-instance via catcher; multi-ANTENNA-per-
+    # PIN of different kinds would last-write-win today).
+    assert sig_in["antenna_kind"] == "AntennaGateArea"
+    assert sig_in["value"] == 0.05
+    assert sig_in["antenna_layer"] == "met1"
 
     # OBS captured.
     assert macro["obs"]["type"] == "Obs"

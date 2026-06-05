@@ -517,7 +517,42 @@ PIN_PROPERTY: choice {
   <PIN_SHAPE>,
   <PIN_TAPERRULE>,
   <PIN_NETEXPR>,
+  <PIN_SUPPLYSENSITIVITY>,
+  <PIN_GROUNDSENSITIVITY>,
+  <PIN_MUSTJOIN>,
+  <PIN_PROPERTY_KV>,
   <PIN_ANTENNA_PROP>
+}
+
+// SUPPLYSENSITIVITY / GROUNDSENSITIVITY per LEF/DEF 5.8 §"Pin" —
+// name a power/ground pin this signal pin is sensitive to.
+// Container-less, catcher-flatten.
+PIN_SUPPLYSENSITIVITY: sequence {
+  "SUPPLYSENSITIVITY" space,
+  identifier:supply_sensitivity=@ space,
+  ";" newline
+}
+PIN_GROUNDSENSITIVITY: sequence {
+  "GROUNDSENSITIVITY" space,
+  identifier:ground_sensitivity=@ space,
+  ";" newline
+}
+
+// MUSTJOIN pinName ; — declares the pin must be joined with another.
+PIN_MUSTJOIN: sequence {
+  "MUSTJOIN" space,
+  identifier:must_join=@ space,
+  ";" newline
+}
+
+// PIN-level PROPERTY clauses (declared in PROPERTYDEFINITIONS).
+// Container-less; single-PROPERTY-per-PIN survives via catcher (last
+// write wins for multiples). Proper list capture is M2 work.
+PIN_PROPERTY_KV: sequence {
+  "PROPERTY" space,
+  identifier:pin_prop_name=@ space,
+  <PROPERTY_VALUE>:pin_prop_value=@ space,
+  ";" newline
 }
 
 // DIRECTION per LEF spec:
