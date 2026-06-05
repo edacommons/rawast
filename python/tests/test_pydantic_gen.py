@@ -453,6 +453,78 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
            model.items[0].pins[0].antenna_kind is None  # field exists
 
 
+def test_lef_spec_coverage_phase1(tmp_path):
+    """Synthetic spec-coverage LEF — phase 1 covers header (every
+    library-level sub-statement), UNITS (all 8), MANUFACTURINGGRID,
+    USEMINSPACING, CLEARANCEMEASURE, FIXEDMASK, PROPERTYDEFINITIONS
+    (every object × type × RANGE), SITE with ROWPATTERN.
+
+    Phases 2-7 (LAYER full coverage, VIA/VIARULE/NDR, MACRO body,
+    PIN, PORT/OBS geometries, BEGINEXT/MAXVIASTACK) extend this file
+    incrementally.
+    """
+    pytest.importorskip("pydantic")
+    spec_path = REPO_ROOT / "python" / "tests" / "data" / "lef_spec_coverage.lef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(spec_path))
+
+    # Header — every sub-statement captured.
+    hdr = parsed["hdr"]
+    assert hdr["version"] == "5.8"
+    assert hdr["names_case_sensitive"] is True
+    assert hdr["no_wire_extension_at_pin"] is True
+    assert hdr["bus_bit_chars"] == "[]"
+    assert hdr["divider"] == "/"
+
+    items = parsed["items"]
+    by_type = {it["type"]: it for it in items if "type" in it
+               and not isinstance(it.get("name"), str)}  # singletons
+
+    # UNITS — every spec sub-statement present.
+    units = by_type["Units"]
+    for field in ("time_ns", "capacitance_pf", "resistance_ohms",
+                  "power_mw", "current_ma", "voltage_v",
+                  "database_microns", "frequency_mhz"):
+        assert field in units, f"UNITS missing {field}"
+
+    # Singleton library-level commands.
+    assert by_type["ManufacturingGrid"]["value"] == 0.005
+    assert by_type["ClearanceMeasure"]["value"] == "EUCLIDEAN"
+    assert by_type["FixedMask"]["is_fixed_mask"] is True
+
+    # USEMINSPACING appears twice (OBS, PIN) — find both via item list.
+    ums = [it for it in items if it.get("type") == "UseMinSpacing"]
+    assert {(u["object"], u["value"]) for u in ums} == {("OBS", "ON"), ("PIN", "OFF")}
+
+    # PROPERTYDEFINITIONS — every object × type × RANGE combination.
+    pd = by_type["PropertyDefinitions"]
+    objects = {d["object"] for d in pd["definitions"]}
+    assert objects == {"LAYER", "LIBRARY", "MACRO", "VIA", "VIARULE",
+                       "NONDEFAULTRULE", "PIN"}
+    types = {d["data_type"] for d in pd["definitions"]}
+    assert types == {"INTEGER", "REAL", "STRING"}
+    ranged = next(d for d in pd["definitions"] if d["prop_name"] == "prop_ranged")
+    assert ranged["range_min"] == 0.0
+    assert ranged["range_max"] == 1.0
+
+    # SITE with every sub-statement.
+    site = next(it for it in items if it.get("type") == "Site")
+    assert site["name"] == "spec_site"
+    assert site["class"] == "CORE"
+    assert site["symmetry"] == ["X", "Y", "R90"]
+    assert site["width"] == 1.0
+    assert site["height"] == 2.5
+    assert site["rowpattern"] == [
+        {"site": "sub_a", "orient": "North"},
+        {"site": "sub_b", "orient": "FlipNorth"},
+    ]
+
+    # Generated Pydantic validates the whole thing under extra="forbid".
+    mod = _generate_lef_models(tmp_path)
+    model = mod.Library.model_validate(parsed)
+    assert model is not None
+
+
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     """Per design: rules like SITE_SIZE, SITE_CLASS, VERSION_CMD have
     no standalone class — their fields appear in the parent."""

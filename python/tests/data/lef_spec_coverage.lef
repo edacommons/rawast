@@ -1,0 +1,70 @@
+# Synthetic LEF/DEF 5.8 spec-coverage fixture.
+#
+# Purpose: exercise every clause documented in the LEF/DEF 5.8 Language
+# Reference, not just whatever a particular vendor tool happens to
+# emit. Real fixtures (Sky130 tech/SRAM/IO) catch regressions in
+# common patterns; this file is the spec-completeness counterpart.
+#
+# Built incrementally — each phase adds the next spec section and the
+# accompanying test asserts the captured fields. Phase 1 covers the
+# header (every sub-statement), UNITS (all 8 sub-statements),
+# MANUFACTURINGGRID, USEMINSPACING, CLEARANCEMEASURE,
+# PROPERTYDEFINITIONS (every object kind × every data type, plus
+# RANGE), and a SITE block with every sub-statement.
+
+VERSION 5.8 ;
+NAMESCASESENSITIVE ON ;
+NOWIREEXTENSIONATPIN ON ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+UNITS
+  TIME NANOSECONDS 1 ;
+  CAPACITANCE PICOFARADS 10 ;
+  RESISTANCE OHMS 1 ;
+  POWER MILLIWATTS 1 ;
+  CURRENT MILLIAMPS 1 ;
+  VOLTAGE VOLTS 1.8 ;
+  DATABASE MICRONS 1000 ;
+  FREQUENCY MEGAHERTZ 1 ;
+END UNITS
+
+MANUFACTURINGGRID 0.005 ;
+CLEARANCEMEASURE EUCLIDEAN ;
+USEMINSPACING OBS ON ;
+USEMINSPACING PIN OFF ;
+FIXEDMASK ;
+
+PROPERTYDEFINITIONS
+  LAYER          prop_layer_i  INTEGER ;
+  LAYER          prop_layer_r  REAL ;
+  LAYER          prop_layer_s  STRING ;
+  LIBRARY        prop_lib_i    INTEGER ;
+  LIBRARY        prop_lib_r    REAL ;
+  LIBRARY        prop_lib_s    STRING ;
+  MACRO          prop_macro_i  INTEGER ;
+  MACRO          prop_macro_r  REAL ;
+  MACRO          prop_macro_s  STRING ;
+  VIA            prop_via_i    INTEGER ;
+  VIA            prop_via_r    REAL ;
+  VIA            prop_via_s    STRING ;
+  VIARULE        prop_vr_i     INTEGER ;
+  VIARULE        prop_vr_r     REAL ;
+  VIARULE        prop_vr_s     STRING ;
+  NONDEFAULTRULE prop_ndr_i    INTEGER ;
+  NONDEFAULTRULE prop_ndr_r    REAL ;
+  NONDEFAULTRULE prop_ndr_s    STRING ;
+  PIN            prop_pin_i    INTEGER ;
+  PIN            prop_pin_r    REAL ;
+  PIN            prop_pin_s    STRING ;
+  LAYER          prop_ranged   REAL RANGE 0.0 1.0 ;
+END PROPERTYDEFINITIONS
+
+SITE spec_site
+  CLASS CORE ;
+  SYMMETRY X Y R90 ;
+  ROWPATTERN sub_a N sub_b FN ;
+  SIZE 1.0 BY 2.5 ;
+END spec_site
+
+END LIBRARY

@@ -64,6 +64,7 @@ LIBRARY_ITEM: choice {
   <MANUFACTURINGGRID_CMD>,
   <CLEARANCEMEASURE_CMD>,
   <USEMINSPACING_CMD>,
+  <FIXEDMASK_CMD>,
   <PROPERTYDEFINITIONS_BLOCK>,
   <LAYER_BLOCK>,
   <VIA_BLOCK>,
@@ -71,7 +72,14 @@ LIBRARY_ITEM: choice {
   <SPACING_BLOCK>,
   <SITE_BLOCK>,
   <MACRO_BLOCK>
-  // NONDEFAULTRULE, BEGINEXT: M2/M4 scope.
+  // NONDEFAULTRULE, BEGINEXT, MAXVIASTACK: M2/M4 scope.
+}
+
+// FIXEDMASK ; — library-level marker per LEF/DEF 5.8 §"FixedMask".
+// Single-keyword statement; emits `is_fixed_mask: true` for round-trip.
+FIXEDMASK_CMD: sequence dict {
+  "FIXEDMASK":type="FixedMask":is_fixed_mask=true space,
+  ";" newline
 }
 
 // === Header-level statements ============================================
@@ -141,8 +149,17 @@ PROPDEF: sequence dict {
   <PROPDEF_OBJECT>:object=@ space,
   identifier:prop_name=@ space,
   identifier:data_type=@ space,
+  ?<PROPDEF_RANGE>,
   ?<PROPDEF_DEFAULT>,
   ";" newline
+}
+
+// Optional RANGE constraint per LEF/DEF 5.8 §"PropertyDefinitions":
+// `RANGE min max` between the data-type and the optional default.
+PROPDEF_RANGE: sequence {
+  "RANGE" space,
+  <NUMBER>:range_min=@ space,
+  <NUMBER>:range_max=@ space
 }
 
 // Optional default value after the data-type. Real corpus files
@@ -153,12 +170,15 @@ PROPDEF_DEFAULT: choice {
   <NUMBER>:default_value=@ space
 }
 
+// VIARULE must come before VIA — predictive PEG matches the first
+// successful prefix, so "VIA" would greedily consume the "VIA" of
+// "VIARULE" and the subsequent token-boundary check would fail.
 PROPDEF_OBJECT: choice {
   "LAYER":@,
   "LIBRARY":@,
   "MACRO":@,
-  "VIA":@,
   "VIARULE":@,
+  "VIA":@,
   "NONDEFAULTRULE":@,
   "PIN":@
 }
