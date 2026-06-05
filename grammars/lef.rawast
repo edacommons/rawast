@@ -92,14 +92,15 @@ MAXVIASTACK_RANGE: sequence {
   identifier:max_via_stack_top=@ space
 }
 
-// BEGINEXT "extName" ... ENDEXT — opaque vendor-extension wrapper.
-// The grammar currently captures only the syntactic frame (name +
-// open/close keywords); the inner content is not modeled (each
-// vendor uses its own extension language). A future "raw-until"
-// primitive could capture the inner block as a string.
+// BEGINEXT "extName" ... ENDEXT — vendor-extension wrapper. Inner
+// content is captured opaquely (as a raw string) via the
+// `lefdef.until_endext` terminal parser, so the block round-trips
+// even when the inner content is in a vendor-specific language
+// the grammar doesn't model.
 BEGINEXT_BLOCK: sequence dict {
   "BEGINEXT":type="BeginExt" space,
   string:name=@ newline,
+  lefdef.until_endext:body=@,
   "ENDEXT" newline
 }
 

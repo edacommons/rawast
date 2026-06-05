@@ -668,6 +668,9 @@ def test_lef_spec_coverage_phase1(tmp_path):
 
     ext = next(it for it in items if it.get("type") == "BeginExt")
     assert ext["name"] == "spec_vendor_ext"
+    # Inner content captured opaquely (vendor-DSL).
+    assert "vendor_directive option_a = 42 ;" in ext["body"]
+    assert "another_vendor_thing" in ext["body"]
 
     # OBS captured.
     assert macro["obs"]["type"] == "Obs"

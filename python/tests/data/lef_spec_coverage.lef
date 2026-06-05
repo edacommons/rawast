@@ -245,8 +245,14 @@ MACRO spec_macro
 END spec_macro
 
 # === Phase 7: vendor-extension wrapper ===
+#
+# Inner content captured opaquely by the lefdef.until_endext primitive.
+# Vendors typically use their own DSL here; rawast preserves it
+# verbatim for round-trip without trying to interpret.
 
 BEGINEXT "spec_vendor_ext"
+  vendor_directive option_a = 42 ;
+  another_vendor_thing "string value" ;
 ENDEXT
 
 END LIBRARY
