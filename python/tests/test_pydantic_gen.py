@@ -519,6 +519,34 @@ def test_lef_spec_coverage_phase1(tmp_path):
         {"site": "sub_b", "orient": "FlipNorth"},
     ]
 
+    # Phase 2: LAYER blocks of every TYPE.
+    layers = {it["name"]: it for it in items if it.get("type") == "Layer"}
+    assert set(layers) == {"spec_routing", "spec_cut", "spec_masterslice",
+                           "spec_overlap", "spec_implant"}
+
+    # Each LAYER's `properties` list carries (kind, values) pairs.
+    def layer_kinds(layer_name):
+        return [p["kind"] for p in layers[layer_name]["properties"]]
+
+    routing_kinds = layer_kinds("spec_routing")
+    for kw in ("TYPE", "DIRECTION", "PITCH", "OFFSET", "WIDTH", "AREA",
+               "THICKNESS", "RESISTANCE", "CAPACITANCE", "EDGECAPACITANCE",
+               "ANTENNAAREARATIO", "ANTENNADIFFAREARATIO",
+               "ANTENNACUMAREARATIO", "ANTENNAMODEL", "SPACING", "PROPERTY"):
+        assert kw in routing_kinds, f"spec_routing missing {kw}"
+
+    assert layer_kinds("spec_cut") == ["TYPE", "SPACING", "WIDTH", "ENCLOSURE",
+                                       "ANTENNAAREARATIO", "ANTENNAMODEL",
+                                       "PROPERTY"]
+    assert layer_kinds("spec_masterslice") == ["TYPE", "PROPERTY"]
+    assert layer_kinds("spec_overlap") == ["TYPE"]
+    assert layer_kinds("spec_implant") == ["TYPE", "WIDTH", "SPACING"]
+
+    # LEF58_TYPE PROPERTY captures the embedded LEF58 string as opaque.
+    routing_prop = next(p for p in layers["spec_routing"]["properties"]
+                        if p["kind"] == "PROPERTY")
+    assert routing_prop["values"] == ["LEF58_TYPE", "TYPE ROUTING ;"]
+
     # Generated Pydantic validates the whole thing under extra="forbid".
     mod = _generate_lef_models(tmp_path)
     model = mod.Library.model_validate(parsed)
