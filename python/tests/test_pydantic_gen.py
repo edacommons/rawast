@@ -212,6 +212,72 @@ def test_user_can_construct_macro_with_pins(tmp_path):
     assert dumped["pins"][0]["ports"][0]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
 
 
+OBS_LEF = """\
+VERSION 5.8 ;
+
+UNITS
+  DATABASE MICRONS 1000 ;
+END UNITS
+
+MACRO INV_X1
+  CLASS CORE ;
+  SIZE 1.84 BY 2.72 ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.1 0.4 0.3 0.6 ;
+    END
+  END A
+  OBS
+    LAYER met1 ;
+      RECT 0.0 0.0 1.84 0.05 ;
+  END
+END INV_X1
+
+END LIBRARY
+"""
+
+
+def test_round_trip_macro_with_obs(tmp_path):
+    """OBS section round-trip: `?<MACRO_OBS>:obs=@` in lef.rawast captures
+    OBS as a sub-dict; MacroBlock has `obs: MacroObs | None = None`."""
+    pytest.importorskip("pydantic")
+    lef_path = tmp_path / "obs.lef"
+    lef_path.write_text(OBS_LEF)
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(lef_path))
+
+    mod = _generate_lef_models(tmp_path)
+    model = mod.Library.model_validate(parsed)
+    dumped = model.model_dump(exclude_none=True, by_alias=True)
+
+    assert dumped == parsed
+
+
+def test_user_can_construct_macro_with_obs(tmp_path):
+    """Users build OBS nested inside MACRO via the MacroObs class."""
+    pytest.importorskip("pydantic")
+    mod = _generate_lef_models(tmp_path)
+    macro = mod.MacroBlock(
+        name="INV_X1",
+        end_name="INV_X1",
+        width=1.84,
+        height=2.72,
+        pins=[],
+        obs=mod.MacroObs(layer_groups=[mod.LayerGroup(
+            layer="met1",
+            shapes=[mod.RectShape(x1=0.0, y1=0.0, x2=1.84, y2=0.05)],
+        )]),
+        **{"class": ["CORE"]},
+    )
+    dumped = macro.model_dump(exclude_none=True, by_alias=True)
+    assert dumped["obs"]["type"] == "Obs"
+    assert dumped["obs"]["layer_groups"][0]["layer"] == "met1"
+    assert dumped["obs"]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
+
+
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     """Per design: rules like SITE_SIZE, SITE_CLASS, VERSION_CMD have
     no standalone class — their fields appear in the parent."""

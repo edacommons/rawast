@@ -316,7 +316,7 @@ MACRO_BLOCK: sequence dict {
   identifier:name=@ newline,
   repeat <MACRO_PROPERTY>,
   <MACRO_PINS>:pins=@,
-  ?<MACRO_OBS>,
+  ?<MACRO_OBS>:obs=@,
   repeat <MACRO_PROPERTY_KV>,
   "END" space, identifier:end_name=@ newline
 }
