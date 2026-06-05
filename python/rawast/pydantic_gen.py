@@ -77,6 +77,13 @@ def to_pydantic(grammar: dict, *, module_doc: str = "") -> str:
     rule_names = {k for k in grammar if _is_rule_name(k)}
     classifications = _classify_all(grammar, rule_names)
 
+    # Record which alias names resolve to a list-shaped type so the
+    # field emitter can default them to `Field(default_factory=list)`.
+    _LIST_ALIAS_NAMES.clear()
+    for name in rule_names:
+        if classifications[name] == "list_alias":
+            _LIST_ALIAS_NAMES.add(_class_name(name))
+
     # Pre-collect fields for each model rule (recursive catcher walk).
     model_fields: dict[str, list[_Field]] = {}
     for name in rule_names:
@@ -267,7 +274,15 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
                 out.append((fname, ftype, is_optional, None))
             else:
                 lit, default = _literal_type_and_default(value)
-                out.append((fname, lit, is_optional, default))
+                # Catcher-flattened constants (optional context, e.g.
+                # `FIXEDMASK:fixed_mask=true` inside a `repeat <CHOICE>`)
+                # default to None, not the literal: the literal is only
+                # produced when the catcher branch actually fires.
+                # Direct-binding constants (e.g. `"SITE":type="Site"` on
+                # the SITE_BLOCK opener) keep the literal default because
+                # the parsed dict always has them.
+                out.append((fname, lit, is_optional,
+                            None if is_optional else default))
         return out
 
     # No bindings — possibly catcher-flatten, possibly structural-skip.
@@ -387,12 +402,41 @@ def _emit_model_class(rule_name: str, fields: list[_Field]) -> str:
             else:
                 lines.append(f"    {safe}: {ftype} | None = {default_expr}")
         else:
-            if needs_alias:
+            # Required field. If the type is a list (either inline
+            # `list[X]` or a named array alias), default to an empty
+            # list — the engine's array-bound repeat produces `[]` when
+            # the repeat matches zero times, so the parsed dict always
+            # has the key but the value can be empty.
+            list_default = _list_type_default(ftype)
+            if list_default is not None:
+                if needs_alias:
+                    lines.append(
+                        f'    {safe}: {ftype} = Field('
+                        f'default_factory=list, alias="{fname}")')
+                else:
+                    lines.append(
+                        f"    {safe}: {ftype} = Field(default_factory=list)")
+            elif needs_alias:
                 lines.append(
                     f'    {safe}: {ftype} = Field(..., alias="{fname}")')
             else:
                 lines.append(f"    {safe}: {ftype}")
     return "\n".join(lines) + "\n"
+
+
+_LIST_ALIAS_NAMES: set[str] = set()
+
+
+def _list_type_default(ftype: str) -> str | None:
+    """Return a non-None marker when the field type is a list shape, so
+    the emitter can default it to `Field(default_factory=list)` rather
+    than require explicit construction. Covers inline `list[X]` and
+    named array-alias references (e.g. `MacroPropertiesTrail`)."""
+    if ftype.startswith("list["):
+        return "list"
+    if ftype in _LIST_ALIAS_NAMES:
+        return "list"
+    return None
 
 
 def _emit_alias(rule_name: str, body: Any, rule_names: set[str],

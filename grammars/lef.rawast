@@ -361,8 +361,16 @@ MACRO_BLOCK: sequence dict {
   repeat <MACRO_PROPERTY>,
   <MACRO_PINS>:pins=@,
   ?<MACRO_OBS>:obs=@,
-  repeat <MACRO_PROPERTY_KV>,
+  ?<MACRO_DENSITY>:density=@,
+  <MACRO_PROPERTIES_TRAIL>:properties=@,
   "END" space, identifier:end_name=@ newline
+}
+
+// Trailing `PROPERTY name value ;` clauses per LEF/DEF 5.8 §"Macro"
+// — captured as a list under `properties` (the unbound `repeat`
+// formerly discarded them because PROPERTY_KV is dict-container).
+MACRO_PROPERTIES_TRAIL: sequence array {
+  repeat <MACRO_PROPERTY_KV>
 }
 
 // MACRO sub-statements in any order — same pattern as HDR_CMD.
@@ -371,13 +379,51 @@ MACRO_BLOCK: sequence dict {
 // SYMMETRY → SITE canonical ordering.
 MACRO_PROPERTY: choice {
   <MACRO_CLASS>,
-  <MACRO_ORIGIN>,
+  <MACRO_FIXEDMASK>,
   <MACRO_FOREIGN>,
+  <MACRO_EEQ>,
+  <MACRO_ORIGIN>,
   <MACRO_SIZE>,
   <MACRO_SYMMETRY>,
   <MACRO_SITE_REF>,
-  <MACRO_SOURCE>,
-  <MACRO_PROPERTY_KV>
+  <MACRO_SOURCE>
+}
+
+// EEQ macroName ; — equivalent-macro reference per LEF/DEF 5.8
+// §"Macro". Container-less; emits `eeq` field on parent MACRO.
+MACRO_EEQ: sequence {
+  "EEQ" space, identifier:eeq=@ space, ";" newline
+}
+
+// FIXEDMASK at MACRO level — distinct from library-level
+// FIXEDMASK_CMD; marks the macro as having a fixed mask shift.
+MACRO_FIXEDMASK: sequence {
+  "FIXEDMASK":fixed_mask=true space, ";" newline
+}
+
+// DENSITY block: LAYER name followed by one-or-more `RECT pt pt
+// density ;` clauses, per LEF/DEF 5.8 §"Density". Used in fill cells.
+MACRO_DENSITY: sequence dict {
+  "DENSITY":type="Density" newline,
+  <MACRO_DENSITY_LAYERS>:layers=@,
+  "END" newline
+}
+
+MACRO_DENSITY_LAYERS: sequence array { repeat <MACRO_DENSITY_LAYER> }
+
+MACRO_DENSITY_LAYER: sequence dict {
+  "LAYER" space, identifier:layer=@ space, ";" newline,
+  <MACRO_DENSITY_RECTS>:rects=@
+}
+
+MACRO_DENSITY_RECTS: sequence array { repeat+ <MACRO_DENSITY_RECT> }
+
+MACRO_DENSITY_RECT: sequence dict {
+  "RECT":type="Rect" space,
+  <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
+  <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
+  <NUMBER>:density=@ space,
+  ";" newline
 }
 
 // SOURCE was a MACRO sub-statement in LEF 5.6 and earlier; the spec

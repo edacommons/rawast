@@ -581,6 +581,46 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert ndr["properties"][5] == {"type": "MinCuts",
                                     "cut_layer": "mcon", "num_cuts": 2}
 
+    # Phase 4: MACRO with every body sub-statement.
+    macro = next(it for it in items
+                 if it.get("type") == "Macro" and it.get("name") == "spec_macro")
+    assert macro["class"] == ["BLOCK"]
+    assert macro["fixed_mask"] is True          # FIXEDMASK on MACRO
+    assert macro["eeq"] == "spec_macro_eq"       # EEQ reference
+    assert macro["source"] == "USER"             # legacy SOURCE clause
+    assert macro["foreign_cell"] == "spec_macro"
+    assert macro["origin_x"] == 0
+    assert macro["origin_y"] == 0
+    assert macro["width"] == 5.0
+    assert macro["height"] == 10.0
+    assert macro["symmetry"] == ["X", "Y", "R90"]
+    assert macro["site"] == "spec_site"
+
+    # DENSITY block captured with nested layers + per-layer rects.
+    density = macro["density"]
+    assert density["type"] == "Density"
+    assert len(density["layers"]) == 2
+    assert density["layers"][0]["layer"] == "met1"
+    assert len(density["layers"][0]["rects"]) == 2
+    assert density["layers"][0]["rects"][0]["density"] == 0.4
+
+    # PIN exists with USE POWER / SHAPE ABUTMENT.
+    assert len(macro["pins"]) == 1
+    vdd = macro["pins"][0]
+    assert vdd["name"] == "VDD"
+    assert vdd["use"] == "POWER"
+    assert vdd["shape"] == "ABUTMENT"
+
+    # OBS captured.
+    assert macro["obs"]["type"] == "Obs"
+
+    # Trailing PROPERTY clauses captured as a list.
+    assert macro["properties"] == [
+        {"prop_name": "prop_macro_i", "prop_value": 42},
+        {"prop_name": "prop_macro_r", "prop_value": 3.14},
+        {"prop_name": "prop_macro_s", "prop_value": "hello"},
+    ]
+
     # Generated Pydantic validates the whole thing under extra="forbid".
     mod = _generate_lef_models(tmp_path)
     model = mod.Library.model_validate(parsed)

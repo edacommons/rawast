@@ -157,4 +157,41 @@ NONDEFAULTRULE spec_ndr
    MINCUTS mcon 2 ;
 END spec_ndr
 
+# === Phase 4: MACRO with every body sub-statement ===
+
+MACRO spec_macro
+  CLASS BLOCK ;
+  FIXEDMASK ;
+  FOREIGN spec_macro 0 0 ;
+  EEQ spec_macro_eq ;
+  ORIGIN 0 0 ;
+  SOURCE USER ;
+  SIZE 5.0 BY 10.0 ;
+  SYMMETRY X Y R90 ;
+  SITE spec_site ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER met1 ;
+        RECT 0 0 1 1 ;
+    END
+  END VDD
+  OBS
+    LAYER met2 ;
+      RECT 0 0 5 0.05 ;
+  END
+  DENSITY
+    LAYER met1 ;
+      RECT 0 0 1 1 0.4 ;
+      RECT 1 1 2 2 0.5 ;
+    LAYER met2 ;
+      RECT 0 0 1 1 0.45 ;
+  END
+  PROPERTY prop_macro_i 42 ;
+  PROPERTY prop_macro_r 3.14 ;
+  PROPERTY prop_macro_s "hello" ;
+END spec_macro
+
 END LIBRARY
