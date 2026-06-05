@@ -280,17 +280,25 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
     # Rule reference (bare string OR {type: "RULE_NAME"})
     rule_name = _resolve_to_rule_name(inner, rule_names)
     if rule_name is not None and rule_name not in visited:
-        cls = classifications.get(rule_name, "skip")
+        target = grammar[rule_name]
         new_visited = visited | {rule_name}
-        if cls in ("skip", "model"):
-            # `skip`  → container-less rule, fields hoist into parent
-            # `model` → unnamed dict-container reference; the engine
-            #           catcher-merges its fields into the parent dict
+        if not isinstance(target, dict):
+            return out
+        # Walk-in decision is based on what the target IS, not its
+        # `classify` bucket: choice and container-less sequence are
+        # structural and need their bodies walked (per-branch / per-
+        # item, the recursion handles `skip`-vs-`model` correctly).
+        # Dict-container or array-container without a binding is
+        # discarded by the engine, so contributes nothing.
+        container = target.get("container")
+        if container in ("dict", "array"):
+            return out
+        t = target.get("type")
+        if t in ("choice", "sequence"):
             return _collect_fields_deep(
-                grammar[rule_name], rule_names, grammar, classifications,
+                target, rule_names, grammar, classifications,
                 optional_ctx=is_optional, visited=new_visited)
-        # union/list_alias/scalar_alias without binding contributes no
-        # field (its value would be dropped on parse).
+        # Repeat alias, scalar alias, terminal alias: unbound → discarded.
         return out
 
     # Inline expressions
@@ -310,12 +318,20 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
                             rep_inner, rule_names, grammar, classifications)
                         out.append((fname, f"list[{inner_type}]", is_optional, None))
                 return out
-            # Unnamed repeat — catcher repeat
+            # Unnamed repeat — same walk-in rule as bare reference:
+            # walk choice and container-less sequence bodies; skip
+            # dict-container / array (those would be discarded).
             rep_rule = _resolve_to_rule_name(rep_inner, rule_names)
             if rep_rule is not None and rep_rule not in visited:
-                return _collect_fields_deep(
-                    grammar[rep_rule], rule_names, grammar, classifications,
-                    optional_ctx=True, visited=visited | {rep_rule})
+                target = grammar[rep_rule]
+                if isinstance(target, dict):
+                    container = target.get("container")
+                    t_target = target.get("type")
+                    if container not in ("dict", "array") \
+                            and t_target in ("choice", "sequence"):
+                        return _collect_fields_deep(
+                            target, rule_names, grammar, classifications,
+                            optional_ctx=True, visited=visited | {rep_rule})
             return out
         if t == "choice":
             return _collect_fields_deep(

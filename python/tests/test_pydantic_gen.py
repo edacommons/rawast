@@ -114,6 +114,104 @@ def test_extra_field_is_rejected(tmp_path):
         mod.SiteBlock(name="core", end_name="core", garbage_field="x")
 
 
+MACRO_LEF = """\
+VERSION 5.8 ;
+NAMESCASESENSITIVE ON ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+UNITS
+  DATABASE MICRONS 1000 ;
+END UNITS
+
+SITE core
+  CLASS CORE ;
+  SYMMETRY Y ;
+  SIZE 0.46 BY 2.72 ;
+END core
+
+MACRO INV_X1
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  FOREIGN INV_X1 0 0 ;
+  SIZE 1.84 BY 2.72 ;
+  SYMMETRY X Y ;
+  SITE core ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 0.1 0.4 0.3 0.6 ;
+    END
+  END A
+  PIN Y
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met1 ;
+        RECT 1.4 1.0 1.7 1.3 ;
+    END
+  END Y
+END INV_X1
+
+END LIBRARY
+"""
+
+
+def test_round_trip_macro_lef(tmp_path):
+    """Round-trip a fuller LEF with MACRO, PINs, multiple SITE_PROPERTYs,
+    SYMMETRY with multiple identifiers, RECT shapes inside PORT/LAYER."""
+    pytest.importorskip("pydantic")
+    lef_path = tmp_path / "macro.lef"
+    lef_path.write_text(MACRO_LEF)
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(lef_path))
+
+    mod = _generate_lef_models(tmp_path)
+    model = mod.Library.model_validate(parsed)
+    dumped = model.model_dump(exclude_none=True, by_alias=True)
+
+    assert dumped == parsed
+
+
+def test_user_can_construct_macro_with_pins(tmp_path):
+    """User constructs an INV-style MACRO with two PINs from scratch."""
+    pytest.importorskip("pydantic")
+    mod = _generate_lef_models(tmp_path)
+    macro = mod.MacroBlock(
+        name="INV_X1",
+        end_name="INV_X1",
+        width=1.84,
+        height=2.72,
+        symmetry=["X", "Y"],
+        site="core",
+        origin_x=0, origin_y=0,
+        foreign_cell="INV_X1", foreign_x=0, foreign_y=0,
+        pins=[
+            mod.PinBlock(
+                name="A", end_name="A",
+                direction="INPUT", use="SIGNAL",
+                ports=[mod.PortBlock(
+                    layer_groups=[mod.LayerGroup(
+                        layer="met1",
+                        shapes=[mod.RectShape(
+                            x1=0.1, y1=0.4, x2=0.3, y2=0.6)],
+                    )],
+                )],
+            ),
+        ],
+        **{"class": ["CORE"]},  # `class` keyword alias
+    )
+    dumped = macro.model_dump(exclude_none=True, by_alias=True)
+    # Spot-check key fields
+    assert dumped["type"] == "Macro"
+    assert dumped["name"] == "INV_X1"
+    assert dumped["class"] == ["CORE"]
+    assert dumped["pins"][0]["name"] == "A"
+    assert dumped["pins"][0]["ports"][0]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
+
+
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     """Per design: rules like SITE_SIZE, SITE_CLASS, VERSION_CMD have
     no standalone class — their fields appear in the parent."""
