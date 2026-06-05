@@ -278,6 +278,69 @@ def test_user_can_construct_macro_with_obs(tmp_path):
     assert dumped["obs"]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
 
 
+def test_sky130_techlef_parses_losslessly(tmp_path):
+    """Real Sky130 tech LEF (792 lines) parses end-to-end and every
+    LAYER / VIA / VIARULE block carries its sub-properties in the AST.
+
+    Regression guard: the original `repeat <LAYER_PROPERTY>` form
+    silently discarded all LAYER body content (unbound dict-container
+    catcher = engine drops the value). Fix wrapped it in a
+    `<LAYER_PROPERTIES>:properties=@` array; same for VIA, VIARULE.
+    """
+    pytest.importorskip("pydantic")
+    sky_path = REPO_ROOT / "python" / "tests" / "data" / "sky130hd.tlef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(sky_path))
+
+    # Header sub-statements (Sky130 opens with TIME, not DATABASE —
+    # exercises the order-permissive UNITS rewrite).
+    units = next(it for it in parsed["items"] if it.get("type") == "Units")
+    assert units["time_ns"] == 1
+    assert units["database_microns"] == 1000
+
+    # Every LAYER must carry its `properties` (the regression case).
+    layers = [it for it in parsed["items"] if it.get("type") == "Layer"]
+    assert len(layers) >= 10  # nwell, pwell, li1, mcon, met1, …
+    li1 = next(la for la in layers if la["name"] == "li1")
+    assert len(li1["properties"]) >= 10, \
+        f"li1 lost LAYER properties: {li1}"
+    kinds = {p["kind"] for p in li1["properties"]}
+    assert {"TYPE", "DIRECTION", "PITCH", "WIDTH"} <= kinds
+
+    # LEF58_TYPE PROPERTY captured (opaque inner string is fine).
+    nwell = next(la for la in layers if la["name"] == "nwell")
+    prop58 = next((p for p in nwell["properties"]
+                   if p["kind"] == "PROPERTY"
+                   and "LEF58_TYPE" in p["values"]), None)
+    assert prop58 is not None
+    assert "TYPE NWELL ;" in prop58["values"]
+
+    # Every VIA carries its layer-group shapes.
+    vias = [it for it in parsed["items"] if it.get("type") == "VIA"]
+    assert len(vias) >= 5
+    via0 = vias[0]
+    assert len(via0["properties"]) >= 1, f"VIA lost properties: {via0}"
+    # Each VIA property is either a layer-group dict (with `layer` /
+    # `shapes`) or a RESISTANCE dict (`type: "Resistance"`).
+    for p in via0["properties"]:
+        assert "layer" in p or p.get("type") == "Resistance"
+
+    # VIARULE GENERATE blocks carry their interleaved LAYER /
+    # ENCLOSURE / RECT / SPACING properties.
+    viarules = [it for it in parsed["items"] if it.get("type") == "VIARULE"]
+    assert len(viarules) >= 5
+    assert viarules[0].get("properties"), \
+        f"VIARULE lost properties: {viarules[0]}"
+
+    # The generated Pydantic module imports without error against the
+    # new shape (LAYER/VIA/VIARULE now have list[...] properties).
+    mod = _generate_lef_models(tmp_path)
+    assert hasattr(mod, "Library")
+    assert "properties" in mod.LayerBlock.model_fields
+    assert "properties" in mod.ViaBlock.model_fields
+    assert "properties" in mod.ViaruleBlock.model_fields
+
+
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     """Per design: rules like SITE_SIZE, SITE_CLASS, VERSION_CMD have
     no standalone class — their fields appear in the parent."""

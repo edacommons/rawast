@@ -180,30 +180,48 @@ NUMBER: choice { float, int }
 // === UNITS block ==========================================================
 //
 //   UNITS
-//     [DATABASE MICRONS dbu ;]
+//     [TIME NANOSECONDS factor ;]
 //     [CAPACITANCE PICOFARADS factor ;]
-//     [CURRENT MILLIAMPS factor ;]
 //     [RESISTANCE OHMS factor ;]
+//     [POWER MILLIWATTS factor ;]
+//     [CURRENT MILLIAMPS factor ;]
+//     [VOLTAGE VOLTS factor ;]
+//     [DATABASE MICRONS dbu ;]
+//     [FREQUENCY MEGAHERTZ factor ;]
 //   END UNITS
 //
-// Sub-commands listed in the order observed in real LEFs in the
-// corpus (hybrid_sites, yod_V2.1.0). Per LEF/DEF 5.8 spec each is
-// individually optional. Strict-order limitation will be lifted when
-// the engine grows the NSEQ primitive (M2).
+// Per LEF/DEF 5.8 spec §"Units", each sub-statement is independently
+// optional. Real files use varying orderings (Sky130 tech LEF opens
+// with TIME, not DATABASE), so we accept them in any order via the
+// permissive `repeat <UNITS_SUB>` form. Values are NUMBER (int | float).
+// Spec doesn't require any particular sub-statement, so a bare
+// `UNITS\nEND UNITS` would parse.
 
 UNITS_BLOCK: sequence dict {
   "UNITS":type="Units" newline,
-  ?<DATABASE_CMD>,
-  ?<CAPACITANCE_CMD>,
-  ?<CURRENT_CMD>,
-  ?<RESISTANCE_CMD>,
+  repeat <UNITS_SUB>,
   "END" space, "UNITS" newline
 }
 
-DATABASE_CMD:    sequence { "DATABASE" space, "MICRONS" space,     int:database_microns=@ space,    ";" newline }
-CAPACITANCE_CMD: sequence { "CAPACITANCE" space, "PICOFARADS" space, int:capacitance_pf=@ space,    ";" newline }
-CURRENT_CMD:     sequence { "CURRENT" space, "MILLIAMPS" space,    int:current_ma=@ space,          ";" newline }
-RESISTANCE_CMD:  sequence { "RESISTANCE" space, "OHMS" space,      int:resistance_ohms=@ space,     ";" newline }
+UNITS_SUB: choice {
+  <DATABASE_CMD>,
+  <CAPACITANCE_CMD>,
+  <CURRENT_CMD>,
+  <RESISTANCE_CMD>,
+  <TIME_CMD>,
+  <POWER_CMD>,
+  <VOLTAGE_CMD>,
+  <FREQUENCY_CMD>
+}
+
+DATABASE_CMD:    sequence { "DATABASE"    space, "MICRONS"     space, int:database_microns=@ space, ";" newline }
+CAPACITANCE_CMD: sequence { "CAPACITANCE" space, "PICOFARADS"  space, <NUMBER>:capacitance_pf=@  space, ";" newline }
+CURRENT_CMD:     sequence { "CURRENT"     space, "MILLIAMPS"   space, <NUMBER>:current_ma=@      space, ";" newline }
+RESISTANCE_CMD:  sequence { "RESISTANCE"  space, "OHMS"        space, <NUMBER>:resistance_ohms=@ space, ";" newline }
+TIME_CMD:        sequence { "TIME"        space, "NANOSECONDS" space, <NUMBER>:time_ns=@         space, ";" newline }
+POWER_CMD:       sequence { "POWER"       space, "MILLIWATTS"  space, <NUMBER>:power_mw=@        space, ";" newline }
+VOLTAGE_CMD:     sequence { "VOLTAGE"     space, "VOLTS"       space, <NUMBER>:voltage_v=@       space, ";" newline }
+FREQUENCY_CMD:   sequence { "FREQUENCY"   space, "MEGAHERTZ"   space, <NUMBER>:frequency_mhz=@   space, ";" newline }
 
 // === SITE block ===========================================================
 //
@@ -578,9 +596,11 @@ MACRO_OBS: sequence dict {
 LAYER_BLOCK: sequence dict {
   "LAYER":type="Layer" space,
   identifier:name=@ newline,
-  repeat <LAYER_PROPERTY>,
+  <LAYER_PROPERTIES>:properties=@,
   "END" space, identifier:end_name=@ newline
 }
+
+LAYER_PROPERTIES: sequence array { repeat <LAYER_PROPERTY> }
 
 LAYER_PROPERTY: sequence dict {
   <LAYER_KEYWORD>:kind=@ space,
@@ -692,9 +712,11 @@ VIA_BLOCK: sequence dict {
   <VIA_KW>:type=@ space,
   identifier:name=@ space,
   ?<VIA_DEFAULT_KW>,
-  repeat <VIA_PROPERTY>,
+  <VIA_PROPERTIES>:properties=@,
   "END" space, identifier:end_name=@ newline
 }
+
+VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> }
 
 // LEF keyword spec-uppercase ("VIA") but some real tools emit
 // mixed-case ("Via"). Accept both.
@@ -718,7 +740,10 @@ VIA_PROPERTY: choice {
   <VIA_LAYER_GROUP>
 }
 
-VIA_RESISTANCE: sequence { "RESISTANCE" space, <NUMBER>:resistance=@ space, ";" newline }
+VIA_RESISTANCE: sequence dict {
+  "RESISTANCE":type="Resistance" space,
+  <NUMBER>:value=@ space, ";" newline
+}
 
 // Each LAYER + shape group in a VIA: layer name followed by shapes.
 VIA_LAYER_GROUP: sequence dict {
@@ -762,9 +787,11 @@ VIARULE_BLOCK: sequence dict {
   identifier:name=@ space,
   ?<VIARULE_GENERATE_KW>,
   ?<VIA_DEFAULT_KW>,
-  repeat <VIARULE_PROPERTY>,
+  <VIARULE_PROPERTIES>:properties=@,
   "END" space, identifier:end_name=@ newline
 }
+
+VIARULE_PROPERTIES: sequence array { repeat <VIARULE_PROPERTY> }
 
 // LEF keyword spec-uppercase ("VIARULE") but some real tools emit
 // mixed-case ("ViaRULE"). Accept both.
