@@ -7,8 +7,10 @@
 //   - A rule is just a named ITEM: `identifier:=@` sets the rule name as
 //     pending in GRAMMAR's dict; <ITEM>'s value pairs with it.
 //   - Optional is an ITEM-level prefix: `?` before an item sets `optional: true`.
-//   - Bindings are an ordered array of {name, value} entries; `name: ""`
-//     (empty string) marks a var binding.
+//   - Bindings are an ordered array of {name, value} entries. A var
+//     binding has no `name` field — the loader's `extract_bindings`
+//     reads missing `name` as the empty-string sentinel and applies
+//     the rule-name var to the captured value.
 
 use: std
 
@@ -132,7 +134,9 @@ PARSE_EXPR: sequence { qualified_identifier:type=@ }
 // Surface:   expr:name=val:other=@:=@
 // Encodes:   bindings is an ordered array of {name, value} entries. The
 //            BIND_EXPR choice dispatches on first token: `=` → NAME_BIND
-//            (var binding, name="" emitted), identifier → VALUE_BIND.
+//            (var binding — emits `{var: true, value: <X>}` with no
+//            `name` field, which the loader reads as the var sentinel),
+//            identifier → VALUE_BIND.
 
 BINDINGS: sequence array { repeat+ <BINDING> }
 
