@@ -5,14 +5,20 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "rawast"
 version = "0.1.0"
-description = "Data-driven predictive PEG parser engine for structured text and binary formats; one grammar drives parse, save, and validate."
+description = "Universal bidirectional grammar-driven engine for EDA file formats — one grammar drives parse and save for GDSII, LEF, DEF, Tcl, and more."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Serge Rabyking" }]
 requires-python = ">=3.10"
+keywords = [
+    "eda", "vlsi", "chip-design",
+    "gdsii", "lef", "def", "tcl",
+    "parser", "peg", "grammar", "bidirectional",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
@@ -22,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
     "Topic :: Software Development :: Compilers",
     "Topic :: Software Development :: Libraries",
     "Topic :: Text Processing :: Markup",
@@ -29,7 +36,9 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/edacommons/rawast"
+Source   = "https://github.com/edacommons/rawast"
 Issues   = "https://github.com/edacommons/rawast/issues"
+Funding  = "https://github.com/sponsors/lanserge"
 
 [project.scripts]
 rawast = "rawast.cli:main"
