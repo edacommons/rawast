@@ -186,7 +186,7 @@ def test_user_can_construct_macro_with_pins(tmp_path):
         height=2.72,
         symmetry=["X", "Y"],
         sites=[mod.MacroSiteRef(name="core")],
-        origin=mod.MacroOrigin(x=0, y=0),
+        origin=mod.OriginCmd(x=0, y=0),
         foreigns=[mod.MacroForeign(cell="INV_X1", x=0, y=0)],
         pins=[
             mod.PinBlock(
@@ -608,18 +608,23 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert "spec_viarule_pair" in viarules
     assert viarules["spec_viarule_gen"]["is_generate"] is True
     # Each VIARULE body is a list of LAYER sections, each with its
-    # name and typed sub-clauses (enclosure / rect / spacing / etc.).
+    # name and typed sub-clauses (enclosure / rect / spacing / …).
+    # VIARULE rect/polygon sub-clauses reuse the same RECT_SHAPE /
+    # POLYGON_SHAPE rules used by PORT/OBS and VIA shapes, so they
+    # carry the `type` discriminator alongside their geometry.
     assert viarules["spec_viarule_gen"]["layers"] == [
         {"name": "li1",  "enclosure": {"overhang1": 0,    "overhang2": 0}},
         {"name": "met1", "enclosure": {"overhang1": 0.06, "overhang2": 0.03}},
-        {"name": "mcon", "rect": {"x1": -0.085, "y1": -0.085,
-                                    "x2": 0.085,  "y2": 0.085}},
+        {"name": "mcon", "rect": {"type": "Rect",
+                                   "x1": -0.085, "y1": -0.085,
+                                   "x2": 0.085,  "y2": 0.085}},
     ]
     assert viarules["spec_viarule_pair"]["layers"] == [
         {"name": "li1",  "enclosure": {"overhang1": 0,    "overhang2": 0}},
         {"name": "met1", "enclosure": {"overhang1": 0.06, "overhang2": 0.03}},
-        {"name": "mcon", "rect": {"x1": -0.085, "y1": -0.085,
-                                    "x2": 0.085,  "y2": 0.085},
+        {"name": "mcon", "rect": {"type": "Rect",
+                                   "x1": -0.085, "y1": -0.085,
+                                   "x2": 0.085,  "y2": 0.085},
          "spacing": {"x": 0.36, "y": 0.36}},
     ]
 
@@ -648,7 +653,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     macro = next(it for it in items
                  if it.get("type") == "Macro" and it.get("name") == "spec_macro")
     assert macro["class"] == ["BLOCK"]
-    assert macro["fixed_mask"] is True          # FIXEDMASK on MACRO
+    assert macro["is_fixed_mask"] is True       # FIXEDMASK on MACRO
     assert macro["eeq"] == "spec_macro_eq"       # EEQ reference
     assert macro["source"] == "USER"             # legacy SOURCE clause
     assert macro["foreigns"] == [{"cell": "spec_macro", "x": 0, "y": 0}]

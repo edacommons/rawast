@@ -17,10 +17,23 @@
 // present, must appear in this canonical order. LEF puts BUSBITCHARS
 // before DIVIDERCHAR, opposite to DEF — see def.rawast.
 //
-// PoC body coverage: UNITS block and SITE blocks. The smallest real
-// LEFs in the ChipFlow corpus (hybrid_sites.lef, 28 lines) fully
-// parse end-to-end through this grammar. LAYER, VIA, VIARULE,
-// NONDEFAULTRULE, MACRO blocks remain M2/M4 scope.
+// Body coverage: every LEF/DEF 5.8 base-spec block — UNITS (all 8
+// sub-statements), MANUFACTURINGGRID, USEMINSPACING, FIXEDMASK,
+// MAXVIASTACK, CLEARANCEMEASURE, PROPERTYDEFINITIONS, SPACING,
+// SITE, LAYER (per-TYPE typed fields plus generic property
+// fallback), VIA (geometry and VIARULE-based forms), VIARULE
+// (LAYER-pair and GENERATE forms with typed sub-clauses),
+// NONDEFAULTRULE, MACRO (full body: CLASS / FIXEDMASK / FOREIGN /
+// EEQ / ORIGIN / SOURCE / SIZE / SYMMETRY / SITE / PIN list / OBS
+// list / DENSITY / trailing PROPERTY list), PIN (every spec
+// sub-statement plus multi-ANTENNA / multi-PROPERTY list capture),
+// PORT/OBS layerGeometries (RECT/POLYGON/PATH/VIA-placement with
+// MASK and ITERATE), BEGINEXT (raw vendor body via `*`).
+//
+// Out of scope here: LEF58_* PROPERTY content — captured opaquely
+// as a string and meant to be re-parsed by a consumer-supplied
+// `lef58.rawast` sub-grammar (rawast's `subparse=` primitive
+// composes the two naturally).
 
 use: std, lefdef
 
@@ -380,10 +393,11 @@ SITE_ORIENT: choice {
 //     [DENSITY]
 //     [PROPERTY ...] ...
 //   END name
-// PROPERTY clauses appear AT THE END (after PINs and OBS). To keep
-// both pre-PIN and post-PIN PROPERTY positions accepted (real files
-// vary), the pre-PIN repeat already includes MACRO_PROPERTY_KV, and
-// a second repeat picks up trailing PROPERTY clauses.
+// PROPERTY clauses appear at the END per spec (after PINs / OBS /
+// DENSITY) and are captured as a list via `<MACRO_PROPERTIES_TRAIL>
+// :properties=@`. Pre-PIN PROPERTY positions are NOT accepted —
+// real spec-conformant files use the trailing form, and pre-PIN
+// PROPERTY isn't valid LEF.
 MACRO_BLOCK: sequence dict {
   "MACRO":type="Macro" space,
   identifier:name=@ newline,
@@ -418,7 +432,7 @@ MACRO_PROPERTY: choice {
   <MACRO_FIXEDMASK>,
   <MACRO_FOREIGN>:foreigns[]=@,
   <MACRO_EEQ>,
-  <MACRO_ORIGIN>:origin=@,
+  <ORIGIN_CMD>:origin=@,
   <MACRO_SIZE>,
   <MACRO_SYMMETRY>,
   <MACRO_SITE_REF>:sites[]=@,
@@ -434,7 +448,7 @@ MACRO_EEQ: sequence {
 // FIXEDMASK at MACRO level — distinct from library-level
 // FIXEDMASK_CMD; marks the macro as having a fixed mask shift.
 MACRO_FIXEDMASK: sequence {
-  "FIXEDMASK":fixed_mask=true space, ";" newline
+  "FIXEDMASK":is_fixed_mask=true space, ";" newline
 }
 
 // DENSITY block: LAYER name followed by one-or-more `RECT pt pt
@@ -494,10 +508,10 @@ MACRO_CLASS: sequence {
 }
 CLASS_LIST: sequence array { repeat identifier }
 
-// Dict-container so MACRO_PROPERTY can bind it as `:origin=@`,
-// landing on the parent MACRO as `origin: {x, y}` instead of
-// flat `origin_x` / `origin_y`.
-MACRO_ORIGIN: sequence dict {
+// Dict-container so callers bind it as `:origin=@`, landing on the
+// parent dict as `origin: {x, y}`. Shared between MACRO ORIGIN and
+// VIA-VIARULE-form ORIGIN — the spec body is identical.
+ORIGIN_CMD: sequence dict {
   "ORIGIN" space,
   <NUMBER>:x=@ space, <NUMBER>:y=@ space,
   ";" newline
@@ -709,13 +723,15 @@ LAYER_GROUP_MOD: choice {
   <LAYER_GROUP_EXCEPTPGNET>,
   <LAYER_GROUP_SPACING>,
   <LAYER_GROUP_DESIGNRULEWIDTH>,
-  <LAYER_GROUP_MASK>
+  <MASK_MOD>
 }
 
 LAYER_GROUP_EXCEPTPGNET:     sequence { "EXCEPTPGNET":except_pg_net=true space }
 LAYER_GROUP_SPACING:         sequence { "SPACING"         space, <NUMBER>:spacing=@           space }
 LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:design_rule_width=@ space }
-LAYER_GROUP_MASK:            sequence { "MASK"            space, int:mask_num=@               space }
+// LAYER-level MASK uses the same MASK_MOD rule as per-shape MASK
+// (both emit `mask_num` to the parent — LAYER_GROUP dict in this
+// context, shape dict in the RECT/POLYGON/PATH/VIA contexts).
 
 // Per-LAYER-group WIDTH statement — sets the default wire width for
 // subsequent shapes (separate from LAYER's MASK / SPACING modifiers).
@@ -848,7 +864,7 @@ LAYER_BLOCK: sequence dict {
 
 LAYER_BODY_ITEM: choice {
   <LAYER_TYPE_CMD>,
-  <LAYER_DIRECTION_CMD>,
+  <DIRECTION_CMD>,
   <LAYER_PITCH_CMD>:pitch=@,
   <LAYER_OFFSET_CMD>:offset=@,
   <LAYER_WIDTH_CLAUSE>,
@@ -863,7 +879,9 @@ LAYER_BODY_ITEM: choice {
 }
 
 LAYER_TYPE_CMD:                  sequence { "TYPE"                  space, identifier:layer_type=@        space, ";" newline }
-LAYER_DIRECTION_CMD:             sequence { "DIRECTION"             space, identifier:direction=@         space, ";" newline }
+// DIRECTION applies to LAYER (HORIZONTAL/VERTICAL) and to
+// VIARULE GENERATE routing-layer sections — same grammar.
+DIRECTION_CMD:                   sequence { "DIRECTION"             space, identifier:direction=@         space, ";" newline }
 LAYER_AREA_CMD:                  sequence { "AREA"                  space, <NUMBER>:area=@                space, ";" newline }
 LAYER_THICKNESS_CMD:             sequence { "THICKNESS"             space, <NUMBER>:thickness=@           space, ";" newline }
 LAYER_EDGECAPACITANCE_CMD:       sequence { "EDGECAPACITANCE"       space, <NUMBER>:edge_capacitance=@    space, ";" newline }
@@ -922,21 +940,22 @@ LAYER_PAREN_GROUP: sequence array {
   "(" space, repeat <LAYER_VALUE>, ")" space
 }
 
-// Enumeration of LAYER property keywords. Closed list so that
-// `END` (the block closer) is not mistaken for a property. New
-// LEF58_* and other vendor-specific keywords can be added as
-// needed; this is the PoC subset covering the ChipFlow open-PDK
-// corpus.
+// Enumeration of LAYER property keywords used by the generic
+// `LAYER_PROPERTY` fallback in `LAYER_BODY_ITEM`. Closed list so
+// that `END` (the block closer) doesn't get mistaken for a
+// property. New LEF58_* and vendor-specific keywords can be added
+// as needed.
+//
+// Keywords already handled by typed `LAYER_BODY_ITEM` entries
+// (TYPE / DIRECTION / WIDTH / AREA / THICKNESS / EDGECAPACITANCE /
+// MAXIMUMDENSITY / MINIMUMDENSITY / DENSITYCHECKWINDOW /
+// DENSITYCHECKSTEP / PITCH / OFFSET) are intentionally OMITTED
+// here — leaving them in would create dead alternatives the
+// typed entries always shadow first.
 LAYER_KEYWORD: choice {
-  "TYPE":@,
   "MASK":@,
-  "PITCH":@,
-  "OFFSET":@,
-  "DIRECTION":@,
-  "WIDTH":@,
   "MINWIDTH":@,
   "MAXWIDTH":@,
-  "AREA":@,
   "SPACING":@,
   "SPACINGTABLE":@,
   "MINENCLOSEDAREA":@,
@@ -944,9 +963,7 @@ LAYER_KEYWORD: choice {
   "MINCUTS":@,
   "RESISTANCE":@,
   "CAPACITANCE":@,
-  "EDGECAPACITANCE":@,
   "HEIGHT":@,
-  "THICKNESS":@,
   "ACCURRENTDENSITY":@,
   "DCCURRENTDENSITY":@,
   "CURRENTDEN":@,
@@ -965,10 +982,6 @@ LAYER_KEYWORD: choice {
   "STACK":@,
   "SLOTWIRELENGTH":@,
   "SLOTWIREWIDTH":@,
-  "MAXIMUMDENSITY":@,
-  "MINIMUMDENSITY":@,
-  "DENSITYCHECKWINDOW":@,
-  "DENSITYCHECKSTEP":@,
   "FILLACTIVESPACING":@,
   "MINIMUMCUT":@,
   "ARRAYSPACING":@,
@@ -1035,7 +1048,7 @@ VIA_VIARULE_BODY: sequence {
   <VIA_CUTSPACING>:cut_spacing=@,
   <VIA_ENCLOSURE>:enclosure=@,
   ?<VIA_ROWCOL>:rowcol=@,
-  ?<VIA_ORIGIN>:origin=@,
+  ?<ORIGIN_CMD>:origin=@,
   ?<VIA_OFFSET>:offset=@,
   ?<VIA_PATTERN_CMD>
 }
@@ -1063,9 +1076,6 @@ VIA_ENCLOSURE: sequence dict {
 }
 VIA_ROWCOL: sequence dict {
   "ROWCOL" space, int:rows=@ space, int:cols=@ space, ";" newline
-}
-VIA_ORIGIN: sequence dict {
-  "ORIGIN" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ";" newline
 }
 VIA_OFFSET: sequence dict {
   "OFFSET" space,
@@ -1112,22 +1122,13 @@ VIA_LAYER_GROUP: sequence dict {
 }
 
 VIA_SHAPES: sequence array { repeat+ <VIA_SHAPE> }
+// VIA layer-group shapes reuse the same RECT_SHAPE / POLYGON_SHAPE
+// rules used by PORT/OBS layerGeometries. The optional MASK /
+// ITERATE / STEP_PATTERN modifiers don't fire on bare VIA shapes;
+// they're just dormant in this context.
 VIA_SHAPE: choice {
-  <VIA_RECT>,
-  <VIA_POLYGON>
-}
-
-VIA_RECT: sequence dict {
-  "RECT":type="Rect" space,
-  <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
-  <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
-  ";" newline
-}
-
-VIA_POLYGON: sequence dict {
-  "POLYGON":type="Polygon" space,
-  <POLYGON_POINTS>:points=@,
-  ";" newline
+  <RECT_SHAPE>,
+  <POLYGON_SHAPE>
 }
 
 // === VIARULE block (tech LEF) ============================================
@@ -1180,26 +1181,21 @@ VIARULE_LAYER_SECTION: sequence dict {
 
 VIARULE_LAYER_SUB: choice {
   <VIARULE_ENCLOSURE_CMD>:enclosure=@,
-  <VIARULE_RECT_CMD>:rect=@,
-  <VIARULE_POLYGON_CMD>:polygon=@,
+  <RECT_SHAPE>:rect=@,
+  <POLYGON_SHAPE>:polygon=@,
   <VIARULE_SPACING_CMD>:spacing=@,
   <VIARULE_WIDTH_RANGE_CMD>:width_range=@,
-  <VIARULE_DIRECTION_CMD>,
+  <DIRECTION_CMD>,
   <VIARULE_RESISTANCE_CMD>,
   <LAYER_PROPERTY>:properties[]=@
 }
 
+// `ENCLOSURE overhang1 overhang2` per LEF/DEF 5.8 §"Via Rule Generate"
+// — the two values are spec-positional (bottom-layer overhang then
+// top-layer overhang); the engine surface stays close to the spec
+// names rather than renaming to `bot`/`top`.
 VIARULE_ENCLOSURE_CMD: sequence dict {
   "ENCLOSURE" space, <NUMBER>:overhang1=@ space, <NUMBER>:overhang2=@ space, ";" newline
-}
-
-VIARULE_RECT_CMD: sequence dict {
-  "RECT" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
-                <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ";" newline
-}
-
-VIARULE_POLYGON_CMD: sequence dict {
-  "POLYGON" space, <POLYGON_POINTS>:points=@, ";" newline
 }
 
 // SPACING in VIARULE GENERATE is `SPACING x BY y` per spec; the
@@ -1212,10 +1208,6 @@ VIARULE_SPACING_CMD: sequence dict {
 // sections (spec §"Via Rule Generate").
 VIARULE_WIDTH_RANGE_CMD: sequence dict {
   "WIDTH" space, <NUMBER>:min=@ space, <NUMBER>:max=@ space, ";" newline
-}
-
-VIARULE_DIRECTION_CMD: sequence {
-  "DIRECTION" space, identifier:direction=@ space, ";" newline
 }
 
 VIARULE_RESISTANCE_CMD: sequence {
