@@ -388,11 +388,18 @@ MACRO_BLOCK: sequence dict {
   identifier:name=@ newline,
   repeat <MACRO_PROPERTY>,
   <MACRO_PINS>:pins=@,
-  ?<MACRO_OBS>:obs=@,
+  <MACRO_OBSES>:obses=@,
   ?<MACRO_DENSITY>:density=@,
   <MACRO_PROPERTIES_TRAIL>:properties=@,
   "END" space, identifier:end_name=@ newline
 }
+
+// LEF/DEF 5.8 §"Macro" allows zero-or-more OBS sections per MACRO.
+// Earlier `?<MACRO_OBS>:obs=@` only captured one. Real PDKs do
+// emit multi-OBS in fill cells and IO pads where different metal
+// layers carry different obstruction shapes that the designer
+// wants kept structurally separate.
+MACRO_OBSES: sequence array { repeat <MACRO_OBS> }
 
 // Trailing `PROPERTY name value ;` clauses per LEF/DEF 5.8 §"Macro"
 // — captured as a list under `properties` (the unbound `repeat`
@@ -752,6 +759,15 @@ POLYGON_SHAPE: sequence dict {
   ?<STEP_PATTERN>:step_pattern=@,
   ";" newline
 }
+// POLYGON_POINTS' `repeat <NUMBER>` is greedy with no delimiter,
+// so for the spec's `POLYGON [MASK n] ITERATE … x1 y1 … xn yn
+// numX numY xStep yStep ;` form, the trailing four step-pattern
+// numbers get swept into `points` and `step_pattern` ends up
+// absent. Same limitation on PATH ITERATE. `is_iterate=true` is
+// still set so consumers know to split the last four numbers
+// themselves. VIA placement ITERATE is unaffected because the
+// `viaName` identifier between coords and step pattern acts as
+// the delimiter the grammar can lock onto.
 POLYGON_POINTS: sequence array { repeat <NUMBER> }
 
 // PATH — segmented line with point list per LEF/DEF 5.8 §"Path".

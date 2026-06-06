@@ -266,16 +266,16 @@ def test_user_can_construct_macro_with_obs(tmp_path):
         width=1.84,
         height=2.72,
         pins=[],
-        obs=mod.MacroObs(layer_groups=[mod.LayerGroup(
+        obses=[mod.MacroObs(layer_groups=[mod.LayerGroup(
             layer="met1",
             shapes=[mod.RectShape(x1=0.0, y1=0.0, x2=1.84, y2=0.05)],
-        )]),
+        )])],
         **{"class": ["CORE"]},
     )
     dumped = macro.model_dump(exclude_none=True, by_alias=True)
-    assert dumped["obs"]["type"] == "Obs"
-    assert dumped["obs"]["layer_groups"][0]["layer"] == "met1"
-    assert dumped["obs"]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
+    assert dumped["obses"][0]["type"] == "Obs"
+    assert dumped["obses"][0]["layer_groups"][0]["layer"] == "met1"
+    assert dumped["obses"][0]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
 
 
 def test_sky130_techlef_parses_losslessly(tmp_path):
@@ -383,9 +383,11 @@ def test_sky130_sram_macro_parses_losslessly(tmp_path):
     layer_groups = vccd1["ports"][0]["layer_groups"]
     assert len(layer_groups) >= 4
 
-    # OBS section captured (the regression target — `?<MACRO_OBS>:obs=@`).
-    assert macro["obs"]["type"] == "Obs"
-    obs_groups = macro["obs"]["layer_groups"]
+    # OBS sections captured (now `<MACRO_OBSES>:obses=@` list).
+    assert len(macro["obses"]) == 1
+    first_obs = macro["obses"][0]
+    assert first_obs["type"] == "Obs"
+    obs_groups = first_obs["layer_groups"]
     assert len(obs_groups) >= 4  # met1 + met2 + met3 + met4
     total_shapes = sum(len(g["shapes"]) for g in obs_groups)
     assert total_shapes >= 100, f"OBS lost shapes: only {total_shapes}"
@@ -436,9 +438,10 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
         {"kind": "PartialMetalSideArea", "value": 111.168},
     ]
 
-    # OBS section survives.
-    assert macro["obs"]["type"] == "Obs"
-    assert macro["obs"]["layer_groups"]
+    # OBS section survives (now a list of OBS sections).
+    assert len(macro["obses"]) == 1
+    assert macro["obses"][0]["type"] == "Obs"
+    assert macro["obses"][0]["layer_groups"]
 
     # Generated Pydantic validates the whole file under extra="forbid".
     mod = _generate_lef_models(tmp_path)
@@ -642,8 +645,14 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert met1_group["layer_default_width"] == 0.12
 
     shapes = met1_group["shapes"]
-    assert [s["type"] for s in shapes] == ["Rect", "Rect", "Polygon",
-                                            "Path", "ViaPlacement"]
+    # Shape list: Rect(MASK), Rect(ITERATE), Polygon, Polygon(MASK),
+    # Polygon(ITERATE), Path, Path(MASK), Path(ITERATE),
+    # ViaPlacement, ViaPlacement(MASK+ITERATE).
+    assert [s["type"] for s in shapes] == [
+        "Rect", "Rect", "Polygon", "Polygon", "Polygon",
+        "Path", "Path", "Path",
+        "ViaPlacement", "ViaPlacement",
+    ]
     # RECT with MASK
     assert shapes[0]["mask_num"] == 1
     # RECT with ITERATE + stepPattern captured as nested dict
@@ -652,12 +661,36 @@ def test_lef_spec_coverage_phase1(tmp_path):
                                           "step_x": 0.5, "step_y": 0.5}
     # POLYGON point list
     assert shapes[2]["points"] == [5, 0, 6, 0, 6, 1, 5.5, 1.2, 5, 1]
+    # Polygon with MASK modifier
+    assert shapes[3]["mask_num"] == 2
+    # Polygon with ITERATE — step pattern numbers fold into `points`
+    # (no delimiter token, documented grammar limitation).
+    assert shapes[4]["is_iterate"] is True
     # PATH point list
-    assert shapes[3]["points"] == [7, 0, 7, 1, 8, 1, 8, 0]
-    # VIA placement: x, y, via_name
-    assert shapes[4]["x"] == 9
-    assert shapes[4]["y"] == 0
-    assert shapes[4]["via_name"] == "spec_via_geom"
+    assert shapes[5]["points"] == [7, 0, 7, 1, 8, 1, 8, 0]
+    # Path with MASK
+    assert shapes[6]["mask_num"] == 1
+    # Path with ITERATE — same limitation as POLYGON ITERATE.
+    assert shapes[7]["is_iterate"] is True
+    # VIA placement — first form (no MASK / no ITERATE)
+    assert shapes[8]["x"] == 9
+    assert shapes[8]["y"] == 0
+    assert shapes[8]["via_name"] == "spec_via_geom"
+    # VIA placement with MASK + ITERATE — step pattern separated
+    # cleanly thanks to the `via_name` identifier delimiter.
+    assert shapes[9]["mask_num"] == 1
+    assert shapes[9]["is_iterate"] is True
+    assert shapes[9]["step_pattern"] == {"step_num_x": 2, "step_num_y": 1,
+                                         "step_x": 0.5, "step_y": 0.5}
+
+    # Top-level SPACING block — SAMENET inter-layer rules, second
+    # with the STACK qualifier.
+    spacing = next(it for it in items if it.get("type") == "Spacing")
+    assert spacing["items"] == [
+        {"layer1": "met1", "layer2": "met2", "min_spacing": 0.14},
+        {"layer1": "met2", "layer2": "met3", "min_spacing": 0.14,
+         "is_stack": True},
+    ]
 
     # Phase 7: MAXVIASTACK and BEGINEXT.
     mvs = next(it for it in items if it.get("type") == "MaxViaStack")
@@ -671,8 +704,9 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert "vendor_directive option_a = 42 ;" in ext["body"]
     assert "another_vendor_thing" in ext["body"]
 
-    # OBS captured.
-    assert macro["obs"]["type"] == "Obs"
+    # OBS captured (single OBS, now as the only entry of the obses list).
+    assert len(macro["obses"]) == 1
+    assert macro["obses"][0]["type"] == "Obs"
 
     # Trailing PROPERTY clauses captured as a list.
     assert macro["properties"] == [

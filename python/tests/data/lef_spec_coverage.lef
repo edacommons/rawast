@@ -61,6 +61,12 @@ USEMINSPACING PIN OFF ;
 FIXEDMASK ;
 MAXVIASTACK 4 RANGE met1 met5 ;
 
+# Top-level SPACING block — SAMENET inter-layer spacing rules.
+SPACING
+  SAMENET met1 met2 0.14 ;
+  SAMENET met2 met3 0.14 STACK ;
+END SPACING
+
 PROPERTYDEFINITIONS
   LAYER          prop_layer_i  INTEGER ;
   LAYER          prop_layer_r  REAL ;
@@ -225,8 +231,13 @@ MACRO spec_macro
         RECT MASK 1 2 0 3 1 ;
         RECT ITERATE 0 0 1 1 2 3 0.5 0.5 ;
         POLYGON 5 0 6 0 6 1 5.5 1.2 5 1 ;
+        POLYGON MASK 2 12 0 13 0 13 1 12.5 1.2 12 1 ;
+        POLYGON ITERATE 14 0 15 0 15 1 14.5 1.2 14 1 2 1 0.5 0.5 ;
         PATH 7 0 7 1 8 1 8 0 ;
+        PATH MASK 1 16 0 16 1 17 1 17 0 ;
+        PATH ITERATE 18 0 18 1 19 1 19 0 2 1 0.5 0.5 ;
         VIA 9 0 spec_via_geom ;
+        VIA MASK 1 ITERATE 20 0 spec_via_geom 2 1 0.5 0.5 ;
       LAYER met2 ;
         RECT 10 0 11 1 ;
     END
