@@ -829,15 +829,71 @@ MACRO_OBS: sequence dict {
 // embedded clauses are captured but their internal grammar isn't
 // re-parsed; full LEF58 support is M4 work).
 
+// Per-TYPE structured properties — the ~10 most common LAYER
+// keywords across real PDKs (Sky130, NanGate, IHP130) are
+// extracted as typed fields catcher-flattened onto the LAYER dict;
+// everything else (RESISTANCE / CAPACITANCE qualifiers,
+// ANTENNA*RATIO, SPACINGTABLE, MINSTEP, PWL variants, LEF58_*
+// PROPERTY, …) falls into the generic `properties: list[{kind,
+// values}]` pass-through. Downstream Pydantic consumers can read
+// `layer.width` / `layer.pitch.x` / `layer.direction` etc.
+// directly without walking a flat property list.
 LAYER_BLOCK: sequence dict {
   "LAYER":type="Layer" space,
   identifier:name=@ newline,
-  <LAYER_PROPERTIES>:properties=@,
+  repeat <LAYER_BODY_ITEM>,
   "END" space, identifier:end_name=@ newline
 }
 
-LAYER_PROPERTIES: sequence array { repeat <LAYER_PROPERTY> }
+LAYER_BODY_ITEM: choice {
+  <LAYER_TYPE_CMD>,
+  <LAYER_DIRECTION_CMD>,
+  <LAYER_PITCH_CMD>:pitch=@,
+  <LAYER_OFFSET_CMD>:offset=@,
+  <LAYER_WIDTH_CLAUSE>,
+  <LAYER_AREA_CMD>,
+  <LAYER_THICKNESS_CMD>,
+  <LAYER_EDGECAPACITANCE_CMD>,
+  <LAYER_MAXIMUMDENSITY_CMD>,
+  <LAYER_MINIMUMDENSITY_CMD>,
+  <LAYER_DENSITYCHECKWINDOW_CMD>:density_check_window=@,
+  <LAYER_DENSITYCHECKSTEP_CMD>,
+  <LAYER_PROPERTY>:properties[]=@
+}
 
+LAYER_TYPE_CMD:                  sequence { "TYPE"                  space, identifier:layer_type=@        space, ";" newline }
+LAYER_DIRECTION_CMD:             sequence { "DIRECTION"             space, identifier:direction=@         space, ";" newline }
+LAYER_AREA_CMD:                  sequence { "AREA"                  space, <NUMBER>:area=@                space, ";" newline }
+LAYER_THICKNESS_CMD:             sequence { "THICKNESS"             space, <NUMBER>:thickness=@           space, ";" newline }
+LAYER_EDGECAPACITANCE_CMD:       sequence { "EDGECAPACITANCE"       space, <NUMBER>:edge_capacitance=@    space, ";" newline }
+LAYER_MAXIMUMDENSITY_CMD:        sequence { "MAXIMUMDENSITY"        space, <NUMBER>:maximum_density=@     space, ";" newline }
+LAYER_MINIMUMDENSITY_CMD:        sequence { "MINIMUMDENSITY"        space, <NUMBER>:minimum_density=@     space, ";" newline }
+LAYER_DENSITYCHECKSTEP_CMD:      sequence { "DENSITYCHECKSTEP"      space, <NUMBER>:density_check_step=@  space, ";" newline }
+
+// PITCH and OFFSET have either 1 or 2 numbers per spec. Bound as
+// nested dicts so the parsed shape reads `pitch: {x, y?}` /
+// `offset: {x, y?}` instead of `pitch_x` / `pitch_y` flat.
+LAYER_PITCH_CMD: sequence dict {
+  "PITCH" space, <NUMBER>:x=@ space, ?<NUMBER>:y=@ space, ";" newline
+}
+LAYER_OFFSET_CMD: sequence dict {
+  "OFFSET" space, <NUMBER>:x=@ space, ?<NUMBER>:y=@ space, ";" newline
+}
+
+// DENSITYCHECKWINDOW has two numbers — nested for consistency.
+LAYER_DENSITYCHECKWINDOW_CMD: sequence dict {
+  "DENSITYCHECKWINDOW" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ";" newline
+}
+
+// WIDTH inside LAYER_BLOCK is a single-number sub-clause (not the
+// same as the per-PORT WIDTH statement bound to `default_width`).
+// Distinct name to avoid the LAYER-WIDTH / LAYER_GROUP-WIDTH overlap.
+LAYER_WIDTH_CLAUSE: sequence { "WIDTH" space, <NUMBER>:width=@ space, ";" newline }
+
+// Everything else — SPACING / SPACINGTABLE / RESISTANCE w/qualifier /
+// CAPACITANCE w/qualifier / ANTENNA* / PROPERTY (LEF58_*) / etc. —
+// falls into the generic property list. `properties[]=@` appends one
+// per match, so multiples round-trip losslessly.
 LAYER_PROPERTY: sequence dict {
   <LAYER_KEYWORD>:kind=@ space,
   <LAYER_VALUES>:values=@,

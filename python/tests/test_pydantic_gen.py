@@ -298,17 +298,27 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     assert units["time_ns"] == 1
     assert units["database_microns"] == 1000
 
-    # Every LAYER must carry its `properties` (the regression case).
+    # Every LAYER carries its TYPE-discriminated typed fields plus a
+    # generic `properties` list for less-common keywords.
     layers = [it for it in parsed["items"] if it.get("type") == "Layer"]
     assert len(layers) >= 10  # nwell, pwell, li1, mcon, met1, …
     li1 = next(la for la in layers if la["name"] == "li1")
-    assert len(li1["properties"]) >= 10, \
-        f"li1 lost LAYER properties: {li1}"
+    assert li1["layer_type"] == "ROUTING"
+    assert li1["direction"] == "VERTICAL"
+    assert li1["pitch"] == {"x": 0.46, "y": 0.34}
+    assert li1["offset"] == {"x": 0.23, "y": 0.17}
+    assert li1["width"] == 0.17
+    assert li1["area"] == 0.0561
+    assert li1["thickness"] == 0.1
+    # Less-common clauses (SPACINGTABLE / RESISTANCE w/qualifier /
+    # CAPACITANCE w/qualifier / ANTENNA*) still come through the
+    # generic `properties` pass-through.
     kinds = {p["kind"] for p in li1["properties"]}
-    assert {"TYPE", "DIRECTION", "PITCH", "WIDTH"} <= kinds
+    assert {"SPACING", "RESISTANCE", "CAPACITANCE", "ANTENNAMODEL"} <= kinds
 
     # LEF58_TYPE PROPERTY captured (opaque inner string is fine).
     nwell = next(la for la in layers if la["name"] == "nwell")
+    assert nwell["layer_type"] == "MASTERSLICE"
     prop58 = next((p for p in nwell["properties"]
                    if p["kind"] == "PROPERTY"
                    and "LEF58_TYPE" in p["values"]), None)
@@ -516,28 +526,50 @@ def test_lef_spec_coverage_phase1(tmp_path):
         {"site": "sub_b", "orient": "FlipNorth"},
     ]
 
-    # Phase 2: LAYER blocks of every TYPE.
+    # Phase 2: LAYER blocks of every TYPE — `layer_type` is the
+    # spec discriminator; common keywords are typed fields; the
+    # less-common ones (RESISTANCE w/qual, CAPACITANCE w/qual,
+    # ANTENNA*, SPACING, ENCLOSURE, PROPERTY) come through a
+    # generic `properties: list[{kind, values}]` pass-through.
     layers = {it["name"]: it for it in items if it.get("type") == "Layer"}
     assert set(layers) == {"spec_routing", "spec_cut", "spec_masterslice",
                            "spec_overlap", "spec_implant"}
 
-    # Each LAYER's `properties` list carries (kind, values) pairs.
-    def layer_kinds(layer_name):
-        return [p["kind"] for p in layers[layer_name]["properties"]]
-
-    routing_kinds = layer_kinds("spec_routing")
-    for kw in ("TYPE", "DIRECTION", "PITCH", "OFFSET", "WIDTH", "AREA",
-               "THICKNESS", "RESISTANCE", "CAPACITANCE", "EDGECAPACITANCE",
-               "ANTENNAAREARATIO", "ANTENNADIFFAREARATIO",
-               "ANTENNACUMAREARATIO", "ANTENNAMODEL", "SPACING", "PROPERTY"):
+    assert layers["spec_routing"]["layer_type"] == "ROUTING"
+    assert layers["spec_routing"]["direction"] == "HORIZONTAL"
+    assert layers["spec_routing"]["pitch"] == {"x": 0.2, "y": 0.2}
+    assert layers["spec_routing"]["offset"] == {"x": 0.1, "y": 0.1}
+    assert layers["spec_routing"]["width"] == 0.1
+    assert layers["spec_routing"]["area"] == 0.05
+    assert layers["spec_routing"]["thickness"] == 0.1
+    assert layers["spec_routing"]["edge_capacitance"] == 4.07e-05
+    routing_props = layers["spec_routing"]["properties"]
+    routing_kinds = [p["kind"] for p in routing_props]
+    # Less-common spec_routing keywords fall through to `properties`.
+    for kw in ("RESISTANCE", "CAPACITANCE", "ANTENNAAREARATIO",
+               "ANTENNADIFFAREARATIO", "ANTENNACUMAREARATIO",
+               "ANTENNAMODEL", "SPACING", "PROPERTY"):
         assert kw in routing_kinds, f"spec_routing missing {kw}"
 
-    assert layer_kinds("spec_cut") == ["TYPE", "SPACING", "WIDTH", "ENCLOSURE",
-                                       "ANTENNAAREARATIO", "ANTENNAMODEL",
-                                       "PROPERTY"]
-    assert layer_kinds("spec_masterslice") == ["TYPE", "PROPERTY"]
-    assert layer_kinds("spec_overlap") == ["TYPE"]
-    assert layer_kinds("spec_implant") == ["TYPE", "WIDTH", "SPACING"]
+    assert layers["spec_cut"]["layer_type"] == "CUT"
+    assert layers["spec_cut"]["width"] == 0.17
+    cut_kinds = [p["kind"] for p in layers["spec_cut"]["properties"]]
+    assert cut_kinds == ["SPACING", "ENCLOSURE", "ANTENNAAREARATIO",
+                          "ANTENNAMODEL", "PROPERTY"]
+
+    assert layers["spec_masterslice"]["layer_type"] == "MASTERSLICE"
+    assert [p["kind"] for p in layers["spec_masterslice"]["properties"]] \
+        == ["PROPERTY"]
+
+    assert layers["spec_overlap"]["layer_type"] == "OVERLAP"
+    # No LAYER_PROPERTY matches → `properties` key absent
+    # (engine list-append creates the list lazily; see ANTENNA case).
+    assert "properties" not in layers["spec_overlap"]
+
+    assert layers["spec_implant"]["layer_type"] == "IMPLANT"
+    assert layers["spec_implant"]["width"] == 0.18
+    assert [p["kind"] for p in layers["spec_implant"]["properties"]] \
+        == ["SPACING"]
 
     # LEF58_TYPE PROPERTY captures the embedded LEF58 string as opaque.
     routing_prop = next(p for p in layers["spec_routing"]["properties"]
