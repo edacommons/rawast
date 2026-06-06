@@ -53,7 +53,24 @@ struct QueueEntry {
 struct DictScope {
     const DictValue* dict;
     std::set<std::string> consumed;
+    // Per-field iteration cursor for list-append (`:name[]=@`) bindings.
+    // Each pull from a `name[]`-suffixed pending advances the cursor;
+    // the field is marked `consumed` only when the cursor reaches the
+    // list's end.
+    std::map<std::string, std::size_t> list_progress;
 };
+
+// Strip a trailing `[]` from a binding name. Returns the bare name
+// and sets `was_list` if the suffix was present.
+inline std::string strip_list_suffix(const std::string& name, bool& was_list) {
+    if (name.size() >= 2
+        && name.compare(name.size() - 2, 2, "[]") == 0) {
+        was_list = true;
+        return name.substr(0, name.size() - 2);
+    }
+    was_list = false;
+    return name;
+}
 
 class SaveState {
 public:
@@ -64,7 +81,7 @@ public:
     QueueEntry next_q() { return std::move(queue_[q_idx_++]); }
 
     // --- dict scope ---
-    void push_dict(const DictValue& d) { dict_stack_.push_back({&d, {}}); }
+    void push_dict(const DictValue& d) { dict_stack_.push_back({&d, {}, {}}); }
     void pop_dict() { dict_stack_.pop_back(); }
     DictScope* top_dict() {
         return dict_stack_.empty() ? nullptr : &dict_stack_.back();
@@ -112,10 +129,36 @@ public:
     tl::expected<QueueEntry, SaveError> pull_value(bool is_optional) {
         if (have_pending_ && !dict_stack_.empty()) {
             auto& scope = dict_stack_.back();
-            const std::string name = pending_;
+            bool was_list = false;
+            const std::string name = strip_list_suffix(pending_, was_list);
             clear_pending();
             auto it = scope.dict->data().find(name);
             if (it != scope.dict->data().end()) {
+                // List-append (`name[]`) form: return the next
+                // element of dict[name] as an array, advance the
+                // per-field cursor, mark consumed when exhausted.
+                if (was_list) {
+                    auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
+                    if (!arr) {
+                        return tl::unexpected(SaveError{
+                            "list-append binding (`" + name + "[]`) "
+                            "expected ArrayValue but field is "
+                            "non-array"});
+                    }
+                    std::size_t idx = scope.list_progress[name];
+                    if (idx >= arr->data().size()) {
+                        if (is_optional) {
+                            return QueueEntry{nullptr, false, name};
+                        }
+                        return tl::unexpected(SaveError{
+                            "list-append exhausted for '" + name + "'"});
+                    }
+                    scope.list_progress[name] = idx + 1;
+                    if (idx + 1 >= arr->data().size()) {
+                        scope.consumed.insert(name);
+                    }
+                    return QueueEntry{arr->data()[idx], false, name};
+                }
                 scope.consumed.insert(name);
                 return QueueEntry{it->second, false, name};
             }
@@ -445,42 +488,34 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         // to handle an IntValue.
         if (p == "string") return vt == ValueType::String;
         if (p == "identifier") {
-            // The dispatch check has to cover two parser groups that
-            // both register `identifier`: `std.identifier` (strict
+            // The dispatch check covers two parser groups that both
+            // register `identifier`: `std.identifier` (strict
             // `[A-Za-z_][A-Za-z0-9_]*`) and `lefdef.identifier`
-            // (permissive — accepts dots, digits at start, brackets,
-            // slashes, hyphens; the LEF/DEF spec for things like
-            // `5.8`, `0`, `M1[7:0]`, `inst/pin`, `Via1Array-0`).
-            // Decide by looking up which parser the bare name resolves
-            // to in this grammar: if it's lefdef's, accept any
-            // StringValue (the parser can re-tokenize it). Otherwise
-            // fall back to the strict `[A-Za-z_][A-Za-z0-9_]*` check
-            // so Choice dispatch can still steer dotted names to a
-            // `qualified_identifier` alt in gdsii / rawast contexts.
+            // (permissive — accepts dots, digits, brackets, slashes,
+            // hyphens; the LEF/DEF spec for things like `5.8`, `0`,
+            // `M1[7:0]`, `inst/pin`, `Via1Array-0`).
+            //
+            // Probe the registered parser with the *actual* value:
+            // identifier dispatches iff the parser would consume the
+            // entire string on re-parse. That guarantees round-trip
+            // (the unparsed text re-parses back as an identifier) and
+            // correctly rejects strings with spaces, semicolons, or
+            // quotes the identifier parser can't handle.
             if (vt != ValueType::String) return false;
-            if (Parser* pp = g.parser(p)) {
-                if (pp->name() == "identifier") {
-                    // The Parser base class's name() is the registered
-                    // local_name. For lefdef this is also `identifier`
-                    // — same as std. Distinguish by type-id: if it's
-                    // not the std variant, treat as permissive. The
-                    // std `identifier` parser is only registered when
-                    // `use: std` activates without `use: lefdef` after
-                    // it. In any LEF/DEF grammar, `use: lefdef` runs
-                    // later and shadows the bare alias to the
-                    // permissive parser. Detect that by string check
-                    // against a sample dotted name: if `pp` accepts a
-                    // dotted-name re-parse, it's the permissive one.
-                    static const std::string sample = "0.1";
-                    std::istringstream is{sample};
-                    StreamReader sr{is};
-                    auto r = pp->parse(sr);
-                    if (r) return true;   // permissive parser
-                }
-            }
             const auto& s =
                 std::static_pointer_cast<StringValue>(peek_value)->data();
             if (s.empty()) return false;
+            if (Parser* pp = g.parser(p)) {
+                std::istringstream is{s};
+                StreamReader sr{is};
+                auto r = pp->parse(sr);
+                if (r && sr.peek() == std::nullopt) {
+                    return true;
+                }
+                return false;
+            }
+            // No parser registered (shouldn't happen): fall back to
+            // the strict shape check.
             auto is_lead = [](char c) {
                 return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
             };
@@ -575,14 +610,28 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
 
                 // Real consumer.
                 if (have_sim_pending) {
-                    auto it = scope->dict->data().find(sim_pending);
+                    bool is_list = false;
+                    std::string field = strip_list_suffix(sim_pending, is_list);
+                    auto it = scope->dict->data().find(field);
                     if (it == scope->dict->data().end()) return false;
-                    // NSEQ semantics: reject alts whose required field
-                    // has already been consumed by a sibling iteration.
-                    // Lets `repeat <choice>` iterate dict fields one at
-                    // a time without picking the same alt twice.
-                    if (scope->consumed.count(sim_pending)) return false;
-                    if (!can_consume_peek(g, c, it->second, sim_pending, s))
+                    if (scope->consumed.count(field)) return false;
+                    // For list-append `[]` bindings, peek at the
+                    // currently-pending list element (the one a
+                    // matching dispatch would pull next) instead of
+                    // the whole array. Lets `repeat <Choice>` over a
+                    // `:name[]=@` alternative know it can still
+                    // dispatch one more element.
+                    ValuePtr peek = it->second;
+                    if (is_list) {
+                        auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
+                        if (!arr || arr->data().empty()) return false;
+                        auto pit = scope->list_progress.find(field);
+                        std::size_t idx = pit == scope->list_progress.end()
+                                            ? 0 : pit->second;
+                        if (idx >= arr->data().size()) return false;
+                        peek = arr->data()[idx];
+                    }
+                    if (!can_consume_peek(g, c, peek, field, s))
                         return false;
                     have_sim_pending = false;
                     walked_consumer = true;
@@ -919,7 +968,24 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             if (!scope) return false;
             for (const auto& [k, v] : scope->dict->data()) {
                 if (scope->consumed.count(k)) continue;
-                if (can_consume_peek(g, item_id, v, k, s)) return true;
+                // For list-typed fields whose target binding is a
+                // list-append (`:k[]=@`) alternative, peek the next
+                // unconsumed element so the inner Choice's
+                // dispatch sees one entry at a time instead of the
+                // whole array. Falls back to the raw value for
+                // scalar fields.
+                ValuePtr peek = v;
+                if (auto arr = std::dynamic_pointer_cast<ArrayValue>(v)) {
+                    auto pit = scope->list_progress.find(k);
+                    std::size_t idx = pit == scope->list_progress.end()
+                                        ? 0 : pit->second;
+                    if (idx < arr->data().size()) {
+                        peek = arr->data()[idx];
+                    } else {
+                        continue;  // array exhausted
+                    }
+                }
+                if (can_consume_peek(g, item_id, peek, k, s)) return true;
             }
             return false;
         };
@@ -935,19 +1001,38 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             // inner item failed to advance anything (queue, pending,
             // or dict-scope consumed).
             auto pre_snap = s.snapshot();
+            // Track both `consumed` set growth AND list_progress
+            // cursor advancement — a list-append `:k[]=@` binding
+            // doesn't mark its field as fully consumed until the
+            // last element is pulled, so we'd otherwise mis-detect
+            // mid-list iterations as no-progress.
             const std::size_t pre_consumed =
                 s.top_dict() ? s.top_dict()->consumed.size() : 0;
+            std::size_t pre_list_total = 0;
+            if (const DictScope* sc = s.top_dict()) {
+                for (const auto& [_, idx] : sc->list_progress) {
+                    pre_list_total += idx;
+                }
+            }
             auto r = do_consume(g, out, item_id, s, depth, pretty);
             if (!r) return r;
             auto post_snap = s.snapshot();
             const std::size_t post_consumed =
                 s.top_dict() ? s.top_dict()->consumed.size() : 0;
+            std::size_t post_list_total = 0;
+            if (const DictScope* sc = s.top_dict()) {
+                for (const auto& [_, idx] : sc->list_progress) {
+                    post_list_total += idx;
+                }
+            }
             const bool queue_advanced = post_snap.q_idx != pre_snap.q_idx
                                          || post_snap.queue_size != pre_snap.queue_size;
             const bool pending_changed = post_snap.have_pending != pre_snap.have_pending
                                           || post_snap.pending != pre_snap.pending;
             const bool consumed_grew = post_consumed > pre_consumed;
-            if (!queue_advanced && !pending_changed && !consumed_grew) {
+            const bool list_advanced = post_list_total > pre_list_total;
+            if (!queue_advanced && !pending_changed && !consumed_grew
+                && !list_advanced) {
                 break;
             }
             first = false;

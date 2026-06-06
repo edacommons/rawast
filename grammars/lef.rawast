@@ -942,11 +942,18 @@ LAYER_PROPERTY: sequence dict {
 // CPERSQDIST), a quoted string (PROPERTY values), or a
 // parenthesized list of values (PWL piecewise-linear functions,
 // nested coordinate groups). Repeats until `;`.
-LAYER_VALUES: sequence array { repeat <LAYER_VALUE> }
+LAYER_VALUES: sequence array { repeat <LAYER_VALUE> space }
+// On parse, the predictive PEG tries each alt in order; `string`
+// after `identifier` is safe because the parsers reject each other's
+// input shapes (identifier stops at `"`, string requires `"` start).
+// On save, identifier-before-string makes the canonical emit prefer
+// the unquoted form (`RPERSQ`) when the value would re-parse as an
+// identifier, falling back to `string` for values that contain
+// spaces / semicolons / quotes the identifier parser can't handle.
 LAYER_VALUE: choice {
   <NUMBER>,
-  string,
   identifier,
+  string,
   <LAYER_PAREN_GROUP>
 }
 
