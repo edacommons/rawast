@@ -33,6 +33,7 @@ NodeId Grammar::allocate_(NodeKind kind) {
 NodeId Grammar::new_choice()   { return allocate_(NodeKind::Choice); }
 NodeId Grammar::new_sequence() { return allocate_(NodeKind::Sequence); }
 NodeId Grammar::new_repeat()   { return allocate_(NodeKind::Repeat); }
+NodeId Grammar::new_raw()      { return allocate_(NodeKind::Raw); }
 
 NodeId Grammar::new_ref(std::string name) {
     NodeId id = allocate_(NodeKind::Ref);
@@ -386,6 +387,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             case NodeKind::Parse:    kind = "parse"; break;
             case NodeKind::Ref:      kind = "ref"; break;
             case NodeKind::Value:    kind = "value"; break;
+            case NodeKind::Raw:      kind = "raw"; break;
         }
         return std::string{kind} + "#" + std::to_string(id.value());
     };
@@ -527,9 +529,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             case NodeKind::Repeat:
             case NodeKind::Key:
             case NodeKind::Parse:
-                // Key and Parse iterate their (typically Value-kind)
-                // children after the terminal succeeds; same iteration
-                // model as Sequence.
+            case NodeKind::Raw:
+                // Key, Parse, and Raw iterate their (typically Value-
+                // kind) children after the terminal succeeds; same
+                // iteration model as Sequence.
                 more = top.step_next();
                 break;
             default:
@@ -648,6 +651,66 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         trim_ignore_stack();
         Frame& top = stack.back();
         switch (top.kind()) {
+
+        case NodeKind::Raw: {
+            // Raw consume: bypass the ignore-set (embedded whitespace
+            // and newlines are part of the captured payload), then
+            // peek-and-skip until the stop literal matches at the
+            // cursor. The literal is NOT consumed — it's left for the
+            // next sibling (a Key node) to match in its own iteration.
+            const Node& n = nodes_[top.node_id().value()];
+            auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+            assert(sv);
+            const std::string& stop = sv->data();
+            if (trace_enabled) trace("  raw until \"" + stop + "\"");
+            sr.mark();
+            const Position start = sr.position();
+            std::string captured;
+            bool found = false;
+            while (true) {
+                auto c = sr.peek();
+                if (!c) break;
+                if (*c == stop[0]) {
+                    sr.mark();
+                    std::string lookahead;
+                    for (std::size_t i = 0; i < stop.size(); ++i) {
+                        auto k = sr.get();
+                        if (!k) break;
+                        lookahead.push_back(*k);
+                    }
+                    sr.reject();
+                    if (lookahead == stop) { found = true; break; }
+                }
+                captured.push_back(*c);
+                sr.get();
+            }
+            if (!found) {
+                sr.reject();
+                handle_failure(ParseError{
+                    start, "raw consume: stop literal '"
+                            + stop + "' not found before EOF"});
+                break;
+            }
+            sr.accept();
+            ValuePtr produced = pool.intern(make_string(std::move(captured)));
+            top.add_value(produced, top.is_name());
+            if (top.has_current()) {
+                push_with_optional_mark(top.current_child());
+            } else {
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                popped.finish(pool);
+                fire_callbacks_for_frame(popped);
+                if (stack.empty()) {
+                    result_value = popped.result();
+                    parse_finished = true;
+                    break;
+                }
+                popped.pass_values_to(stack.back());
+                advance_after_child();
+            }
+            break;
+        }
 
         case NodeKind::Key: {
             run_ignore(sr, current_ignore());

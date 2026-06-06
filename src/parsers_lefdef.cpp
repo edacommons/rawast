@@ -91,57 +91,12 @@ ParseResult LefdefLineCommentParser::parse(StreamReader& sr) {
     return null_value();
 }
 
-// --- LefdefUntilEndextParser --------------------------------------------
-
-LefdefUntilEndextParser::LefdefUntilEndextParser() : Parser("until_endext") {}
-
-ParseResult LefdefUntilEndextParser::parse(StreamReader& sr) {
-    sr.mark();
-    const Position start = sr.position();
-    static constexpr const char* kTerminator = "ENDEXT";
-    static constexpr std::size_t kTermLen = 6;
-
-    std::string content;
-    while (true) {
-        auto c = sr.peek();
-        if (!c) {
-            sr.reject();
-            return tl::unexpected(ParseError{
-                start, "unterminated BEGINEXT block (expected 'ENDEXT')"});
-        }
-        // At every 'E', look ahead to see if we're at "ENDEXT".
-        // If so, leave it for the surrounding grammar to consume as a
-        // structural keyword and return the captured prefix.
-        if (*c == 'E') {
-            sr.mark();
-            std::string lookahead;
-            for (std::size_t i = 0; i < kTermLen; ++i) {
-                auto k = sr.get();
-                if (!k) break;
-                lookahead.push_back(*k);
-            }
-            sr.reject();   // always rewind the lookahead
-            if (lookahead == kTerminator) {
-                sr.accept();
-                return make_string(std::move(content));
-            }
-        }
-        // Consume the current byte and continue scanning.
-        content.push_back(*c);
-        sr.get();
-    }
-}
-
-SaveResult LefdefUntilEndextParser::unparse(const Value& value) const {
-    auto sv = dynamic_cast<const StringValue*>(&value);
-    if (!sv) {
-        return tl::unexpected(SaveError{
-            "LefdefUntilEndextParser::unparse expects StringValue"});
-    }
-    return sv->data();
-}
-
 // --- Group registration -------------------------------------------------
+//
+// The previous `until_endext` raw-text terminal parser was retired
+// when the engine grew the `*` grammar-level primitive (commit
+// after 2048494). Grammars that need "consume raw bytes until X"
+// behaviour now write `*:body=@, "X" newline` in the body itself.
 
 ParserGroup make_lefdef_group() {
     ParserGroup g;
@@ -152,9 +107,6 @@ ParserGroup make_lefdef_group() {
         }},
         ParserSpec{"line_comment", []() {
             return std::make_unique<LefdefLineCommentParser>();
-        }},
-        ParserSpec{"until_endext", []() {
-            return std::make_unique<LefdefUntilEndextParser>();
         }},
     };
     return g;

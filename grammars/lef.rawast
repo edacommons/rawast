@@ -93,14 +93,15 @@ MAXVIASTACK_RANGE: sequence {
 }
 
 // BEGINEXT "extName" ... ENDEXT — vendor-extension wrapper. Inner
-// content is captured opaquely (as a raw string) via the
-// `lefdef.until_endext` terminal parser, so the block round-trips
-// even when the inner content is in a vendor-specific language
-// the grammar doesn't model.
+// content captured opaquely via the `*` raw-consume primitive
+// (docs/rawast-format.md §4.5a); the literal `ENDEXT` keyword that
+// follows is what tells the engine where to stop scanning. Round-
+// trips byte-for-byte even when the inner content is in a vendor-
+// specific language the grammar doesn't model.
 BEGINEXT_BLOCK: sequence dict {
   "BEGINEXT":type="BeginExt" space,
   string:name=@ newline,
-  lefdef.until_endext:body=@,
+  *:body=@,
   "ENDEXT" newline
 }
 

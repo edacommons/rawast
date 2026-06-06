@@ -36,6 +36,12 @@ public:
     NodeId new_choice();
     NodeId new_sequence();
     NodeId new_repeat();
+    // Raw-consume node: scans bytes until its stop literal matches at
+    // cursor. The stop literal is the immediate next sibling under a
+    // Sequence parent (required to be a Key node with a string Value);
+    // the loader resolves it after grammar-load completes and stashes
+    // the literal on `value`.
+    NodeId new_raw();
     NodeId new_ref(std::string name);
     NodeId new_key(std::string token);
     NodeId new_parse(std::string parser_name);

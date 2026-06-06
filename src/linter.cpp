@@ -108,6 +108,16 @@ FirstSet first_of(const Grammar& g, NodeId id, std::set<std::size_t>& visited) {
         // resolve_ref above should have unwrapped these; we shouldn't
         // get here, but be defensive.
         break;
+    case NodeKind::Raw: {
+        // Raw consumes any leading byte that isn't the stop literal,
+        // so its first-set is "every byte except stop[0]". For LL(1)-
+        // style ambiguity detection it's effectively a wildcard; mark
+        // a synthetic catch-all token. Not nullable: Raw always
+        // consumes at least zero bytes followed by a fail/EOF check
+        // — treat as non-nullable for ambiguity purposes.
+        result.tokens.insert("R:*");
+        break;
+    }
     }
 
     if (n.is_optional) result.nullable = true;
@@ -154,6 +164,53 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
                 "unreachable. Either set `backtrack: true` on the Choice or "
                 "restructure the grammar so the alternatives have distinct "
                 "initial terminals.";
+            issues.push_back(std::move(issue));
+        }
+    }
+
+    // Raw-consume sanity: every `*` node must sit inside a Sequence
+    // and have a Key-with-literal as its immediate-next sibling.
+    // The loader enforces the same rule and would have rejected the
+    // grammar already by the time we get here — but the lint pass
+    // surfaces the issue with a friendlier message during
+    // `rawast lint <grammar>` instead of waiting for a load failure.
+    for (std::size_t i = 0; i < g.node_count(); ++i) {
+        NodeId parent_id{i};
+        const Node& parent = g.node(parent_id);
+        if (parent.kind != NodeKind::Sequence) continue;
+        const auto& kids = parent.children;
+        for (std::size_t k = 0; k < kids.size(); ++k) {
+            NodeId child_id = g.resolve_ref(kids[k]);
+            const Node& child = g.node(child_id);
+            if (child.kind != NodeKind::Raw) continue;
+            bool ok = false;
+            std::string reason;
+            if (k + 1 >= kids.size()) {
+                reason = "nothing follows";
+            } else {
+                NodeId next_id = g.resolve_ref(kids[k + 1]);
+                const Node& next = g.node(next_id);
+                if (next.kind != NodeKind::Key) {
+                    reason = "next sibling is not a literal key";
+                } else {
+                    auto sv = std::dynamic_pointer_cast<StringValue>(next.value);
+                    if (!sv || sv->data().empty()) {
+                        reason = "next-sibling key has no literal";
+                    } else {
+                        ok = true;
+                    }
+                }
+            }
+            if (ok) continue;
+            LintIssue issue;
+            issue.choice_node = child_id;
+            issue.token       = "*";
+            issue.description =
+                "Raw consume (`*`) needs a literal-key sibling "
+                "immediately after it in the same Sequence — that "
+                "literal tells the engine where to stop scanning. "
+                "Here: " + reason + ". Add a `\"...\"` key after the "
+                "`*` (e.g. `*:body=@, \"END\" newline`).";
             issues.push_back(std::move(issue));
         }
     }

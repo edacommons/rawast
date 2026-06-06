@@ -11,7 +11,7 @@
 
 namespace rawast {
 
-// Seven kinds of grammar node. See §2.2 of the proposal for semantics.
+// Eight kinds of grammar node. See §2.2 of the proposal for semantics.
 enum class NodeKind {
     Ref,       // Named reference to another node.
     Value,     // Constant value emission.
@@ -20,6 +20,13 @@ enum class NodeKind {
     Choice,    // Ordered alternation; first matching alternative wins.
     Sequence,  // Concatenation of children.
     Repeat,    // Zero-or-more iteration of a child, optional separator.
+    Raw,       // `*` in a sequence body: consume raw bytes until the next
+               // sequence sibling (which must be a Key literal) matches at
+               // the cursor. The literal itself is left unconsumed for the
+               // sibling to match. The captured prefix is emitted as a
+               // StringValue; ignore-set skipping is bypassed so embedded
+               // whitespace and newlines round-trip verbatim. The stop
+               // literal is stashed on `value` (StringValue) at load time.
 };
 
 // What kind of container the surrounding level materialises at end-of-frame.

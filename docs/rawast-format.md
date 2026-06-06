@@ -501,6 +501,61 @@ The same primitive is what enables multi-OBS per MACRO, multi-
 PROPERTY-per-PIN, multi-FOREIGN-per-MACRO, and any other
 spec-allowed multi-instance pattern in `lef.rawast` / `def.rawast`.
 
+### 4.5a-1 Raw consume — `*`
+
+Inside a `sequence` body, the bare `*` token consumes raw input
+bytes from the current cursor until the **next sibling literal**
+matches at the cursor — without consuming it. The captured prefix
+is emitted as a StringValue; the next sibling (which must be a
+literal `"…"` key) is then matched normally in its own iteration.
+
+```
+BEGINEXT_BLOCK: sequence dict {
+  "BEGINEXT":type="BeginExt" space,
+  string:name=@ newline,
+  *:body=@,             // captures every byte up to (but not including) "ENDEXT"
+  "ENDEXT" newline
+}
+```
+
+For the input
+
+```
+BEGINEXT "spec_vendor"
+  vendor_directive option_a = 42 ;
+  another_thing "string" ;
+ENDEXT
+```
+
+the parsed dict has `body` set to the literal text between the
+`BEGINEXT` opener and the `ENDEXT` closer, embedded whitespace and
+newlines included.
+
+**Constraints.** `*` is only meaningful inside a `sequence` body and
+**must be followed by a Key literal** in that same sequence — the
+literal tells the engine where to stop scanning. The loader rejects
+the grammar at load time if either condition is violated; the
+linter flags the same issue with a friendlier message during
+`rawast lint <grammar>`. Common error messages:
+
+- *"raw consume (`*`) must be followed by a literal key in the same
+  sequence; nothing follows here"* — `*` was the last item in the
+  sequence with no sibling after it.
+- *"raw consume (`*`) must be followed by a literal key in the same
+  sequence; next sibling is not a Key node"* — the item after `*`
+  is a reference, a parser, another `*`, etc. — anything that isn't
+  a `"…"` literal.
+
+**Ignore-set bypass.** `*` does **not** run the surrounding rule's
+ignore list before scanning. Whitespace, newlines, and `#` line
+comments that would normally be skipped are part of the captured
+payload. This is what makes the round-trip byte-exact: whatever was
+between the two literals comes back out unchanged on save.
+
+**Save side.** The save direction pulls the StringValue bound to
+the `*` and writes it verbatim; the following Key emits its
+literal. No special bookkeeping — the round-trip is mechanical.
+
 ### 4.5b Pretty-print attributes — postfix flags on items
 
 Each item in an `items` list may carry **zero or more pretty-print

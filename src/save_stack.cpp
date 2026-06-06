@@ -535,6 +535,12 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         // Used as a child during walks, not as a dispatch root.
         return true;
 
+    case NodeKind::Raw:
+        // Raw at the top of an alt — consumes whatever StringValue is
+        // queued. Always dispatchable when there's a value.
+        return peek_value != nullptr
+            && peek_value->type() == ValueType::String;
+
     case NodeKind::Ref:
         return can_consume_peek(g, g.resolve_ref(node_id), peek_value, peek_key, s);
     }
@@ -653,6 +659,24 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         auto u = p->unparse(*v);
         if (!u) return tl::unexpected(u.error());
         out << *u;
+        return {};
+    }
+
+    case NodeKind::Raw: {
+        // Raw consume's save side is symmetric to its parse side: the
+        // captured string is pulled from the dict scope and written
+        // verbatim. No parser dispatch, no terminator emission — the
+        // following Key sibling is responsible for writing its literal.
+        const bool is_optional = n.is_optional;
+        auto r = s.pull_value(is_optional);
+        if (!r) return tl::unexpected(r.error());
+        ValuePtr v = r->value ? r->value : null_value();
+        auto sv = std::dynamic_pointer_cast<StringValue>(v);
+        if (!sv) {
+            return tl::unexpected(SaveError{
+                "Raw save expects a StringValue payload"});
+        }
+        out << sv->data();
         return {};
     }
 

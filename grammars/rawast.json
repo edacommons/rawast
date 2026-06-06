@@ -175,6 +175,9 @@
         "type": "REPEAT_EXPR"
       },
       {
+        "type": "RAW_EXPR"
+      },
+      {
         "type": "KEY_EXPR"
       },
       {
@@ -182,6 +185,18 @@
       },
       {
         "type": "PARSE_EXPR"
+      }
+    ]
+  },
+  "RAW_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "key",
+        "key": "*",
+        "bindings": [
+          {"name": "type", "value": "raw"}
+        ]
       }
     ]
   },

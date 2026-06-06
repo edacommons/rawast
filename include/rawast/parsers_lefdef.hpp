@@ -35,19 +35,10 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
-// LEF/DEF `BEGINEXT ... ENDEXT` body parser. Consumes the raw text
-// between the BEGINEXT opener (already matched by the surrounding
-// grammar) and the next `ENDEXT` keyword (NOT consumed — the grammar
-// matches it as a structural keyword after this parser returns).
-// Returns the captured content as a StringValue, including embedded
-// whitespace and newlines. Used by lef.rawast's BEGINEXT_BLOCK rule
-// to round-trip vendor extension blocks losslessly.
-class LefdefUntilEndextParser final : public Parser {
-public:
-    LefdefUntilEndextParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
-};
+// Retired: `LefdefUntilEndextParser`. The "consume raw bytes until
+// a specific keyword" pattern is now a grammar-level primitive (`*`
+// followed by a Key literal); see docs/rawast-format.md §4.5a and
+// the BEGINEXT_BLOCK rule in lef.rawast.
 
 // Register the "lefdef" parser group in the global registry. Grammars
 // declare `use: lefdef` to pull in identifier + line_comment.

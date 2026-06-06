@@ -84,10 +84,16 @@ EXPR: choice {
   <SEQUENCE_EXPR>,
   <CHOICE_EXPR>,
   <REPEAT_EXPR>,
+  <RAW_EXPR>,
   <KEY_EXPR>,
   <REF>,
   <PARSE_EXPR>
 }
+
+// `*` in a sequence body — consume raw bytes until the next sibling
+// (which must be a Key literal) matches at the cursor. See §4.5a of
+// docs/rawast-format.md.
+RAW_EXPR: sequence { "*":type="raw" }
 
 REF: sequence {"<", identifier:type=@, ">" }
 

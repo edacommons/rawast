@@ -704,6 +704,15 @@ populate(Grammar& g, NodeId target, const Value& body) {
         return {};
     }
 
+    if (type == "raw") {
+        // `*` in a sequence body. The stop literal is the immediate
+        // next sibling in the surrounding Sequence; it's resolved by
+        // a post-load pass (see resolve_raw_stops) once all siblings
+        // have been built. Leave `n.value` empty here.
+        n.kind = NodeKind::Raw;
+        return {};
+    }
+
     if (type == "key") {
         n.kind = NodeKind::Key;
         auto key_r = dict_string(*dv, "key");
@@ -885,6 +894,41 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
     // registered.
     auto sub_r = g.resolve_subparse_refs();
     if (!sub_r) return tl::unexpected(sub_r.error());
+
+    // Resolve stop literals for every `Raw` node by walking every
+    // Sequence's children and copying the next sibling's Key literal
+    // onto the Raw node's `value`. Errors out if the next sibling
+    // isn't a Key (or doesn't exist) — the engine has no way to know
+    // when to stop scanning otherwise.
+    for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
+        NodeId nid{idx};
+        Node& parent = g.node(nid);
+        if (parent.kind != NodeKind::Sequence) continue;
+        const auto& kids = parent.children;
+        for (std::size_t k = 0; k < kids.size(); ++k) {
+            Node& child = g.node(g.resolve_ref(kids[k]));
+            if (child.kind != NodeKind::Raw) continue;
+            if (k + 1 >= kids.size()) {
+                return tl::unexpected(
+                    "raw consume (`*`) must be followed by a literal "
+                    "key in the same sequence; nothing follows here");
+            }
+            const Node& next = g.node(g.resolve_ref(kids[k + 1]));
+            if (next.kind != NodeKind::Key) {
+                return tl::unexpected(
+                    "raw consume (`*`) must be followed by a literal "
+                    "key in the same sequence; next sibling is not a "
+                    "Key node");
+            }
+            auto stop_sv = std::dynamic_pointer_cast<StringValue>(next.value);
+            if (!stop_sv || stop_sv->data().empty()) {
+                return tl::unexpected(
+                    "raw consume (`*`) next-sibling Key has no literal "
+                    "or empty literal");
+            }
+            child.value = stop_sv;
+        }
+    }
 
     return {};
 }

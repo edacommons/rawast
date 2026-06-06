@@ -77,8 +77,13 @@ are documented in `docs/` and in the prototype's history.
   from a `.rawast`-described grammar). Recent additions: list-
   append binding (`:name[]=@`) so a single grammar can capture
   multi-instance clauses losslessly without giving up the catcher
-  convenience for single-instance ones (see `docs/rawast-format.md
-  §4.5a`).
+  convenience for single-instance ones (`docs/rawast-format.md
+  §4.5a`); the `*` raw-consume primitive (`*:body=@, "STOP"
+  newline`) which scans bytes until a literal sibling matches,
+  bypassing the ignore-set so vendor-extension bodies and other
+  opaque content round-trip byte-for-byte (§4.5a-1). The
+  loader and `rawast lint` both reject a `*` that isn't followed
+  by a literal key in the same sequence.
 - **Pydantic v2 model generator** — `rawast pydantic <grammar>`
   emits a ready-to-import Python module whose classes mirror the
   grammar's parse/save dict shape exactly. Round-trip contract:
@@ -287,7 +292,7 @@ Shipped groups:
 |---|---|
 | `std` | `int`, `uint`, `float`, `identifier`, `qualified_identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
 | `gdsii` | All 47 GDSII record-type parsers (`header`, `bgnlib`, …, `endmasks`) — bare or `gdsii.header` form |
-| `lefdef` | LEF/DEF-specific `identifier` (hyphens, slashes accepted), `line_comment` (`#`-to-EOL), and `until_endext` (raw text consumed up to the next `ENDEXT` keyword — captures the inner body of a LEF `BEGINEXT … ENDEXT` vendor-extension block opaquely) |
+| `lefdef` | LEF/DEF-specific `identifier` (hyphens, slashes accepted) and `line_comment` (`#`-to-EOL). Note: the LEF `BEGINEXT … ENDEXT` vendor-extension body is captured via the grammar-level `*` primitive (see `docs/rawast-format.md §4.5a-1`), not a custom terminal parser. |
 | `tcl` | Tcl terminals modelled on Dodekalogue rules — `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `until_paren`, `escape`, `literal_run` |
 
 Shipped grammars:
