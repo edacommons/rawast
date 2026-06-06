@@ -256,6 +256,48 @@ NB_MODULE(_native, m) {
             },
             "Lint the grammar; returns a list of issue description strings.")
 
+        // --- Profiling -----------------------------------------------
+        .def("profile_enable",
+            [](const rawast::Grammar& g, bool yes) {
+                g.profile_enable(yes);
+            },
+            nb::arg("yes") = true,
+            "Toggle parse-time profiling. When on, each subsequent "
+            "parse_file/parse_string/parse_bytes call records per-rule "
+            "entry/fail/time counters; read them back via "
+            "last_profile_report(). Sticky until explicitly disabled.")
+
+        .def("profile_enabled",
+            [](const rawast::Grammar& g) { return g.profile_enabled(); },
+            "Returns True if profiling is on.")
+
+        .def("last_profile_report",
+            [](const rawast::Grammar& g) -> nb::object {
+                const auto& r = g.last_profile_report();
+                nb::list entries;
+                for (const auto& e : r.entries) {
+                    nb::dict d;
+                    d["node_id"]      = e.node_id.value();
+                    d["rule_name"]    = e.rule_name;
+                    d["entry_count"]  = e.entry_count;
+                    d["fail_count"]   = e.fail_count;
+                    d["total_ns"]     = e.total_ns;
+                    d["max_depth"]    = e.max_depth;
+                    entries.append(d);
+                }
+                nb::dict report;
+                report["entries"]      = entries;
+                report["total_ns"]     = r.total_ns;
+                report["total_frames"] = r.total_frames;
+                report["max_depth"]    = r.max_depth;
+                return report;
+            },
+            "Return the profile report from the most recent parse call. "
+            "Shape: {entries: [{node_id, rule_name, entry_count, fail_count, "
+            "total_ns, max_depth}, …], total_ns, total_frames, max_depth}. "
+            "`entries` is unsorted; sort by total_ns or entry_count to get "
+            "the top hotspots.")
+
         .def_static("from_dict",
             [](nb::handle d) {
                 using namespace rawast;

@@ -7,6 +7,7 @@
 #include "frame.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <map>
@@ -362,6 +363,65 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // instrumentation site. See docs/debugging.md.
     const bool trace_enabled = std::getenv("RAWAST_TRACE") != nullptr;
 
+    // Profiling mode: enabled via Grammar::profile_enable(). When on,
+    // the loop tracks per-Node entry counts, fail counts, wall-clock
+    // time spent on the parse stack, and max depth. Results land on
+    // `last_profile_report_` at the end of the call; the public API
+    // exposes them via Grammar::last_profile_report(). Off by
+    // default — one bool check at each instrumentation site.
+    const bool profile_enabled = profile_enabled_;
+    std::vector<ProfileEntry>                        profile_per_node;
+    std::vector<std::chrono::steady_clock::time_point> profile_frame_starts;
+    std::vector<NodeId>                               profile_frame_ids;
+    std::uint64_t                                     profile_total_frames = 0;
+    std::uint64_t                                     profile_max_depth    = 0;
+    const auto                                        profile_start_clock =
+        std::chrono::steady_clock::now();
+    if (profile_enabled) {
+        profile_per_node.assign(nodes_.size(), ProfileEntry{});
+        for (std::size_t i = 0; i < nodes_.size(); ++i) {
+            profile_per_node[i].node_id = NodeId{i};
+        }
+    }
+
+    // Sync the profile state against the live stack. Called at the
+    // top of every loop iteration: detects push events (stack grew
+    // since last sync — record start time, bump entry_count, update
+    // max_depth) and pop events (stack shrunk — accumulate elapsed
+    // wall-clock time for each popped frame back into its NodeId's
+    // entry). Idempotent if the stack hasn't changed.
+    auto profile_sync = [&]() {
+        if (!profile_enabled) return;
+        while (profile_frame_starts.size() < stack.size()) {
+            std::size_t idx = profile_frame_starts.size();
+            profile_frame_starts.push_back(std::chrono::steady_clock::now());
+            NodeId nid = stack[idx].node_id();
+            profile_frame_ids.push_back(nid);
+            ++profile_total_frames;
+            std::size_t v = nid.value();
+            if (v < profile_per_node.size()) {
+                ++profile_per_node[v].entry_count;
+                if (stack.size() > profile_per_node[v].max_depth) {
+                    profile_per_node[v].max_depth = stack.size();
+                }
+            }
+        }
+        if (stack.size() > profile_max_depth) profile_max_depth = stack.size();
+        while (profile_frame_starts.size() > stack.size()) {
+            auto end = std::chrono::steady_clock::now();
+            auto elapsed_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    end - profile_frame_starts.back()).count();
+            NodeId nid = profile_frame_ids.back();
+            std::size_t v = nid.value();
+            if (v < profile_per_node.size()) {
+                profile_per_node[v].total_ns += elapsed_ns;
+            }
+            profile_frame_starts.pop_back();
+            profile_frame_ids.pop_back();
+        }
+    };
+
     // Reverse map NodeId → rule name, built once at parse start when
     // tracing is enabled. Used by node_label() to produce
     // human-readable trace messages. Empty when tracing is off (no
@@ -576,6 +636,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
         note_progress(max_progress, err);
         while (!stack.empty()) {
+            if (profile_enabled) {
+                std::size_t v = stack.back().node_id().value();
+                if (v < profile_per_node.size()) {
+                    ++profile_per_node[v].fail_count;
+                }
+            }
             Frame popped = std::move(stack.back());
             stack.pop_back();
             if (trace_enabled) {
@@ -644,11 +710,14 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     };
 
     push_with_optional_mark(start);
+    profile_sync();
 
     while (!stack.empty() && !parse_finished) {
         // Pop any rule-local ignore scopes whose owning frame has been
         // popped since the previous iteration.
         trim_ignore_stack();
+        profile_sync();   // catch push/pop events from the previous iteration
+        if (stack.empty() || parse_finished) break;
         Frame& top = stack.back();
         switch (top.kind()) {
 
@@ -905,6 +974,31 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             assert(false && "unreachable: Ref at top of parse stack");
             handle_failure(ParseError{sr.position(), "internal: unexpected node kind"});
             break;
+        }
+    }
+
+    // Drain any remaining frames in the profile counters (e.g. the
+    // start frame's elapsed time gets added on the final iteration),
+    // then build the public report.
+    profile_sync();
+    if (profile_enabled) {
+        last_profile_report_ = {};
+        last_profile_report_.total_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - profile_start_clock).count();
+        last_profile_report_.total_frames = profile_total_frames;
+        last_profile_report_.max_depth    = profile_max_depth;
+        for (std::size_t i = 0; i < profile_per_node.size(); ++i) {
+            if (profile_per_node[i].entry_count == 0) continue;
+            // Look up the rule name (if this NodeId is a named rule's
+            // body). Anonymous (inline) nodes keep an empty rule_name.
+            for (const auto& [name, rid] : named_rules_) {
+                if (rid.value() == i) {
+                    profile_per_node[i].rule_name = name;
+                    break;
+                }
+            }
+            last_profile_report_.entries.push_back(std::move(profile_per_node[i]));
         }
     }
 

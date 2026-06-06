@@ -48,6 +48,7 @@ add_library(rawast STATIC
     src/save_stack.cpp
     src/loader.cpp
     src/linter.cpp
+    src/profile.cpp
     src/parsers_gdsii.cpp
     src/parsers_lefdef.cpp
     src/parsers_tcl.cpp

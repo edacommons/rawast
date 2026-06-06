@@ -3,6 +3,7 @@
 #include <rawast/node.hpp>
 #include <rawast/parser.hpp>
 #include <rawast/pool.hpp>
+#include <rawast/profile.hpp>
 #include <rawast/stream.hpp>
 #include <rawast/value.hpp>
 
@@ -231,6 +232,24 @@ public:
     tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value,
                                        bool pretty = true) const;
 
+    // --- Profiling -----------------------------------------------------
+    //
+    // When enabled, `parse_from` collects per-node entry / failure /
+    // wall-clock-time counters and stashes them on the Grammar. Read
+    // back via `last_profile_report()`. Zero overhead when disabled
+    // — one bool check per Frame push/pop. The MVP doesn't profile
+    // the save direction; add that hook when the parse-side numbers
+    // point at a specific area worth chasing.
+    //
+    // Enable/disable is a runtime flag (no recompile needed); the
+    // flag is sticky until cleared. The CLI exposes this via
+    // `rawast parse --profile [--profile-top=N|all]`.
+    void profile_enable(bool yes = true) const noexcept { profile_enabled_ = yes; }
+    bool profile_enabled() const noexcept { return profile_enabled_; }
+    const ProfileReport& last_profile_report() const noexcept {
+        return last_profile_report_;
+    }
+
 private:
     std::vector<Node> nodes_;
     std::map<std::string, NodeId> named_rules_;
@@ -262,6 +281,12 @@ private:
     // Indent step for save-direction pretty-print (default two spaces).
     std::string indent_step_ = "  ";
     NodeId top_;
+
+    // Profiling — mutable so `parse_from(...) const` can write the
+    // report back to the Grammar. profile_enabled_ is the runtime
+    // toggle (see profile_enable()).
+    mutable bool          profile_enabled_ = false;
+    mutable ProfileReport last_profile_report_;
 
     NodeId allocate_(NodeKind kind);
 };

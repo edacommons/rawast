@@ -15,11 +15,70 @@ from . import Grammar, __version__
 
 def cmd_parse(args: argparse.Namespace) -> int:
     g = Grammar.load(args.grammar)
+    profile_top = getattr(args, "profile_top", None)
+    profile_on = getattr(args, "profile", False) or profile_top is not None
+    if profile_on:
+        g.profile_enable(True)
     ast = g.parse_file(args.input)
+    if profile_on:
+        # Emit the AST silently when profiling — the report goes to
+        # stderr below, the AST still goes to stdout so pipelines
+        # like `rawast parse --profile g f > ast.json` still work.
+        pass
     indent = 2 if args.pretty else None
     json.dump(ast, sys.stdout, indent=indent, ensure_ascii=False)
     sys.stdout.write("\n")
+    if profile_on:
+        _print_profile_report(g.last_profile_report(), profile_top)
     return 0
+
+
+def _print_profile_report(report, top_arg) -> None:
+    """Pretty-print a profile report to stderr.
+
+    `top_arg` is the value of `--profile-top`: None (default top-20),
+    the string "all" (every rule), or a positive integer N (top-N).
+    """
+    n = 20
+    if isinstance(top_arg, str):
+        if top_arg == "all":
+            n = 0  # 0 means "no truncation"
+        else:
+            try:
+                n = max(1, int(top_arg))
+            except ValueError:
+                n = 20
+    entries = sorted(report["entries"],
+                     key=lambda e: e["total_ns"], reverse=True)
+    if n > 0:
+        entries = entries[:n]
+    # Filter to entries that have a rule name (anonymous inline nodes
+    # are usually noise — when you need them, --profile-top=all also
+    # disables the name filter).
+    show_anonymous = (n == 0)
+    if not show_anonymous:
+        entries = [e for e in entries if e["rule_name"]]
+
+    total_ns = report["total_ns"] or 1   # avoid div-by-zero
+    print("", file=sys.stderr)
+    print(f"profile: {report['total_ns'] / 1e6:.2f}ms total, "
+          f"{report['total_frames']} frames, max depth {report['max_depth']}",
+          file=sys.stderr)
+    header = f"  {'rule':<35} {'calls':>9} {'fails':>9} {'ns':>14} {'pct':>5} {'depth':>6}"
+    print(header, file=sys.stderr)
+    print("  " + "-" * (len(header) - 2), file=sys.stderr)
+    for e in entries:
+        name = e["rule_name"] or f"<inline#{e['node_id']}>"
+        if len(name) > 35:
+            name = name[:32] + "..."
+        pct = 100.0 * e["total_ns"] / total_ns
+        print(f"  {name:<35} "
+              f"{e['entry_count']:>9} "
+              f"{e['fail_count']:>9} "
+              f"{e['total_ns']:>14} "
+              f"{pct:>4.1f}% "
+              f"{e['max_depth']:>6}",
+              file=sys.stderr)
 
 
 def cmd_save(args: argparse.Namespace) -> int:
@@ -95,6 +154,14 @@ def main(argv: list[str] | None = None) -> int:
     p_parse.add_argument("input", help="Input file to parse")
     p_parse.add_argument("--pretty", action="store_true",
                          help="Pretty-print the JSON output (indent 2)")
+    p_parse.add_argument("--profile", action="store_true",
+                         help="Print a per-rule profile (entry count, fail "
+                              "count, total time, %% of parse, max depth) "
+                              "to stderr after the AST. Default top 20.")
+    p_parse.add_argument("--profile-top", metavar="N",
+                         help="Like --profile but print top-N rules instead "
+                              "of the default 20. Pass `all` to print every "
+                              "rule including anonymous (inline) nodes.")
     p_parse.set_defaults(func=cmd_parse)
 
     p_save = sub.add_parser("save", help="Save a JSON-described value as the grammar's format")
