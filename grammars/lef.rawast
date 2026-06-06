@@ -117,7 +117,12 @@ MAXVIASTACK_RANGE: sequence {
 // specific language the grammar doesn't model.
 BEGINEXT_BLOCK: sequence dict {
   "BEGINEXT":type="BeginExt" space,
-  string:name=@ newline,
+  string:name=@,
+  // The body's first byte is the newline after the name (since `*`
+  // bypasses the ignore-set and starts at whatever raw cursor
+  // position it inherits). No `newline` attr on the name above —
+  // otherwise save would emit a doubled `\n` that re-parse would
+  // capture as a leading newline in the body, breaking round-trip.
   *:body=@,
   "ENDEXT" newline
 }
@@ -803,7 +808,7 @@ POLYGON_SHAPE: sequence dict {
 // themselves. VIA placement ITERATE is unaffected because the
 // `viaName` identifier between coords and step pattern acts as
 // the delimiter the grammar can lock onto.
-POLYGON_POINTS: sequence array { repeat <NUMBER> }
+POLYGON_POINTS: sequence array { repeat <NUMBER> space }
 
 // PATH — segmented line with point list per LEF/DEF 5.8 §"Path".
 //
@@ -822,7 +827,7 @@ PATH_SHAPE: sequence dict {
   ?<STEP_PATTERN>:step_pattern=@,
   ";" newline
 }
-PATH_POINTS: sequence array { repeat+ <NUMBER> }
+PATH_POINTS: sequence array { repeat+ <NUMBER> space }
 
 // VIA placement inside a port / obs layer group: `VIA [MASK n] pt
 // viaName ;` per LEF/DEF 5.8. Distinct from VIA_BLOCK definitions

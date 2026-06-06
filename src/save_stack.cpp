@@ -582,6 +582,11 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 auto it = scope->dict->data().find(name_sv->data());
                 if (it == scope->dict->data().end()) return false;
                 if (!values_equal_v2(it->second, cv.get())) return false;
+                // Reject if the field is already consumed (used by
+                // a `repeat <Choice>` over a catcher body so that
+                // `:is_fixed_mask=true`-style discriminators don't
+                // re-fire every iteration).
+                if (scope->consumed.count(name_sv->data())) return false;
                 found_disc = true;
             }
             if (found_disc) return true;
@@ -613,8 +618,25 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                     bool is_list = false;
                     std::string field = strip_list_suffix(sim_pending, is_list);
                     auto it = scope->dict->data().find(field);
-                    if (it == scope->dict->data().end()) return false;
-                    if (scope->consumed.count(field)) return false;
+                    const bool consumer_optional =
+                        node_is_optional_chain(g, c);
+                    if (it == scope->dict->data().end()) {
+                        // Optional consumer + absent field: skip
+                        // the marker (the optional clause opts
+                        // out), don't reject the whole alt.
+                        if (consumer_optional) {
+                            have_sim_pending = false;
+                            continue;
+                        }
+                        return false;
+                    }
+                    if (scope->consumed.count(field)) {
+                        if (consumer_optional) {
+                            have_sim_pending = false;
+                            continue;
+                        }
+                        return false;
+                    }
                     // For list-append `[]` bindings, peek at the
                     // currently-pending list element (the one a
                     // matching dispatch would pull next) instead of
@@ -631,8 +653,13 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                         if (idx >= arr->data().size()) return false;
                         peek = arr->data()[idx];
                     }
-                    if (!can_consume_peek(g, c, peek, field, s))
+                    if (!can_consume_peek(g, c, peek, field, s)) {
+                        if (consumer_optional) {
+                            have_sim_pending = false;
+                            continue;
+                        }
                         return false;
+                    }
                     have_sim_pending = false;
                     walked_consumer = true;
                 }
@@ -752,7 +779,12 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         } else {
             // Constant — closes a (Value-name, Value-const) discriminator
             // pair. Look up dict[pending] in the current scope:
-            //   * matches const  → pair satisfied, clear pending.
+            //   * matches const  → pair satisfied, clear pending AND
+            //     mark the field as consumed in the dict scope. The
+            //     consumed mark is what lets a `repeat <Choice>` over
+            //     a catcher body (e.g. `repeat <MACRO_PROPERTY>`) tell
+            //     "FIXEDMASK has already emitted" from "FIXEDMASK is
+            //     still to come" on the next iteration.
             //   * mismatch       → leave pending; a following optional
             //     block is expected to emit the override (ITEM's
             //     `type=bare` default + BIND_TAIL_OPT override pattern).
@@ -762,6 +794,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 const auto& d = s.top_dict()->dict->data();
                 auto it = d.find(s.pending_name());
                 if (it != d.end() && values_equal_v2(it->second, n.value.get())) {
+                    s.top_dict()->consumed.insert(s.pending_name());
                     s.clear_pending();
                 }
             }

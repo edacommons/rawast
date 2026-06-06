@@ -795,6 +795,40 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert model is not None
 
 
+def test_lef_spec_coverage_save_round_trip(tmp_path):
+    """End-to-end save round-trip on the synthetic full-spec LEF.
+
+    parse → save → reparse → assert the second parse equals the
+    first. Covers every grammar primitive exercised by the fixture
+    in a single sweep: `:name[]=@` list-append on LAYER properties
+    / MACRO foreigns / MACRO sites / PIN antennas / PIN properties /
+    MACRO OBS list, per-TYPE LAYER typed fields, both VIA forms
+    (geometry + VIARULE-based with nested cut_size/layers/…), both
+    VIARULE forms with LAYER sections, MACRO body sub-clauses in
+    arbitrary order, DENSITY blocks with the DensityRect
+    discriminator, BEGINEXT body via the `*` raw-consume
+    primitive, PIN body sub-statements (DIRECTION / USE / SHAPE /
+    NETEXPR / SUPPLYSENSITIVITY / GROUNDSENSITIVITY / MUSTJOIN /
+    PROPERTY / ANTENNA*), PORT/OBS layerGeometries with MASK /
+    ITERATE / STEP_PATTERN, and all the structural-keyword
+    clauses around them. Regression catcher for any future grammar
+    or engine edit that breaks save symmetry.
+    """
+    spec_path = REPO_ROOT / "python" / "tests" / "data" / "lef_spec_coverage.lef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+
+    parsed_a = g.parse_file(str(spec_path))
+    saved = g.save(parsed_a)
+    text = saved.decode("utf-8") if isinstance(saved, bytes) else saved
+    parsed_b = g.parse_string(text)
+
+    assert parsed_b == parsed_a, (
+        "spec-coverage LEF lost structure on save round-trip; "
+        "the diff between the two parses indicates a save-side gap "
+        "in some grammar rule"
+    )
+
+
 def test_sky130_multi_antenna_cell_round_trips(tmp_path):
     """A real Sky130 standard cell (sky130_fd_sc_hd__dlymetal6s2s_1)
     whose PIN X carries TWO ANTENNA clauses of different kinds —
