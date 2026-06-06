@@ -982,40 +982,54 @@ LAYER_PAREN_GROUP: sequence array {
 // DENSITYCHECKSTEP / PITCH / OFFSET) are intentionally OMITTED
 // here — leaving them in would create dead alternatives the
 // typed entries always shadow first.
+// Ordering note: predictive PEG tries alternatives top-to-bottom
+// and commits on the first whose terminal matches. KeyParser uses
+// mark/reject so partial matches rewind cleanly (no prefix
+// constraint), but iteration order still drives wall-clock cost.
+// This list is sorted approximately by real-world frequency in
+// Sky130 / NanGate / IHP130 tech LEFs — keywords every routing
+// LAYER carries (SPACING, RESISTANCE, CAPACITANCE, ANTENNAMODEL)
+// come first; LEF58 extension keywords (CUTCLASS, EOLKEEPOUT,
+// etc.) come last. Re-profile (rawast parse --profile) when
+// real-corpus measurements change the distribution.
 LAYER_KEYWORD: choice {
-  "MASK":@,
-  "MINWIDTH":@,
-  "MAXWIDTH":@,
+  // High-frequency (every routing LAYER hits these on Sky130 / NanGate).
   "SPACING":@,
-  "SPACINGTABLE":@,
-  "MINENCLOSEDAREA":@,
-  "MINSTEP":@,
-  "MINCUTS":@,
   "RESISTANCE":@,
   "CAPACITANCE":@,
-  "HEIGHT":@,
-  "ACCURRENTDENSITY":@,
+  "ANTENNAMODEL":@,
+  "ENCLOSURE":@,
   "DCCURRENTDENSITY":@,
-  "CURRENTDEN":@,
-  "ANTENNAAREARATIO":@,
+  "ANTENNADIFFSIDEAREARATIO":@,
   "ANTENNADIFFAREARATIO":@,
+  "ACCURRENTDENSITY":@,
+  "MINENCLOSEDAREA":@,
   "ANTENNACUMAREARATIO":@,
+  "ANTENNAAREARATIO":@,
+  "SPACINGTABLE":@,
+  "PROPERTY":@,
+  // Medium-frequency.
+  "MINWIDTH":@,
+  "MAXWIDTH":@,
+  "MINSTEP":@,
+  "MINCUTS":@,
+  "MASK":@,
   "ANTENNACUMDIFFAREARATIO":@,
   "ANTENNAAREAFACTOR":@,
   "ANTENNAGATEPLUSDIFF":@,
   "ANTENNASIDEAREARATIO":@,
   "ANTENNASIDEAREAFACTOR":@,
-  "ANTENNAMODEL":@,
-  "ENCLOSURE":@,
   "PREFERENCLOSURE":@,
-  "PROPERTY":@,
   "STACK":@,
+  "HEIGHT":@,
+  "CURRENTDEN":@,
+  // Rare / LEF58 extension keywords (only appears on a few
+  // PDKs / tech LEFs).
   "SLOTWIRELENGTH":@,
   "SLOTWIREWIDTH":@,
   "FILLACTIVESPACING":@,
   "MINIMUMCUT":@,
   "ARRAYSPACING":@,
-  "ANTENNADIFFSIDEAREARATIO":@,
   "EOLENCLOSURE":@,
   "PARALLELRUNLENGTH":@,
   "MINSIZE":@,
