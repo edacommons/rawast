@@ -402,11 +402,16 @@ SITE_ORIENT: choice {
 //     [DENSITY]
 //     [PROPERTY ...] ...
 //   END name
-// PROPERTY clauses appear at the END per spec (after PINs / OBS /
-// DENSITY) and are captured as a list via `<MACRO_PROPERTIES_TRAIL>
-// :properties=@`. Pre-PIN PROPERTY positions are NOT accepted —
-// real spec-conformant files use the trailing form, and pre-PIN
-// PROPERTY isn't valid LEF.
+// PROPERTY clauses can appear at the START of the MACRO body
+// (asap7 fakeram, NanGate older variants), interleaved with the
+// typed sub-statements, OR at the END (LEF/DEF 5.8 §"Macro"
+// canonical position). Both positions land in the same
+// `properties` list via `:properties[]=@` list-append bindings:
+// the inline form is one alternative of the MACRO_PROPERTY Choice
+// (caught by the leading `repeat <MACRO_PROPERTY>`); the trailing
+// form is the trailing `repeat <MACRO_PROPERTY_KV>:properties[]=@`
+// after PIN/OBS/DENSITY. Both append to the same `properties`
+// slot.
 MACRO_BLOCK: sequence dict {
   "MACRO":type="Macro" space,
   identifier:name=@ newline,
@@ -414,7 +419,7 @@ MACRO_BLOCK: sequence dict {
   <MACRO_PINS>:pins=@,
   <MACRO_OBSES>:obses=@,
   ?<MACRO_DENSITY>:density=@,
-  <MACRO_PROPERTIES_TRAIL>:properties=@,
+  repeat <MACRO_PROPERTY_KV>:properties[]=@,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -424,13 +429,6 @@ MACRO_BLOCK: sequence dict {
 // layers carry different obstruction shapes that the designer
 // wants kept structurally separate.
 MACRO_OBSES: sequence array { repeat <MACRO_OBS> }
-
-// Trailing `PROPERTY name value ;` clauses per LEF/DEF 5.8 §"Macro"
-// — captured as a list under `properties` (the unbound `repeat`
-// formerly discarded them because PROPERTY_KV is dict-container).
-MACRO_PROPERTIES_TRAIL: sequence array {
-  repeat <MACRO_PROPERTY_KV>
-}
 
 // MACRO sub-statements in any order — same pattern as HDR_CMD.
 // Pending NSEQ (M2), this is the pragmatic way to accept real LEFs
@@ -445,7 +443,8 @@ MACRO_PROPERTY: choice {
   <MACRO_SIZE>,
   <MACRO_SYMMETRY>,
   <MACRO_SITE_REF>:sites[]=@,
-  <MACRO_SOURCE>
+  <MACRO_SOURCE>,
+  <MACRO_PROPERTY_KV>:properties[]=@
 }
 
 // EEQ macroName ; — equivalent-macro reference per LEF/DEF 5.8
@@ -1248,10 +1247,14 @@ VIARULE_SPACING_CMD: sequence dict {
   "SPACING" space, <NUMBER>:x=@ space, "BY" space, <NUMBER>:y=@ space, ";" newline
 }
 
-// WIDTH min max — only valid for the GENERATE form's routing-layer
-// sections (spec §"Via Rule Generate").
+// `WIDTH minWidth TO maxWidth ;` — only valid for the GENERATE
+// form's routing-layer sections (spec §"Via Rule Generate"). Per
+// LEF/DEF 5.8 the form is exactly `WIDTH min TO max ;` with the
+// `TO` keyword between the two numbers — real PDKs (gf130bcd,
+// older NanGate variants) ship this form. The `TO` is a
+// structural separator the engine matches and discards.
 VIARULE_WIDTH_RANGE_CMD: sequence dict {
-  "WIDTH" space, <NUMBER>:min=@ space, <NUMBER>:max=@ space, ";" newline
+  "WIDTH" space, <NUMBER>:min=@ space, "TO" space, <NUMBER>:max=@ space, ";" newline
 }
 
 VIARULE_RESISTANCE_CMD: sequence {

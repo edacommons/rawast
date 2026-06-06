@@ -345,7 +345,15 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
                     if value == "@":
                         inner_type = _type_of(
                             rep_inner, rule_names, grammar, classifications)
-                        out.append((fname, f"list[{inner_type}]", is_optional, None))
+                        # `repeat <X>:foo[]=@` matches the engine's
+                        # list-append semantic: absent key when zero
+                        # matches. Model as `list[X] | None = None`
+                        # so the round-trip round-trips both shapes
+                        # (absent ↔ None, list ↔ list). Same handling
+                        # as the single-Ref `:foo[]=@` path above.
+                        is_list_append = bool(b.get("list_append"))
+                        opt = is_list_append or is_optional
+                        out.append((fname, f"list[{inner_type}]", opt, None))
                 return out
             # Unnamed repeat — same walk-in rule as bare reference:
             # walk choice and container-less sequence bodies; skip

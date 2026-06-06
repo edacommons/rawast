@@ -277,6 +277,59 @@ build_item(Grammar& g, const Value& val) {
             }
         }
     }
+    // EXPR-flattened ITEM dict: the meta-grammar emits the EXPR's
+    // fields directly into the ITEM dict (no separate `expr` field),
+    // with `bindings` alongside. If bindings are present, build the
+    // expr inline AND wrap it in a Sequence carrying the binding's
+    // name marker. Lets `repeat <X>:foo[]=@` actually fire the
+    // binding — previously the bindings field was silently dropped
+    // because neither legacy nor multi-binding path matched the
+    // EXPR-flattened shape.
+    if (auto dv = dynamic_cast<const DictValue*>(&val)) {
+        auto bindings_it = dv->data().find("bindings");
+        if (bindings_it != dv->data().end()) {
+            auto entries_r = extract_bindings(bindings_it->second);
+            if (!entries_r) return tl::unexpected(entries_r.error());
+            const auto& entries = *entries_r;
+            if (!entries.empty()) {
+                auto child_r = build_inline(g, val);
+                if (!child_r) return tl::unexpected(child_r.error());
+                NodeId wrapper = g.new_sequence();
+                for (const auto& e : entries) {
+                    if (e.name.empty()) {
+                        // Var binding — set is_name on the expr, no
+                        // sibling Value node emitted.
+                        g.set_name(*child_r);
+                        continue;
+                    }
+                    auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                    const bool is_at = sv && sv->data() == "@";
+                    if (is_at) {
+                        NodeId vn = g.new_value(make_string(e.name));
+                        g.set_name(vn);
+                        g.node(wrapper).children.push_back(vn);
+                    } else {
+                        // const binding: emit Value-name + Value-const
+                        // AFTER the expr (binding_const ordering).
+                    }
+                }
+                g.node(wrapper).children.push_back(*child_r);
+                for (const auto& e : entries) {
+                    auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                    const bool is_at = sv && sv->data() == "@";
+                    const bool is_var = e.name.empty();
+                    if (is_at || is_var) continue;
+                    NodeId vn = g.new_value(make_string(e.name));
+                    g.set_name(vn);
+                    g.node(wrapper).children.push_back(vn);
+                    NodeId vc = g.new_value(e.value ? e.value : null_value());
+                    g.node(wrapper).children.push_back(vc);
+                }
+                apply_pretty_attrs(g, wrapper, *dv);
+                return wrapper;
+            }
+        }
+    }
     return build_inline(g, val);
 }
 
@@ -436,6 +489,17 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     !wrap_optional
                     && g.node(target).kind == NodeKind::Choice
                     && (!at_bindings.empty() || !const_bindings.empty());
+                // Repeat target: same reason. A `repeat <X>:foo[]=@`
+                // would otherwise add Value-name + Ref as two children
+                // of the Repeat node, but Repeat only iterates its
+                // child[0] (the item) — extra children never fire,
+                // so the binding silently never appends. Wrap so the
+                // binding sticks with its expr inside a single
+                // item-slot.
+                const bool wrap_for_repeat =
+                    !wrap_optional && !wrap_for_choice
+                    && g.node(target).kind == NodeKind::Repeat
+                    && (!at_bindings.empty() || !const_bindings.empty());
                 NodeId append_to = target;
                 NodeId wrapper_id;
                 if (wrap_optional) {
@@ -443,7 +507,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     g.set_optional(wrapper_id);
                     g.node(*expr_child).is_optional = false;
                     append_to = wrapper_id;
-                } else if (wrap_for_choice) {
+                } else if (wrap_for_choice || wrap_for_repeat) {
                     wrapper_id = g.new_sequence();
                     append_to = wrapper_id;
                 }
@@ -467,7 +531,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     g.node(append_to).children.push_back(vc);
                 }
 
-                if (wrap_optional || wrap_for_choice) {
+                if (wrap_optional || wrap_for_choice || wrap_for_repeat) {
                     g.node(target).children.push_back(wrapper_id);
                 }
 
