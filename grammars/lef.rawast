@@ -940,9 +940,45 @@ VIA_BLOCK: sequence dict {
   <VIA_KW>:type=@ space,
   identifier:name=@ space,
   ?<VIA_DEFAULT_KW>,
-  <VIA_PROPERTIES>:properties=@,
+  <VIA_BODY>,
   "END" space, identifier:end_name=@ newline
 }
+
+// Two body forms per LEF/DEF 5.8 §"Via":
+//   1. Geometry form: `LAYER ... shapes ...` + optional RESISTANCE.
+//      Captured as a `properties` list (existing behaviour).
+//   2. VIARULE-based form: `VIARULE viaRuleName ;` followed by
+//      typed sub-clauses (CUTSIZE / LAYERS / CUTSPACING / ENCLOSURE
+//      required; ROWCOL / ORIGIN / OFFSET / PATTERN optional).
+//      All sub-clauses catcher-flatten into the VIA dict as typed
+//      fields (cut_size_x, layers, enclosure_*, etc.).
+// VIARULE-form is tried first because its `VIARULE` discriminator
+// is more specific than the geometry form's LAYER/RESISTANCE openers.
+VIA_BODY: choice {
+  <VIA_VIARULE_BODY>,
+  <VIA_GEOMETRY_BODY>
+}
+
+VIA_GEOMETRY_BODY: sequence {
+  <VIA_PROPERTIES>:properties=@
+}
+
+VIA_VIARULE_BODY: sequence {
+  "VIARULE" space, identifier:via_rule=@ space, ";" newline,
+  "CUTSIZE" space, <NUMBER>:cut_size_x=@ space, <NUMBER>:cut_size_y=@ space, ";" newline,
+  "LAYERS" space, identifier:bot_layer=@ space, identifier:cut_layer=@ space, identifier:top_layer=@ space, ";" newline,
+  "CUTSPACING" space, <NUMBER>:cut_spacing_x=@ space, <NUMBER>:cut_spacing_y=@ space, ";" newline,
+  "ENCLOSURE" space, <NUMBER>:bot_enc_x=@ space, <NUMBER>:bot_enc_y=@ space, <NUMBER>:top_enc_x=@ space, <NUMBER>:top_enc_y=@ space, ";" newline,
+  ?<VIA_ROWCOL_CMD>,
+  ?<VIA_ORIGIN_CMD>,
+  ?<VIA_OFFSET_CMD>,
+  ?<VIA_PATTERN_CMD>
+}
+
+VIA_ROWCOL_CMD:  sequence { "ROWCOL"  space, int:rowcol_rows=@ space, int:rowcol_cols=@ space, ";" newline }
+VIA_ORIGIN_CMD:  sequence { "ORIGIN"  space, <NUMBER>:via_origin_x=@ space, <NUMBER>:via_origin_y=@ space, ";" newline }
+VIA_OFFSET_CMD:  sequence { "OFFSET"  space, <NUMBER>:bot_off_x=@ space, <NUMBER>:bot_off_y=@ space, <NUMBER>:top_off_x=@ space, <NUMBER>:top_off_y=@ space, ";" newline }
+VIA_PATTERN_CMD: sequence { "PATTERN" space, identifier:pattern=@ space, ";" newline }
 
 VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> }
 

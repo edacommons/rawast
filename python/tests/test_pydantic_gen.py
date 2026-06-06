@@ -553,6 +553,27 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert via["properties"][0]["value"] == 50
     assert [p.get("layer") for p in via["properties"][1:]] == ["li1", "mcon", "met1"]
 
+    # VIARULE-based VIA form — all sub-clauses become typed fields
+    # on the VIA dict (no `properties` list).
+    via_vr = next(it for it in items
+                  if it.get("type") == "VIA"
+                  and it.get("name") == "spec_via_viarule_form")
+    assert via_vr["via_rule"] == "spec_viarule_gen"
+    assert via_vr["cut_size_x"] == 0.17
+    assert via_vr["cut_size_y"] == 0.17
+    assert via_vr["bot_layer"] == "li1"
+    assert via_vr["cut_layer"] == "mcon"
+    assert via_vr["top_layer"] == "met1"
+    assert via_vr["cut_spacing_x"] == 0.19
+    assert via_vr["cut_spacing_y"] == 0.19
+    assert via_vr["bot_enc_x"] == 0.04
+    assert via_vr["top_enc_y"] == 0.06
+    assert via_vr["rowcol_rows"] == 2
+    assert via_vr["rowcol_cols"] == 3
+    assert via_vr["via_origin_x"] == 0.005
+    assert via_vr["bot_off_x"] == 0.01
+    assert via_vr["pattern"] == "myCutPattern"
+
     viarules = {it["name"]: it for it in items if it.get("type") == "VIARULE"}
     assert "spec_viarule_pair" in viarules
     assert viarules["spec_viarule_gen"]["is_generate"] is True
