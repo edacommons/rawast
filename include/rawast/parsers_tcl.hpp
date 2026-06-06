@@ -104,14 +104,11 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
-// Consume until the next unmatched `)`. Used for array indices in
-// $arr(idx). Returns the consumed text (without the closing `)`) as
-// a StringValue. The structural grammar consumes the closing `)`.
-class TclUntilParenParser final : public Parser {
-public:
-    TclUntilParenParser();
-    ParseResult parse(StreamReader& sr) override;
-};
+// Retired: `TclUntilParenParser`. Replaced by the grammar-level
+// `*` raw-consume primitive (engine commit e865727); VAR_INDEX in
+// tcl.rawast now uses `*:index=@:subparse="WORD_SEGMENTS"` with `)`
+// as the stop literal in the surrounding sequence. See
+// docs/rawast-format.md §4.5a-1.
 
 // Backslash + one byte. Returns the two-byte escape sequence as a
 // StringValue. Fails on lone backslash at end-of-input. Used inside

@@ -144,7 +144,7 @@ VAR_SEG: sequence dict {
 
 VAR_INDEX: sequence dict {
   "(",
-  tcl.until_paren:index=@:subparse="WORD_SEGMENTS",
+  *:index=@:subparse="WORD_SEGMENTS",
   ")"
 }
 

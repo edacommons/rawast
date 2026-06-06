@@ -692,7 +692,31 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             sr.accept();
-            ValuePtr produced = pool.intern(make_string(std::move(captured)));
+            ValuePtr produced = make_string(std::move(captured));
+            // Subparse hook: same as the Parse node branch — if this
+            // Raw node carries a subparse_start, re-enter the engine
+            // on the captured string with the named rule as entry.
+            // The resulting sub-tree replaces the original string.
+            if (n.subparse_start.valid()) {
+                auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
+                if (!produced_sv) {
+                    handle_failure(ParseError{
+                        sr.position(),
+                        "subparse requires a string-valued terminal"});
+                    break;
+                }
+                std::istringstream sub_is(produced_sv->data());
+                StreamReader sub_sr(sub_is);
+                auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
+                if (!sub_r) {
+                    handle_failure(ParseError{
+                        sr.position(),
+                        "subparse: " + sub_r.error().message});
+                    break;
+                }
+                produced = *sub_r;
+            }
+            produced = pool.intern(produced);
             top.add_value(produced, top.is_name());
             if (top.has_current()) {
                 push_with_optional_mark(top.current_child());

@@ -293,7 +293,7 @@ Shipped groups:
 | `std` | `int`, `uint`, `float`, `identifier`, `qualified_identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
 | `gdsii` | All 47 GDSII record-type parsers (`header`, `bgnlib`, …, `endmasks`) — bare or `gdsii.header` form |
 | `lefdef` | LEF/DEF-specific `identifier` (hyphens, slashes accepted) and `line_comment` (`#`-to-EOL). Note: the LEF `BEGINEXT … ENDEXT` vendor-extension body is captured via the grammar-level `*` primitive (see `docs/rawast-format.md §4.5a-1`), not a custom terminal parser. |
-| `tcl` | Tcl terminals modelled on Dodekalogue rules — `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `until_paren`, `escape`, `literal_run` |
+| `tcl` | Tcl terminals modelled on Dodekalogue rules — `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `escape`, `literal_run`. Note: `$arr(idx)` array-index body is captured via the grammar-level `*` primitive (see `docs/rawast-format.md §4.5a-1`), not a custom `until_paren` terminal. |
 
 Shipped grammars:
 

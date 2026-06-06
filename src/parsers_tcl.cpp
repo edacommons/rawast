@@ -425,28 +425,8 @@ ParseResult TclVarNameParser::parse(StreamReader& sr) {
     return make_string(std::move(name));
 }
 
-// --- TclUntilParenParser -----------------------------------------------
-
-TclUntilParenParser::TclUntilParenParser() : Parser("until_paren") {}
-
-ParseResult TclUntilParenParser::parse(StreamReader& sr) {
-    sr.mark();
-    const Position start = sr.position();
-    std::string content;
-    while (true) {
-        auto c = sr.peek();
-        if (!c) {
-            sr.reject();
-            return tl::unexpected(ParseError{
-                start, "unterminated array index (expected ')')"});
-        }
-        if (*c == ')') break;
-        content.push_back(*c);
-        sr.get();
-    }
-    sr.accept();
-    return make_string(std::move(content));
-}
+// (TclUntilParenParser retired — superseded by the engine's `*`
+// raw-consume primitive. See header note.)
 
 // --- TclEscapeParser ---------------------------------------------------
 
@@ -513,7 +493,6 @@ ParserGroup make_tcl_group() {
         ParserSpec{"bare_word",     []{ return std::make_unique<TclBareWordParser>(); }},
         ParserSpec{"expand_marker", []{ return std::make_unique<TclExpandMarkerParser>(); }},
         ParserSpec{"var_name",      []{ return std::make_unique<TclVarNameParser>(); }},
-        ParserSpec{"until_paren",   []{ return std::make_unique<TclUntilParenParser>(); }},
         ParserSpec{"escape",        []{ return std::make_unique<TclEscapeParser>(); }},
         ParserSpec{"literal_run",   []{ return std::make_unique<TclLiteralRunParser>(); }},
     };
