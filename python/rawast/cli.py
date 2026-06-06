@@ -118,6 +118,13 @@ def cmd_profile(args: argparse.Namespace) -> int:
                 files.extend(sorted(p.rglob(f"*.{ext.strip()}")))
         else:
             files.append(p)
+    if getattr(args, "from_file", None):
+        with open(args.from_file) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                files.append(Path(line))
     if not files:
         print("profile: no input files", file=sys.stderr)
         return 1
@@ -297,10 +304,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Parse a list of files (or directories), aggregate per-rule "
              "entry / fail / time counters, print sorted top-N to stderr")
     p_profile.add_argument("grammar", help="Grammar file (.rawast or .json)")
-    p_profile.add_argument("inputs", nargs="+",
-                           help="One or more input files / directories. "
+    p_profile.add_argument("inputs", nargs="*",
+                           help="Zero or more input files / directories. "
                                 "Directories are recursed for files matching "
                                 "the --ext extensions (default: lef,tlef,def).")
+    p_profile.add_argument("--from-file", metavar="LIST",
+                           help="Read additional input paths from a file, "
+                                "one per line. Blank lines and `#` comments "
+                                "are skipped.")
     p_profile.add_argument("--ext", default="lef,tlef,def",
                            help="Comma-separated extensions to recurse into "
                                 "directories. Default: lef,tlef,def.")
