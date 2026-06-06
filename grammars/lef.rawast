@@ -468,8 +468,14 @@ MACRO_DENSITY_LAYER: sequence dict {
 
 MACRO_DENSITY_RECTS: sequence array { repeat+ <MACRO_DENSITY_RECT> }
 
+// DENSITY-block RECT carries a trailing `density` number that
+// distinguishes it from the bare RECT_SHAPE used everywhere else.
+// The `type` discriminator is `DensityRect` (not `Rect`) so that
+// downstream Pydantic discriminated unions can dispatch on `type`
+// alone — otherwise a `RectShape | DensityRect` union would be
+// ambiguous on the shared discriminator.
 MACRO_DENSITY_RECT: sequence dict {
-  "RECT":type="Rect" space,
+  "RECT":type="DensityRect" space,
   <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
   <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
   <NUMBER>:density=@ space,
@@ -796,6 +802,14 @@ POLYGON_SHAPE: sequence dict {
 POLYGON_POINTS: sequence array { repeat <NUMBER> }
 
 // PATH — segmented line with point list per LEF/DEF 5.8 §"Path".
+//
+// NOTE: same ITERATE step-pattern collision as POLYGON_SHAPE
+// (above) — PATH_POINTS' `repeat+ <NUMBER>` is greedy with no
+// delimiter, so for the `PATH [MASK n] ITERATE … numX numY xStep
+// yStep ;` form, the trailing four step-pattern numbers get
+// swept into `points` and `step_pattern` ends up absent.
+// `is_iterate=true` is still set so consumers can split the
+// last four numbers themselves.
 PATH_SHAPE: sequence dict {
   "PATH":type="Path" space,
   ?<MASK_MOD>,

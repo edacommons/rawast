@@ -665,11 +665,15 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert macro["symmetry"] == ["X", "Y", "R90"]
 
     # DENSITY block captured with nested layers + per-layer rects.
+    # Each rect carries `type: "DensityRect"` (not "Rect") so that
+    # downstream discriminated unions distinguish them from bare
+    # RECT_SHAPE shapes.
     density = macro["density"]
     assert density["type"] == "Density"
     assert len(density["layers"]) == 2
     assert density["layers"][0]["layer"] == "met1"
     assert len(density["layers"][0]["rects"]) == 2
+    assert density["layers"][0]["rects"][0]["type"] == "DensityRect"
     assert density["layers"][0]["rects"][0]["density"] == 0.4
 
     # Phase 5: PINs exercising every sub-statement.
