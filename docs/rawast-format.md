@@ -342,11 +342,14 @@ to the same parser.
 binding      ::= expression ':' bind_target
 bind_target  ::= '@'                              -- pass value through (default)
               |  '@='                             -- emit value as dict key
-              |  identifier '=' bind_rhs          -- emit (identifier, rhs) pair into dict
+              |  identifier ['[]'] '=' bind_rhs   -- emit (identifier, rhs) pair into dict
 bind_rhs     ::= '@'                              -- parsed expression's value
               |  literal                          -- constant value
 literal      ::= string | int | float | 'true' | 'false' | 'null'
 ```
+
+The optional `[]` after `identifier` turns the binding into a
+**list-append** — see §4.5a.
 
 The binding suffix wraps an expression and controls how its produced
 value is routed into the surrounding catcher.
@@ -433,6 +436,70 @@ The engine resolves the subparse target's rule name to a NodeId at
 grammar-load time; a missing rule fails the load with a clear error.
 Subparse triggers create a fresh ignore-stack so per-rule ignore
 overrides in the inner context don't leak into the outer parse.
+
+### 4.5a List-append binding — `expression:name[]=@`
+
+The plain `name=value` binding writes (or overwrites) a single key
+on the surrounding dict. The **`name[]=value`** form *appends*
+each match to a list under `name` instead. Subsequent matches of
+the same name accumulate into the same list rather than overwriting
+the previous one.
+
+```
+PIN_PROPERTY: choice {
+  <PIN_DIRECTION>,
+  <PIN_USE>,
+  ...
+  <PIN_ANTENNA_PROP>:antennas[]=@     // each ANTENNA match appends one entry
+}
+```
+
+For the input
+
+```
+PIN A
+   ANTENNAGATEAREA  0.01 ;
+   ANTENNADIFFAREA  0.02 LAYER met1 ;
+   ANTENNAPARTIALMETALAREA 0.05 LAYER met1 ;
+```
+
+the engine produces
+
+```
+PIN A: {
+  ...
+  antennas: [
+    {kind: "GateArea",          value: 0.01},
+    {kind: "DiffArea",          value: 0.02, layer: "met1"},
+    {kind: "PartialMetalArea",  value: 0.05, layer: "met1"},
+  ],
+}
+```
+
+The `[]` is the grammar-author signal — it never appears in the
+output dict; the key is `antennas`, not `antennas[]`. Mechanism: at
+parse time, the loader folds the `[]` suffix back into the binding
+name string; the dict-assembly stage strips it and lazily
+instantiates an `ArrayValue` under the base name on first hit.
+
+Semantics worth knowing:
+
+- **Lazy creation.** If no match fires, the key is *absent* from
+  the dict. A `name[]` binding never produces an empty list as a
+  default — the field is simply not there. Downstream code should
+  model the field as `Optional[list[X]]` (or its equivalent).
+- **Catcher-context only.** `name[]` is meaningful only when the
+  binding ends up in a dict-container's catcher; the engine has no
+  other use for it.
+- **No collision with `name`.** A grammar that mixes `name=@` and
+  `name[]=@` on the same key in the same dict is malformed — the
+  scalar write will overwrite the list (or vice versa) depending on
+  match order. The linter does not yet catch this; treat the two
+  forms as mutually exclusive per name.
+
+The same primitive is what enables multi-OBS per MACRO, multi-
+PROPERTY-per-PIN, multi-FOREIGN-per-MACRO, and any other
+spec-allowed multi-instance pattern in `lef.rawast` / `def.rawast`.
 
 ### 4.5b Pretty-print attributes — postfix flags on items
 

@@ -74,7 +74,21 @@ are documented in `docs/` and in the prototype's history.
   Demonstrated by the Tcl grammar (below).
 - **`.rawast` grammar language** — concise hand-written DSL for
   grammars, fully self-hosted (the `.rawast` parser is itself loaded
-  from a `.rawast`-described grammar).
+  from a `.rawast`-described grammar). Recent additions: list-
+  append binding (`:name[]=@`) so a single grammar can capture
+  multi-instance clauses losslessly without giving up the catcher
+  convenience for single-instance ones (see `docs/rawast-format.md
+  §4.5a`).
+- **Pydantic v2 model generator** — `rawast pydantic <grammar>`
+  emits a ready-to-import Python module whose classes mirror the
+  grammar's parse/save dict shape exactly. Round-trip contract:
+  `Class.model_validate(g.parse_file(p)).model_dump(...)` equals
+  the parsed dict. The model rejects any field the grammar can't
+  write back (`ConfigDict(extra="forbid")`), so the user-facing
+  API is **construct-and-save**: build a LEF in Python, dump to
+  dict, hand to `g.save(...)`. Discriminated unions, list-append
+  bindings, nested sub-dicts, and forward references all flow
+  through to typed Python fields.
 - **`use:` directive** — grammars declare which terminal-parser groups
   they need; the loader resolves names against a static registry of
   built-in groups.
@@ -88,10 +102,19 @@ are documented in `docs/` and in the prototype's history.
     chip flows (Sky130, GF180MCU, IHP130, asap7, gf180, ihp-sg13g2).
     Synthetic round-trip tests cover save back to byte-identical
     output (including 2,048-byte alignment padding).
-  - `grammars/lef.rawast` — LEF tech-file format (LAYER /
-    VIA / VIARULE / PROPERTYDEFINITIONS / SPACING + MACRO / PIN /
-    PORT / OBS cell bodies). Parses 507 / 507 real LEFs across
-    seven PDK / open-platform sources.
+  - `grammars/lef.rawast` — LEF base-spec (5.8) coverage, less
+    LEF58_* (deferred to a consumer-supplied sub-grammar). LAYER
+    blocks expose per-TYPE typed fields (`layer_type`, `direction`,
+    `pitch`, `width`, …); VIA blocks model both the geometry and
+    VIARULE-based forms; VIARULE blocks model the LAYER-pair and
+    GENERATE forms with typed sub-clauses (`enclosure`, `rect`,
+    `spacing`); PIN/MACRO bodies cover every spec sub-statement
+    including DENSITY, MUSTJOIN, EEQ, FIXEDMASK, and the full
+    ANTENNA*-family list capture. Parses 507 / 507 real LEFs across
+    seven PDK / open-platform sources; round-trip-tested against
+    the Sky130 tech LEF, the OpenRAM SRAM, the `top_xres4v2` IO
+    pad, a multi-ANTENNA HD cell, and a synthetic full-spec fixture
+    that exercises every documented clause.
   - `grammars/def.rawast` — DEF placement-and-route file format
     (PINS / BLOCKAGES / VIAS / COMPONENTS / NONDEFAULTRULES /
     SPECIALNETS / NETS / FILLS / GCELLGRID / PROPERTYDEFINITIONS).
@@ -107,22 +130,25 @@ are documented in `docs/` and in the prototype's history.
   writes them back via the same save engine. Parse a `.rawast` file,
   modify the AST, emit it back as canonical `.rawast` text — round-
   trips structurally identical.
-- **Test suite**: 237 tests (206 C++ doctest + 31 Python pytest)
+- **Test suite**: 252 tests (208 C++ doctest + 44 Python pytest)
   covering the engine, loader, JSON round-trip, GDSII round-trip,
   linter, pretty-print, the `use:` directive, subparse, per-rule
-  ignore, and the data-shape schema generator. Plus 3,132 real
-  production files across GDSII / LEF / DEF / Tcl parsing 100%
-  end-to-end.
+  ignore, list-append binding, the data-shape schema generator,
+  and the Pydantic-model generator (round-trip on a synthetic full-
+  LEF-spec fixture plus four real Sky130 PDK files: the HD tech
+  LEF, an OpenRAM SRAM, the `top_xres4v2` IO pad, and a multi-
+  ANTENNA HD cell). Plus 3,132 real production files across GDSII
+  / LEF / DEF / Tcl parsing 100% end-to-end.
 
 ## What's planned
 
 See `docs/rawast-format.md` for the language spec. The roadmap to 1.0:
 
 - **Typed Python developer surface.** A structural-validation API for
-  host-constructed value trees with path-aware errors; a Pydantic-model
-  generator emitting typed Python classes from any grammar; the data-
-  shape reference generator productionised. Sub-parse-aware error
-  reporting and an expanded grammar linter.
+  host-constructed value trees with path-aware errors (separate from
+  the Pydantic-model generator, which already ships — above); the
+  data-shape reference generator productionised. Sub-parse-aware
+  error reporting and an expanded grammar linter.
 - **The `.jast` binary container.** A self-describing binary file
   carrying manifest + grammar + value tree with one internal value
   pool, plus primitive value interning wired through the in-memory
@@ -157,11 +183,20 @@ with zero extra packages installed.
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 rawast --help
-rawast lint   grammars/gdsii.rawast
-rawast parse  grammars/json.json file.json
-rawast docs   grammars/gdsii.rawast   # EBNF-flavoured Markdown reference (grammar input syntax)
-rawast schema grammars/gdsii.rawast   # value-tree-shape Markdown reference (dict / array / choice — what a producer tool builds before save())
+rawast lint     grammars/gdsii.rawast
+rawast parse    grammars/json.json file.json
+rawast docs     grammars/gdsii.rawast      # EBNF-flavoured Markdown reference (grammar input syntax)
+rawast schema   grammars/gdsii.rawast      # value-tree-shape Markdown reference (dict / array / choice — what a producer tool builds before save())
+rawast pydantic grammars/lef.rawast        # generate Pydantic v2 models matching the grammar's parse/save dict shape exactly
 ```
+
+The generated Pydantic module is round-trip-faithful: a parsed
+value validates as a model, `model_dump()` reproduces the input
+dict, and the model rejects any field the grammar can't save back
+(`ConfigDict(extra="forbid")`). Discriminated unions, list-append
+bindings (`:name[]=@`), and nested sub-dicts all flow through to
+typed Python fields — see `docs/rawast-format.md §4.5a` and the
+construction-toolkit memory for the contract.
 
 Module use:
 
@@ -252,7 +287,7 @@ Shipped groups:
 |---|---|
 | `std` | `int`, `uint`, `float`, `identifier`, `qualified_identifier`, `string`, `whitespace`, `line_comment`, `block_comment` |
 | `gdsii` | All 47 GDSII record-type parsers (`header`, `bgnlib`, …, `endmasks`) — bare or `gdsii.header` form |
-| `lefdef` | LEF/DEF-specific `identifier` (hyphens, slashes accepted) and `line_comment` (`#`-to-EOL) |
+| `lefdef` | LEF/DEF-specific `identifier` (hyphens, slashes accepted), `line_comment` (`#`-to-EOL), and `until_endext` (raw text consumed up to the next `ENDEXT` keyword — captures the inner body of a LEF `BEGINEXT … ENDEXT` vendor-extension block opaquely) |
 | `tcl` | Tcl terminals modelled on Dodekalogue rules — `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `until_paren`, `escape`, `literal_run` |
 
 Shipped grammars:
