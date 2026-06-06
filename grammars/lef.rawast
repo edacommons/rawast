@@ -88,8 +88,8 @@ MAXVIASTACK_CMD: sequence dict {
 
 MAXVIASTACK_RANGE: sequence {
   "RANGE" space,
-  identifier:max_via_stack_bot=@ space,
-  identifier:max_via_stack_top=@ space
+  identifier:range_bot=@ space,
+  identifier:range_top=@ space
 }
 
 // BEGINEXT "extName" ... ENDEXT — vendor-extension wrapper. Inner
@@ -415,12 +415,12 @@ MACRO_PROPERTIES_TRAIL: sequence array {
 MACRO_PROPERTY: choice {
   <MACRO_CLASS>,
   <MACRO_FIXEDMASK>,
-  <MACRO_FOREIGN>,
+  <MACRO_FOREIGN>:foreigns[]=@,
   <MACRO_EEQ>,
-  <MACRO_ORIGIN>,
+  <MACRO_ORIGIN>:origin=@,
   <MACRO_SIZE>,
   <MACRO_SYMMETRY>,
-  <MACRO_SITE_REF>,
+  <MACRO_SITE_REF>:sites[]=@,
   <MACRO_SOURCE>
 }
 
@@ -493,22 +493,27 @@ MACRO_CLASS: sequence {
 }
 CLASS_LIST: sequence array { repeat identifier }
 
-MACRO_ORIGIN: sequence {
+// Dict-container so MACRO_PROPERTY can bind it as `:origin=@`,
+// landing on the parent MACRO as `origin: {x, y}` instead of
+// flat `origin_x` / `origin_y`.
+MACRO_ORIGIN: sequence dict {
   "ORIGIN" space,
-  <NUMBER>:origin_x=@ space, <NUMBER>:origin_y=@ space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
   ";" newline
 }
 
 // FOREIGN — cell name plus optional (x,y) offset. Real LEFs use both
-// forms: `FOREIGN cellName ;` and `FOREIGN cellName 0 0 ;`.
-MACRO_FOREIGN: sequence {
+// forms: `FOREIGN cellName ;` and `FOREIGN cellName 0 0 ;`. Spec
+// allows multiple FOREIGN clauses per MACRO; bound via `:foreigns[]=@`
+// in MACRO_PROPERTY so all of them land in a list of {cell, x?, y?}.
+MACRO_FOREIGN: sequence dict {
   "FOREIGN" space,
-  identifier:foreign_cell=@ space,
+  identifier:cell=@ space,
   ?<MACRO_FOREIGN_XY>,
   ";" newline
 }
 MACRO_FOREIGN_XY: sequence {
-  <NUMBER>:foreign_x=@ space, <NUMBER>:foreign_y=@ space
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space
 }
 
 MACRO_SIZE: sequence {
@@ -526,8 +531,10 @@ MACRO_SYMMETRY: sequence {
 }
 
 // SITE reference inside a MACRO (not a SITE block definition).
-MACRO_SITE_REF: sequence {
-  "SITE" space, identifier:site=@ space, ";" newline
+// Spec allows multiple `SITE` clauses per MACRO; bound via
+// `:sites[]=@` in MACRO_PROPERTY so all of them land in a list.
+MACRO_SITE_REF: sequence dict {
+  "SITE" space, identifier:name=@ space, ";" newline
 }
 
 // === PIN inside MACRO ====================================================
@@ -555,7 +562,7 @@ PIN_PROPERTY: choice {
   <PIN_SUPPLYSENSITIVITY>,
   <PIN_GROUNDSENSITIVITY>,
   <PIN_MUSTJOIN>,
-  <PIN_PROPERTY_KV>,
+  <PIN_PROPERTY_KV>:properties[]=@,
   <PIN_ANTENNA_PROP>:antennas[]=@
 }
 
@@ -581,12 +588,13 @@ PIN_MUSTJOIN: sequence {
 }
 
 // PIN-level PROPERTY clauses (declared in PROPERTYDEFINITIONS).
-// Container-less; single-PROPERTY-per-PIN survives via catcher (last
-// write wins for multiples). Proper list capture is M2 work.
-PIN_PROPERTY_KV: sequence {
+// Dict-container so PIN_PROPERTY's `:properties[]=@` binding appends
+// each `{name, value}` dict to the PIN's `properties` list — multiple
+// PROPERTY clauses per PIN round-trip losslessly.
+PIN_PROPERTY_KV: sequence dict {
   "PROPERTY" space,
-  identifier:pin_prop_name=@ space,
-  <PROPERTY_VALUE>:pin_prop_value=@ space,
+  identifier:name=@ space,
+  <PROPERTY_VALUE>:value=@ space,
   ";" newline
 }
 
@@ -704,14 +712,14 @@ LAYER_GROUP_MOD: choice {
 }
 
 LAYER_GROUP_EXCEPTPGNET:     sequence { "EXCEPTPGNET":except_pg_net=true space }
-LAYER_GROUP_SPACING:         sequence { "SPACING"         space, <NUMBER>:layer_spacing=@           space }
-LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:layer_design_rule_width=@ space }
-LAYER_GROUP_MASK:            sequence { "MASK"            space, int:layer_mask_num=@               space }
+LAYER_GROUP_SPACING:         sequence { "SPACING"         space, <NUMBER>:spacing=@           space }
+LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:design_rule_width=@ space }
+LAYER_GROUP_MASK:            sequence { "MASK"            space, int:mask_num=@               space }
 
 // Per-LAYER-group WIDTH statement — sets the default wire width for
 // subsequent shapes (separate from LAYER's MASK / SPACING modifiers).
 LAYER_WIDTH_CMD: sequence {
-  "WIDTH" space, <NUMBER>:layer_default_width=@ space, ";" newline
+  "WIDTH" space, <NUMBER>:width=@ space, ";" newline
 }
 
 SHAPES: sequence array { repeat <SHAPE> }
@@ -965,19 +973,50 @@ VIA_GEOMETRY_BODY: sequence {
 
 VIA_VIARULE_BODY: sequence {
   "VIARULE" space, identifier:via_rule=@ space, ";" newline,
-  "CUTSIZE" space, <NUMBER>:cut_size_x=@ space, <NUMBER>:cut_size_y=@ space, ";" newline,
-  "LAYERS" space, identifier:bot_layer=@ space, identifier:cut_layer=@ space, identifier:top_layer=@ space, ";" newline,
-  "CUTSPACING" space, <NUMBER>:cut_spacing_x=@ space, <NUMBER>:cut_spacing_y=@ space, ";" newline,
-  "ENCLOSURE" space, <NUMBER>:bot_enc_x=@ space, <NUMBER>:bot_enc_y=@ space, <NUMBER>:top_enc_x=@ space, <NUMBER>:top_enc_y=@ space, ";" newline,
-  ?<VIA_ROWCOL_CMD>,
-  ?<VIA_ORIGIN_CMD>,
-  ?<VIA_OFFSET_CMD>,
+  <VIA_CUTSIZE>:cut_size=@,
+  <VIA_LAYERS>:layers=@,
+  <VIA_CUTSPACING>:cut_spacing=@,
+  <VIA_ENCLOSURE>:enclosure=@,
+  ?<VIA_ROWCOL>:rowcol=@,
+  ?<VIA_ORIGIN>:origin=@,
+  ?<VIA_OFFSET>:offset=@,
   ?<VIA_PATTERN_CMD>
 }
 
-VIA_ROWCOL_CMD:  sequence { "ROWCOL"  space, int:rowcol_rows=@ space, int:rowcol_cols=@ space, ";" newline }
-VIA_ORIGIN_CMD:  sequence { "ORIGIN"  space, <NUMBER>:via_origin_x=@ space, <NUMBER>:via_origin_y=@ space, ";" newline }
-VIA_OFFSET_CMD:  sequence { "OFFSET"  space, <NUMBER>:bot_off_x=@ space, <NUMBER>:bot_off_y=@ space, <NUMBER>:top_off_x=@ space, <NUMBER>:top_off_y=@ space, ";" newline }
+// Each VIA-VIARULE sub-clause is its own dict-container; the body
+// binds the whole sub-dict as a field, so the parsed shape reads:
+//   {cut_size: {x: 0.17, y: 0.17},
+//    layers:   {bot: "li1", cut: "mcon", top: "met1"},
+//    cut_spacing: {x: 0.19, y: 0.19},
+//    enclosure: {bot_x: 0.04, bot_y: 0.06, top_x: 0.06, top_y: 0.06},
+//    rowcol: {rows: 2, cols: 3}, origin: {x, y}, offset: {…}, pattern: "…"}
+VIA_CUTSIZE: sequence dict {
+  "CUTSIZE" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ";" newline
+}
+VIA_LAYERS: sequence dict {
+  "LAYERS" space, identifier:bot=@ space, identifier:cut=@ space, identifier:top=@ space, ";" newline
+}
+VIA_CUTSPACING: sequence dict {
+  "CUTSPACING" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ";" newline
+}
+VIA_ENCLOSURE: sequence dict {
+  "ENCLOSURE" space,
+  <NUMBER>:bot_x=@ space, <NUMBER>:bot_y=@ space,
+  <NUMBER>:top_x=@ space, <NUMBER>:top_y=@ space, ";" newline
+}
+VIA_ROWCOL: sequence dict {
+  "ROWCOL" space, int:rows=@ space, int:cols=@ space, ";" newline
+}
+VIA_ORIGIN: sequence dict {
+  "ORIGIN" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ";" newline
+}
+VIA_OFFSET: sequence dict {
+  "OFFSET" space,
+  <NUMBER>:bot_x=@ space, <NUMBER>:bot_y=@ space,
+  <NUMBER>:top_x=@ space, <NUMBER>:top_y=@ space, ";" newline
+}
+// PATTERN is a single string — keep container-less so `pattern` lands
+// directly on the VIA dict (no `{pattern: {pattern: ...}}` redundancy).
 VIA_PATTERN_CMD: sequence { "PATTERN" space, identifier:pattern=@ space, ";" newline }
 
 VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> }

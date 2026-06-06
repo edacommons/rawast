@@ -185,9 +185,9 @@ def test_user_can_construct_macro_with_pins(tmp_path):
         width=1.84,
         height=2.72,
         symmetry=["X", "Y"],
-        site="core",
-        origin_x=0, origin_y=0,
-        foreign_cell="INV_X1", foreign_x=0, foreign_y=0,
+        sites=[mod.MacroSiteRef(name="core")],
+        origin=mod.MacroOrigin(x=0, y=0),
+        foreigns=[mod.MacroForeign(cell="INV_X1", x=0, y=0)],
         pins=[
             mod.PinBlock(
                 name="A", end_name="A",
@@ -559,19 +559,15 @@ def test_lef_spec_coverage_phase1(tmp_path):
                   if it.get("type") == "VIA"
                   and it.get("name") == "spec_via_viarule_form")
     assert via_vr["via_rule"] == "spec_viarule_gen"
-    assert via_vr["cut_size_x"] == 0.17
-    assert via_vr["cut_size_y"] == 0.17
-    assert via_vr["bot_layer"] == "li1"
-    assert via_vr["cut_layer"] == "mcon"
-    assert via_vr["top_layer"] == "met1"
-    assert via_vr["cut_spacing_x"] == 0.19
-    assert via_vr["cut_spacing_y"] == 0.19
-    assert via_vr["bot_enc_x"] == 0.04
-    assert via_vr["top_enc_y"] == 0.06
-    assert via_vr["rowcol_rows"] == 2
-    assert via_vr["rowcol_cols"] == 3
-    assert via_vr["via_origin_x"] == 0.005
-    assert via_vr["bot_off_x"] == 0.01
+    assert via_vr["cut_size"] == {"x": 0.17, "y": 0.17}
+    assert via_vr["layers"] == {"bot": "li1", "cut": "mcon", "top": "met1"}
+    assert via_vr["cut_spacing"] == {"x": 0.19, "y": 0.19}
+    assert via_vr["enclosure"] == {"bot_x": 0.04, "bot_y": 0.06,
+                                   "top_x": 0.06, "top_y": 0.06}
+    assert via_vr["rowcol"] == {"rows": 2, "cols": 3}
+    assert via_vr["origin"] == {"x": 0.005, "y": 0.005}
+    assert via_vr["offset"] == {"bot_x": 0.01, "bot_y": 0.02,
+                                "top_x": 0.03, "top_y": 0.04}
     assert via_vr["pattern"] == "myCutPattern"
 
     viarules = {it["name"]: it for it in items if it.get("type") == "VIARULE"}
@@ -606,13 +602,13 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert macro["fixed_mask"] is True          # FIXEDMASK on MACRO
     assert macro["eeq"] == "spec_macro_eq"       # EEQ reference
     assert macro["source"] == "USER"             # legacy SOURCE clause
-    assert macro["foreign_cell"] == "spec_macro"
-    assert macro["origin_x"] == 0
-    assert macro["origin_y"] == 0
+    assert macro["foreigns"] == [{"cell": "spec_macro", "x": 0, "y": 0}]
+    assert macro["origin"] == {"x": 0, "y": 0}
+    # spec-canonical: SITE clauses now land in a list
+    assert macro["sites"] == [{"name": "spec_site"}]
     assert macro["width"] == 5.0
     assert macro["height"] == 10.0
     assert macro["symmetry"] == ["X", "Y", "R90"]
-    assert macro["site"] == "spec_site"
 
     # DENSITY block captured with nested layers + per-layer rects.
     density = macro["density"]
@@ -638,10 +634,9 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert sig_in["supply_sensitivity"] == "VDD"
     assert sig_in["ground_sensitivity"] == "VSS"
     assert sig_in["must_join"] == "OTHER_PIN"
-    # PIN-level PROPERTY clauses (single-instance via catcher — m2 work
-    # to capture a list of PROPERTY clauses per PIN).
-    assert sig_in["pin_prop_name"] == "prop_pin_i"
-    assert sig_in["pin_prop_value"] == 7
+    # PIN-level PROPERTY clauses — now a list via the `:properties[]=@`
+    # binding, so multiple per-PIN PROPERTYs round-trip losslessly.
+    assert sig_in["properties"] == [{"name": "prop_pin_i", "value": 7}]
     # ANTENNA clauses — captured as a list via the engine's `[]`
     # list-append binding. Each entry is a dict with `kind`, `value`,
     # and optional `layer`. Multiple ANTENNAs of any kind round-trip
@@ -660,10 +655,10 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # LAYER-level modifiers: EXCEPTPGNET / SPACING / DESIGNRULEWIDTH / MASK
     # plus the separate WIDTH statement.
     assert met1_group["except_pg_net"] is True
-    assert met1_group["layer_spacing"] == 0.05
-    assert met1_group["layer_design_rule_width"] == 0.1
-    assert met1_group["layer_mask_num"] == 2
-    assert met1_group["layer_default_width"] == 0.12
+    assert met1_group["spacing"] == 0.05
+    assert met1_group["design_rule_width"] == 0.1
+    assert met1_group["mask_num"] == 2
+    assert met1_group["width"] == 0.12
 
     shapes = met1_group["shapes"]
     # Shape list: Rect(MASK), Rect(ITERATE), Polygon, Polygon(MASK),
@@ -716,8 +711,8 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # Phase 7: MAXVIASTACK and BEGINEXT.
     mvs = next(it for it in items if it.get("type") == "MaxViaStack")
     assert mvs["max_stack"] == 4
-    assert mvs["max_via_stack_bot"] == "met1"
-    assert mvs["max_via_stack_top"] == "met5"
+    assert mvs["range_bot"] == "met1"
+    assert mvs["range_top"] == "met5"
 
     ext = next(it for it in items if it.get("type") == "BeginExt")
     assert ext["name"] == "spec_vendor_ext"
