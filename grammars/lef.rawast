@@ -625,7 +625,7 @@ PIN_NETEXPR: sequence {
 // dict to a `antennas` list on the parent PIN. So a PIN with
 // multiple ANTENNA clauses of any kind round-trips losslessly.
 PIN_ANTENNA_PROP: sequence dict {
-  <PIN_ANTENNA_KIND>:antenna_kind=@ space,
+  <PIN_ANTENNA_KIND>:kind=@ space,
   <PIN_ANTENNA_VALUE>:value=@ space,
   ?<PIN_ANTENNA_LAYER>,
   ";" newline
@@ -636,21 +636,25 @@ PIN_ANTENNA_VALUE: choice {
   identifier
 }
 
+// Discriminator longer-prefix-first: PARTIALMETALSIDEAREA must come
+// before PARTIALMETALAREA, MAXSIDEAREACAR before MAXAREACAR, and
+// ANYDIFFAREA before DIFFAREA, or predictive PEG will match the
+// shorter prefix and fail at the next token.
 PIN_ANTENNA_KIND: choice {
-  "ANTENNADIFFAREA":"AntennaDiffArea",
-  "ANTENNAGATEAREA":"AntennaGateArea",
-  "ANTENNAPARTIALMETALAREA":"AntennaPartialMetalArea",
-  "ANTENNAPARTIALMETALSIDEAREA":"AntennaPartialMetalSideArea",
-  "ANTENNAMAXAREACAR":"AntennaMaxAreaCar",
-  "ANTENNAMAXSIDEAREACAR":"AntennaMaxSideAreaCar",
-  "ANTENNAMAXCUTCAR":"AntennaMaxCutCar",
-  "ANTENNAPARTIALCUTAREA":"AntennaPartialCutArea",
-  "ANTENNAANYDIFFAREA":"AntennaAnyDiffArea",
-  "ANTENNAMODEL":"AntennaModel"
+  "ANTENNAPARTIALMETALSIDEAREA":"PartialMetalSideArea",
+  "ANTENNAPARTIALMETALAREA":"PartialMetalArea",
+  "ANTENNAPARTIALCUTAREA":"PartialCutArea",
+  "ANTENNAMAXSIDEAREACAR":"MaxSideAreaCar",
+  "ANTENNAMAXAREACAR":"MaxAreaCar",
+  "ANTENNAMAXCUTCAR":"MaxCutCar",
+  "ANTENNAANYDIFFAREA":"AnyDiffArea",
+  "ANTENNADIFFAREA":"DiffArea",
+  "ANTENNAGATEAREA":"GateArea",
+  "ANTENNAMODEL":"Model"
 }
 
 PIN_ANTENNA_LAYER: sequence {
-  "LAYER" space, identifier:antenna_layer=@ space
+  "LAYER" space, identifier:layer=@ space
 }
 
 PIN_PORTS: sequence array { repeat <PORT_BLOCK> }

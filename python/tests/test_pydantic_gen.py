@@ -433,7 +433,7 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
     assert amux["direction"] == "INOUT"
     assert amux["use"] == "SIGNAL"
     assert amux["antennas"] == [
-        {"antenna_kind": "AntennaPartialMetalSideArea", "value": 111.168},
+        {"kind": "PartialMetalSideArea", "value": 111.168},
     ]
 
     # OBS section survives.
@@ -619,16 +619,14 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert sig_in["pin_prop_name"] == "prop_pin_i"
     assert sig_in["pin_prop_value"] == 7
     # ANTENNA clauses — captured as a list via the engine's `[]`
-    # list-append binding. Each entry is a dict with antenna_kind,
-    # value, and optional antenna_layer. Multiple ANTENNAs of any
-    # kind round-trip losslessly.
+    # list-append binding. Each entry is a dict with `kind`, `value`,
+    # and optional `layer`. Multiple ANTENNAs of any kind round-trip
+    # losslessly.
     assert sig_in["antennas"] == [
-        {"antenna_kind": "AntennaGateArea", "value": 0.01},
-        {"antenna_kind": "AntennaDiffArea", "antenna_layer": "met1",
-         "value": 0.02},
-        {"antenna_kind": "AntennaPartialMetalArea", "antenna_layer": "met1",
-         "value": 0.05},
-        {"antenna_kind": "AntennaModel", "value": "OXIDE1"},
+        {"kind": "GateArea", "value": 0.01},
+        {"kind": "DiffArea", "layer": "met1", "value": 0.02},
+        {"kind": "PartialMetalArea", "layer": "met1", "value": 0.05},
+        {"kind": "Model", "value": "OXIDE1"},
     ]
 
     # Phase 6: full PORT/OBS layerGeometries.
@@ -687,6 +685,40 @@ def test_lef_spec_coverage_phase1(tmp_path):
     mod = _generate_lef_models(tmp_path)
     model = mod.Library.model_validate(parsed)
     assert model is not None
+
+
+def test_sky130_multi_antenna_cell_round_trips(tmp_path):
+    """A real Sky130 standard cell (sky130_fd_sc_hd__dlymetal6s2s_1)
+    whose PIN X carries TWO ANTENNA clauses of different kinds —
+    `ANTENNADIFFAREA 0.429` followed by `ANTENNAGATEAREA 0.126`.
+    Both must survive in the `antennas` list (engine `:name[]=@`
+    list-append). Sibling PINs with zero or one ANTENNA round-trip
+    too — the `Optional[list[...]]` shape covers absent / list cases.
+    """
+    pytest.importorskip("pydantic")
+    cell_path = REPO_ROOT / "python" / "tests" / "data" \
+        / "sky130_fd_sc_hd_dlymetal6s2s_1.lef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    parsed = g.parse_file(str(cell_path))
+
+    macro = next(it for it in parsed["items"]
+                 if it.get("type") == "Macro")
+    pin_x = next(p for p in macro["pins"] if p["name"] == "X")
+    assert pin_x["antennas"] == [
+        {"kind": "DiffArea", "value": 0.429},
+        {"kind": "GateArea", "value": 0.126},
+    ]
+    pin_a = next(p for p in macro["pins"] if p["name"] == "A")
+    assert pin_a["antennas"] == [{"kind": "GateArea", "value": 0.126}]
+    # Power pins have no ANTENNA — `antennas` key absent from parsed.
+    vgnd = next(p for p in macro["pins"] if p["name"] == "VGND")
+    assert "antennas" not in vgnd
+
+    # Full round-trip through generated Pydantic models.
+    mod = _generate_lef_models(tmp_path)
+    model = mod.Library.model_validate(parsed)
+    dumped = model.model_dump(exclude_none=True, by_alias=True)
+    assert dumped == parsed
 
 
 def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
