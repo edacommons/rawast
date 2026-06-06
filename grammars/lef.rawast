@@ -1306,10 +1306,47 @@ NDR_HARDSPACING: sequence dict {
 // LAYER sub-block: name then a free-order list of WIDTH/SPACING/
 // DIAGSPACING/WIREEXT properties (spec mandates WIDTH first; we're
 // permissive here too).
-NDR_LAYER: sequence dict {
+// NDR LAYER comes in two shapes per LEF/DEF 5.8:
+//   Block form (spec-canonical, gf130bcd / 74hc_pcb / older PDKs):
+//     LAYER name
+//       WIDTH minWidth ;
+//       [SPACING minSpacing ;] ...
+//     END name
+//   Inline form (tool-extension; Sky130 / asap7 / NanGate / Cadence
+//   tools accept it; widely shipped):
+//     LAYER name WIDTH x SPACING y ... ;
+// Distinct `type` discriminators (`Layer` / `LayerBlock`) so the
+// generated Pydantic models keep their discriminated-union
+// dispatch unambiguous. Downstream consumers can pattern-match
+// on type or treat them uniformly (the prop fields are the same).
+// Block form first: its requirement that each prop end in `;`
+// makes it strictly stricter than inline. For inline input
+// (`LAYER name WIDTH 500 SPACING 300 ;`), BLOCK matches "WIDTH
+// 500" then fails on the missing `;` between props — the engine
+// rewinds and falls through to INLINE. For block input (`LAYER
+// name \n WIDTH 500 ; ...`), BLOCK commits cleanly. If INLINE
+// were tried first it would greedily consume the first
+// `WIDTH 500 ;` as a complete LAYER and then leave the rest of
+// the block-form props orphaned outside the NDR.
+NDR_LAYER: choice {
+  <NDR_LAYER_BLOCK>,
+  <NDR_LAYER_INLINE>
+}
+
+NDR_LAYER_INLINE: sequence dict {
   "LAYER":type="Layer" space, identifier:layer=@ space,
   repeat <NDR_LAYER_PROP>,
   ";" newline
+}
+
+NDR_LAYER_BLOCK: sequence dict {
+  "LAYER":type="LayerBlock" space, identifier:layer=@ newline,
+  repeat <NDR_LAYER_PROP_BLOCK>,
+  "END" space, identifier:end_name=@ newline
+}
+
+NDR_LAYER_PROP_BLOCK: sequence {
+  <NDR_LAYER_PROP>, ";" newline
 }
 
 NDR_LAYER_PROP: choice {
