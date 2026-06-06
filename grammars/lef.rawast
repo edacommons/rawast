@@ -329,7 +329,7 @@ SITE_SYMMETRY: sequence {
   <SYMMETRY_LIST>:symmetry=@,
   ";" newline
 }
-SYMMETRY_LIST: sequence array { repeat identifier }
+SYMMETRY_LIST: sequence array { repeat identifier space }
 
 SITE_CLASS: sequence {
   "CLASS" space,

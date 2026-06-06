@@ -227,6 +227,11 @@ bool would_skip_optional(const Grammar& g, NodeId child_id, const SaveState& s) 
 //   2. Key with a Value-kind child — `{"type":"key","key":"sequence",
 //      "value":"sequence"}` (the SEQUENCE_EXPR pattern).
 // Returns nullptr if `b` is neither shape.
+
+// Forward decl: comparator used by discriminator_pair_matches before
+// values_equal_v2's definition appears later in the file.
+bool values_equal_v2(const ValuePtr& a, const Value* b);
+
 ValuePtr discriminator_const_value(const Grammar& g, const Node& b) {
     if (b.kind == NodeKind::Value && !b.is_name) return b.value;
     if (b.kind == NodeKind::Key) {
@@ -236,6 +241,57 @@ ValuePtr discriminator_const_value(const Grammar& g, const Node& b) {
         }
     }
     return nullptr;
+}
+
+// Multi-valued discriminator: handles the additional case where `b`
+// is a Ref-to-Choice whose alternatives are all Key-with-Value-child
+// emit-true keys (e.g. `<VIA_KW>` for `<VIA_KW>:type=@` where VIA_KW
+// is `choice { "VIA":@, "Via":@ }`). Returns every literal the
+// referenced Choice could emit. Empty list means "this isn't the
+// multi-value-discriminator pattern; use discriminator_const_value
+// for the single-value case."
+std::vector<ValuePtr>
+discriminator_choice_values(const Grammar& g, const Node& b) {
+    std::vector<ValuePtr> values;
+    if (b.kind != NodeKind::Choice) return values;
+    for (NodeId alt : b.children) {
+        const Node& a = g.node(g.resolve_ref(alt));
+        if (a.kind != NodeKind::Key) return {};  // not the pattern
+        ValuePtr v = discriminator_const_value(g, a);
+        if (!v) return {};
+        values.push_back(std::move(v));
+    }
+    return values;
+}
+
+// Does the (Value-name `name`, expr `b`) pair pin down a dict field
+// to a specific value (or set of values) that the input dict satisfies?
+// Returns:
+//   * std::nullopt — pair is not a discriminator (e.g. b is a Parse).
+//   * false — discriminator exists but the dict's field doesn't match.
+//   * true — discriminator exists and dict matches.
+// Sees through a Ref so `<VIA_KW>` (a Choice-of-emit-keys) discriminates
+// just like an inline `"VIA":@` would.
+std::optional<bool>
+discriminator_pair_matches(const Grammar& g, const std::string& name,
+                            const Node& b_resolved, const DictValue& dict) {
+    // Single-value form: Value-const or Key-with-Value-child.
+    if (ValuePtr cv = discriminator_const_value(g, b_resolved)) {
+        auto it = dict.data().find(name);
+        if (it == dict.data().end()) return false;
+        return values_equal_v2(it->second, cv.get());
+    }
+    // Multi-value form: Ref-to-Choice-of-emit-keys.
+    auto values = discriminator_choice_values(g, b_resolved);
+    if (!values.empty()) {
+        auto it = dict.data().find(name);
+        if (it == dict.data().end()) return false;
+        for (const auto& v : values) {
+            if (values_equal_v2(it->second, v.get())) return true;
+        }
+        return false;
+    }
+    return std::nullopt;
 }
 
 // Does this Choice alternative have any explicit discriminator?
@@ -253,6 +309,9 @@ bool has_explicit_discriminator(const Grammar& g, NodeId alt_id) {
             const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
             if (a.kind != NodeKind::Value || !a.is_name) continue;
             if (discriminator_const_value(g, b)) return true;
+            // Ref-to-Choice-of-emit-keys also counts (LEF `<VIA_KW>:
+            // type=@` pattern).
+            if (!discriminator_choice_values(g, b).empty()) return true;
         }
         if (!n.children.empty()) {
             const Node& first = g.node(g.resolve_ref(n.children[0]));
@@ -356,6 +415,20 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             auto tok = std::dynamic_pointer_cast<StringValue>(n.value);
             if (tok && tok->data() == peek_key) return true;
         }
+        // Trivial-emit fallback: with no peek to discriminate against,
+        // a Key whose only Value-child holds its own text (the `"X":@`
+        // emit pattern, used in e.g. VIA_DEFAULT_LITERAL's
+        // `"DEFAULT":@ / "Default":@`) is dispatchable as a no-op
+        // canonical form — picks the first alt the surrounding Choice
+        // tries. Lets `<VIA_DEFAULT_LITERAL>:is_default=true` style
+        // bindings emit the keyword without needing a per-alternative
+        // discriminator value in the input dict.
+        if (!peek_value && peek_key.empty()) {
+            for (NodeId c : n.children) {
+                const Node& cn = g.node(g.resolve_ref(c));
+                if (cn.kind == NodeKind::Value && cn.value) return true;
+            }
+        }
         return false;
     }
 
@@ -372,12 +445,39 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         // to handle an IntValue.
         if (p == "string") return vt == ValueType::String;
         if (p == "identifier") {
-            // Reject strings the IdentifierParser wouldn't accept on
-            // re-parse (e.g. dotted names like "gdsii.header"). Lets
-            // Choice dispatch pick a `qualified_identifier` catch-all
-            // alt when the value is a dotted name. The check matches
-            // IdentifierParser's default char set: [A-Za-z_][A-Za-z0-9_]*.
+            // The dispatch check has to cover two parser groups that
+            // both register `identifier`: `std.identifier` (strict
+            // `[A-Za-z_][A-Za-z0-9_]*`) and `lefdef.identifier`
+            // (permissive — accepts dots, digits at start, brackets,
+            // slashes, hyphens; the LEF/DEF spec for things like
+            // `5.8`, `0`, `M1[7:0]`, `inst/pin`, `Via1Array-0`).
+            // Decide by looking up which parser the bare name resolves
+            // to in this grammar: if it's lefdef's, accept any
+            // StringValue (the parser can re-tokenize it). Otherwise
+            // fall back to the strict `[A-Za-z_][A-Za-z0-9_]*` check
+            // so Choice dispatch can still steer dotted names to a
+            // `qualified_identifier` alt in gdsii / rawast contexts.
             if (vt != ValueType::String) return false;
+            if (Parser* pp = g.parser(p)) {
+                if (pp->name() == "identifier") {
+                    // The Parser base class's name() is the registered
+                    // local_name. For lefdef this is also `identifier`
+                    // — same as std. Distinguish by type-id: if it's
+                    // not the std variant, treat as permissive. The
+                    // std `identifier` parser is only registered when
+                    // `use: std` activates without `use: lefdef` after
+                    // it. In any LEF/DEF grammar, `use: lefdef` runs
+                    // later and shadows the bare alias to the
+                    // permissive parser. Detect that by string check
+                    // against a sample dotted name: if `pp` accepts a
+                    // dotted-name re-parse, it's the permissive one.
+                    static const std::string sample = "0.1";
+                    std::istringstream is{sample};
+                    StreamReader sr{is};
+                    auto r = pp->parse(sr);
+                    if (r) return true;   // permissive parser
+                }
+            }
             const auto& s =
                 std::static_pointer_cast<StringValue>(peek_value)->data();
             if (s.empty()) return false;
@@ -411,22 +511,23 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         }
         if (n.container == Container::Dict) {
             if (!peek_value || peek_value->type() != ValueType::Dict) return false;
-            // Check (Value-name, Value-const | Key-with-Value-child)
-            // discriminator pairs — all must match. If no explicit
-            // discriminator exists, this alt is a dict-shaped catch-all
-            // (matches any dict).
-            const auto* dict = dynamic_cast<const DictValue*>(peek_value.get());
+            // Walk (Value-name, expr) discriminator pairs — all
+            // matching pairs must agree with the input dict. `expr`
+            // may be a Value-const, a Key-with-Value-child, or a
+            // Ref-to-Choice-of-emit-keys (LEF's `<VIA_KW>:type=@`
+            // pattern). Pairs that don't form a discriminator are
+            // skipped. If no discriminator pair exists at all, the
+            // alt is a dict-shaped catch-all (matches any dict).
+            const auto& dict = *dynamic_cast<const DictValue*>(peek_value.get());
             for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
                 const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
                 if (a.kind != NodeKind::Value || !a.is_name) continue;
                 auto name_sv = std::dynamic_pointer_cast<StringValue>(a.value);
                 if (!name_sv) continue;
-                ValuePtr cv = discriminator_const_value(g, b);
-                if (!cv) continue;
-                auto it = dict->data().find(name_sv->data());
-                if (it == dict->data().end()) return false;
-                if (!values_equal_v2(it->second, cv.get())) return false;
+                auto m = discriminator_pair_matches(g, name_sv->data(), b, dict);
+                if (!m.has_value()) continue;  // not a discriminator
+                if (!*m) return false;          // discriminator mismatch
             }
             return true;
         }
@@ -526,9 +627,21 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         return false;
     }
 
-    case NodeKind::Choice:
+    case NodeKind::Choice: {
+        // Try each alternative against the peek. The Choice is
+        // dispatchable iff at least one alternative could consume.
+        // Previous coarse "any non-null peek" check was too
+        // permissive and let Repeat-over-Choice loops keep iterating
+        // when no alt actually matched, masking the real "no
+        // dispatchable field" condition in fixed-schema mode.
+        if (!peek_value) return false;
+        for (NodeId alt : n.children) {
+            if (can_consume_peek(g, alt, peek_value, peek_key, s)) return true;
+        }
+        return false;
+    }
     case NodeKind::Repeat:
-        // Choice / Repeat at top of an alt — assume they would dispatch.
+        // Repeat at top of an alt — assume it would dispatch.
         return peek_value != nullptr;
 
     case NodeKind::Value:
@@ -792,14 +905,51 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                                   : (n.children.empty() ? NodeId{}
                                                         : n.children[0]);
         if (!item_id.valid()) return {};
+
+        // Continue while either:
+        //   (a) the queue / pending name has data the item can pull
+        //       (open-schema / array iteration mode), OR
+        //   (b) the top dict scope has an unconsumed field that the
+        //       inner item can dispatch on (fixed-schema catcher mode
+        //       — e.g. `repeat <SITE_PROPERTY>` inside SITE_BLOCK).
+        // Pre-fix, only (a) was checked; fixed-schema Repeats exited
+        // immediately without emitting their body sub-statements.
+        auto fixed_schema_dispatchable = [&]() {
+            const DictScope* scope = s.top_dict();
+            if (!scope) return false;
+            for (const auto& [k, v] : scope->dict->data()) {
+                if (scope->consumed.count(k)) continue;
+                if (can_consume_peek(g, item_id, v, k, s)) return true;
+            }
+            return false;
+        };
+
         bool first = true;
-        while (s.has_q() || s.has_pending()) {
+        while (s.has_q() || s.has_pending() || fixed_schema_dispatchable()) {
             if (!first && sep_id.valid()) {
                 auto r = do_consume(g, out, sep_id, s, depth, pretty);
                 if (!r) return r;
             }
+            // Snapshot full state so we can detect a no-progress
+            // iteration and bail rather than spin forever if the
+            // inner item failed to advance anything (queue, pending,
+            // or dict-scope consumed).
+            auto pre_snap = s.snapshot();
+            const std::size_t pre_consumed =
+                s.top_dict() ? s.top_dict()->consumed.size() : 0;
             auto r = do_consume(g, out, item_id, s, depth, pretty);
             if (!r) return r;
+            auto post_snap = s.snapshot();
+            const std::size_t post_consumed =
+                s.top_dict() ? s.top_dict()->consumed.size() : 0;
+            const bool queue_advanced = post_snap.q_idx != pre_snap.q_idx
+                                         || post_snap.queue_size != pre_snap.queue_size;
+            const bool pending_changed = post_snap.have_pending != pre_snap.have_pending
+                                          || post_snap.pending != pre_snap.pending;
+            const bool consumed_grew = post_consumed > pre_consumed;
+            if (!queue_advanced && !pending_changed && !consumed_grew) {
+                break;
+            }
             first = false;
         }
         return {};
@@ -808,8 +958,26 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     case NodeKind::Choice: {
         NodeId picked = choose_alternative_v2(g, n, s);
         if (!picked.valid()) {
+            // Use-site optional pattern `?<RULE>` where RULE's body is
+            // a Choice: silently skip when no alt can dispatch (matches
+            // the existing optional handling on Sequence). Lets
+            // `?<PROPDEF_DEFAULT>`-style optional Choice references
+            // round-trip cleanly when the field is absent.
+            if (n.is_optional || node_is_optional_chain(g, node_id)) {
+                s.clear_pending();
+                return {};
+            }
+            // Include the rule name (if known) for diagnostics.
+            std::string detail;
+            for (const auto& [rule_name, rule_id] : g.named_rules()) {
+                if (rule_id == rid) {
+                    detail = " (rule " + rule_name + ")";
+                    break;
+                }
+            }
             return tl::unexpected(SaveError{
-                "no matching grammar alternative for value at save_v2"});
+                "no matching grammar alternative for value at save_v2"
+                + detail});
         }
         return do_consume(g, out, picked, s, depth, pretty);
     }
