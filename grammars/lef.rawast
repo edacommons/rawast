@@ -58,7 +58,11 @@ HDR: sequence dict {
   repeat <HDR_CMD>
 }
 HDR_CMD: choice { <BUSBITCHARS_CMD>, <DIVIDERCHAR_CMD> }
-VERSION_CMD:              sequence { "VERSION" space,              identifier:version=@ space,                  ";" newline }
+// LEF/DEF 5.8 §"VERSION": `VERSION versionNumber ;` where
+// versionNumber is a real number (5.8, 5.7, 5.6 …). Bound as
+// <NUMBER> (not identifier) to match the spec's type and to give
+// the parsed dict a numeric `version` field instead of a string.
+VERSION_CMD:              sequence { "VERSION" space,              <NUMBER>:version=@ space,                    ";" newline }
 NAMESCASESENSITIVE_CMD:   sequence { "NAMESCASESENSITIVE" space,   <ON_OFF>:names_case_sensitive=@ space,        ";" newline }
 NOWIREEXTENSIONATPIN_CMD: sequence { "NOWIREEXTENSIONATPIN" space, <ON_OFF>:no_wire_extension_at_pin=@ space,    ";" newline }
 BUSBITCHARS_CMD:          sequence { "BUSBITCHARS" space,          string:bus_bit_chars=@ space,                ";" newline }

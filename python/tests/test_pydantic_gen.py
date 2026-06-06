@@ -479,7 +479,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
 
     # Header — every sub-statement captured.
     hdr = parsed["hdr"]
-    assert hdr["version"] == "5.8"
+    assert hdr["version"] == 5.8     # LEF spec: VERSION is a real number
     assert hdr["names_case_sensitive"] is True
     assert hdr["no_wire_extension_at_pin"] is True
     assert hdr["bus_bit_chars"] == "[]"
