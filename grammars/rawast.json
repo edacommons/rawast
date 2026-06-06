@@ -597,6 +597,17 @@
       },
       {
         "type": "key",
+        "key": "[]",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "list_append",
+            "value": true
+          }
+        ]
+      },
+      {
+        "type": "key",
         "key": "="
       },
       {

@@ -115,6 +115,17 @@ extract_bindings(const ValuePtr& bindings_val) {
                 }
                 name = ns->data();
             }
+            // `list_append: true` flag (set by the meta-grammar when the
+            // surface syntax was `:name[]=@`) is folded back into the
+            // name as a `[]` suffix; the dict-assembly loop in frame.cpp
+            // strips the suffix and appends to a list under the base name.
+            if (auto lit = ed->data().find("list_append");
+                lit != ed->data().end()) {
+                auto bv = std::dynamic_pointer_cast<BoolValue>(lit->second);
+                if (bv && bv->data()) {
+                    name.append("[]");
+                }
+            }
             ValuePtr value;
             if (auto vit = ed->data().find("value");
                 vit != ed->data().end()) {

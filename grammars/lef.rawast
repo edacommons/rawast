@@ -549,7 +549,7 @@ PIN_PROPERTY: choice {
   <PIN_GROUNDSENSITIVITY>,
   <PIN_MUSTJOIN>,
   <PIN_PROPERTY_KV>,
-  <PIN_ANTENNA_PROP>
+  <PIN_ANTENNA_PROP>:antennas[]=@
 }
 
 // SUPPLYSENSITIVITY / GROUNDSENSITIVITY per LEF/DEF 5.8 §"Pin" —
@@ -612,21 +612,19 @@ PIN_NETEXPR: sequence {
 // (ANTENNADIFFAREA, ANTENNAGATEAREA, ANTENNAPARTIALMETALAREA,
 // ANTENNAPARTIALMETALSIDEAREA, ANTENNAMAXAREACAR,
 // ANTENNAMAXSIDEAREACAR, ANTENNAMAXCUTCAR, ANTENNAPARTIALCUTAREA,
-// ANTENNAMODEL, ANTENNAANYDIFFAREA, ...). They all share the same
+// ANTENNAMODEL, ANTENNAANYDIFFAREA). All share the same
 // `KEYWORD value [LAYER layerName] ;` shape, so a single generic
 // rule captures the keyword as `antenna_kind`.
 // ANTENNA value is usually a number (area or factor) but for
 // ANTENNAMODEL it's an identifier (OXIDE1 / OXIDE2 / OXIDE3 /
 // OXIDE4). Choice keeps both forms.
 //
-// Container-less (no `dict`) so `antenna_kind`, `value`, and
-// `antenna_layer` catcher-flatten into the enclosing PIN dict.
-// Limitation: a PIN with multiple ANTENNA clauses of different
-// kinds collapses to last-write-wins (only the final kind/value
-// survives). Real-corpus check (Sky130 IO) shows each PIN has at
-// most one ANTENNA clause, so this is acceptable for now;
-// proper list-of-antennas capture is M2 work.
-PIN_ANTENNA_PROP: sequence {
+// Dict-container — each match emits a {antenna_kind, value,
+// antenna_layer?} dict. PIN_PROPERTY's `:antennas[]=@` binding
+// (engine list-append, see meta-grammar `[]` suffix) appends each
+// dict to a `antennas` list on the parent PIN. So a PIN with
+// multiple ANTENNA clauses of any kind round-trips losslessly.
+PIN_ANTENNA_PROP: sequence dict {
   <PIN_ANTENNA_KIND>:antenna_kind=@ space,
   <PIN_ANTENNA_VALUE>:value=@ space,
   ?<PIN_ANTENNA_LAYER>,

@@ -269,20 +269,34 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
         for b in named:
             fname = b["name"]
             value = b["value"]
+            # `list_append: true` flag (engine `[]` suffix on the name)
+            # turns the field into an optional `list[X]`. The engine
+            # creates the list lazily on first match, so a PIN with no
+            # ANTENNA clauses has no `antennas` key in the parsed dict.
+            # Modelling as `list[X] | None = None` lets `exclude_none`
+            # round-trip both shapes (absent ↔ None, list ↔ list).
+            is_list_append = bool(b.get("list_append"))
             if value == "@":
-                ftype = _type_of(inner, rule_names, grammar, classifications)
-                out.append((fname, ftype, is_optional, None))
+                inner_type = _type_of(inner, rule_names, grammar,
+                                      classifications)
+                if is_list_append:
+                    out.append((fname, f"list[{inner_type}]", True, None))
+                else:
+                    out.append((fname, inner_type, is_optional, None))
             else:
                 lit, default = _literal_type_and_default(value)
-                # Catcher-flattened constants (optional context, e.g.
-                # `FIXEDMASK:fixed_mask=true` inside a `repeat <CHOICE>`)
-                # default to None, not the literal: the literal is only
-                # produced when the catcher branch actually fires.
-                # Direct-binding constants (e.g. `"SITE":type="Site"` on
-                # the SITE_BLOCK opener) keep the literal default because
-                # the parsed dict always has them.
-                out.append((fname, lit, is_optional,
-                            None if is_optional else default))
+                if is_list_append:
+                    out.append((fname, f"list[{lit}]", True, None))
+                else:
+                    # Catcher-flattened constants (optional context, e.g.
+                    # `FIXEDMASK:fixed_mask=true` inside a `repeat <CHOICE>`)
+                    # default to None, not the literal: the literal is only
+                    # produced when the catcher branch actually fires.
+                    # Direct-binding constants (e.g. `"SITE":type="Site"` on
+                    # the SITE_BLOCK opener) keep the literal default
+                    # because the parsed dict always has them.
+                    out.append((fname, lit, is_optional,
+                                None if is_optional else default))
         return out
 
     # No bindings — possibly catcher-flatten, possibly structural-skip.

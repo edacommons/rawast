@@ -404,16 +404,10 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
       * `MACRO ... SOURCE USER ;` — pre-5.6 spec clause, dropped from
         5.7 but still emitted by real PDKs (Sky130 IO is LEF 5.5);
         accepted as a permissive deprecated-form pass-through.
-      * PIN-level ANTENNA clauses (15 in this file) — the unbound-
-        dict-container discard bug, but for PIN_ANTENNA_PROP rather
-        than LAYER_PROPERTY. Fix: make PIN_ANTENNA_PROP container-
-        less so `antenna_kind`, `value`, and `antenna_layer`
-        catcher-flatten into the enclosing PIN dict.
-
-    Limitation acknowledged in the grammar: a PIN with multiple
-    ANTENNA clauses of different kinds collapses to last-write-wins.
-    Sky130 IO has at most one ANTENNA per PIN so this fixture
-    doesn't surface it; M2 work to add a proper list capture.
+      * PIN-level ANTENNA clauses (15 in this file). Each PIN carries
+        them in an `antennas` list via the engine's `[]` list-append
+        binding (`<PIN_ANTENNA_PROP>:antennas[]=@`); multiple ANTENNA
+        clauses of any kind round-trip losslessly.
     """
     pytest.importorskip("pydantic")
     io_path = REPO_ROOT / "python" / "tests" / "data" / "sky130_fd_io_top_xres4v2.lef"
@@ -428,18 +422,19 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
     # SOURCE is the deprecated 5.6-era field that triggered the parse fix.
     assert macro["source"] == "USER"
 
-    # 25 PINs, 15 carry an ANTENNA clause (the captured field).
+    # 25 PINs, 15 carry at least one ANTENNA clause.
     pins = macro["pins"]
     assert len(pins) == 25
-    with_antenna = [p for p in pins if "antenna_kind" in p]
+    with_antenna = [p for p in pins if p.get("antennas")]
     assert len(with_antenna) == 15, \
         f"ANTENNA captures lost — expected 15, got {len(with_antenna)}"
 
     amux = next(p for p in pins if p["name"] == "AMUXBUS_A")
     assert amux["direction"] == "INOUT"
     assert amux["use"] == "SIGNAL"
-    assert amux["antenna_kind"] == "AntennaPartialMetalSideArea"
-    assert amux["value"] == 111.168
+    assert amux["antennas"] == [
+        {"antenna_kind": "AntennaPartialMetalSideArea", "value": 111.168},
+    ]
 
     # OBS section survives.
     assert macro["obs"]["type"] == "Obs"
@@ -449,8 +444,7 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
     mod = _generate_lef_models(tmp_path)
     model = mod.Library.model_validate(parsed)
     assert model.items[0].source == "USER"
-    assert model.items[0].pins[0].antenna_kind is not None or \
-           model.items[0].pins[0].antenna_kind is None  # field exists
+    assert isinstance(model.items[0].pins[0].antennas, list)
 
 
 def test_lef_spec_coverage_phase1(tmp_path):
@@ -624,11 +618,18 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # to capture a list of PROPERTY clauses per PIN).
     assert sig_in["pin_prop_name"] == "prop_pin_i"
     assert sig_in["pin_prop_value"] == 7
-    # ANTENNA clause (single-instance via catcher; multi-ANTENNA-per-
-    # PIN of different kinds would last-write-win today).
-    assert sig_in["antenna_kind"] == "AntennaGateArea"
-    assert sig_in["value"] == 0.05
-    assert sig_in["antenna_layer"] == "met1"
+    # ANTENNA clauses — captured as a list via the engine's `[]`
+    # list-append binding. Each entry is a dict with antenna_kind,
+    # value, and optional antenna_layer. Multiple ANTENNAs of any
+    # kind round-trip losslessly.
+    assert sig_in["antennas"] == [
+        {"antenna_kind": "AntennaGateArea", "value": 0.01},
+        {"antenna_kind": "AntennaDiffArea", "antenna_layer": "met1",
+         "value": 0.02},
+        {"antenna_kind": "AntennaPartialMetalArea", "antenna_layer": "met1",
+         "value": 0.05},
+        {"antenna_kind": "AntennaModel", "value": "OXIDE1"},
+    ]
 
     # Phase 6: full PORT/OBS layerGeometries.
     sig_port = sig_in["ports"][0]

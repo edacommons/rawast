@@ -154,6 +154,7 @@ NAME_BIND: sequence {
 
 VALUE_BIND: sequence {
   identifier:name=@,
+  ?"[]":list_append=true,
   "=",
   <BIND_VAL>:value=@
 }

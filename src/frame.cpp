@@ -109,8 +109,27 @@ void Frame::finish(ValuePool& pool) {
                     have_name = true;
                 }
             } else if (have_name) {
-                map[current_name] = ev.value;
-                pool.register_usage(ev.value, container_ptr);
+                // List-append marker: a binding whose name ends in `[]`
+                // is captured into a list at the stripped-name key.
+                // First match creates the list; subsequent matches
+                // append. The `[]` suffix never appears in the output
+                // dict — it's purely a grammar-author signal.
+                if (current_name.size() >= 2
+                    && current_name.compare(current_name.size() - 2, 2, "[]") == 0) {
+                    std::string base = current_name.substr(0, current_name.size() - 2);
+                    auto& slot = map[base];
+                    auto arr = std::dynamic_pointer_cast<ArrayValue>(slot);
+                    if (!arr) {
+                        arr = std::make_shared<ArrayValue>();
+                        slot = arr;
+                        pool.register_usage(arr, container_ptr);
+                    }
+                    arr->data().push_back(ev.value);
+                    pool.register_usage(ev.value, arr);
+                } else {
+                    map[current_name] = ev.value;
+                    pool.register_usage(ev.value, container_ptr);
+                }
                 have_name = false;
             }
         }
