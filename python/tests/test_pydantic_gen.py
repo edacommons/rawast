@@ -335,12 +335,12 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     for p in via0["properties"]:
         assert "layer" in p or p.get("type") == "Resistance"
 
-    # VIARULE GENERATE blocks carry their interleaved LAYER /
-    # ENCLOSURE / RECT / SPACING properties.
+    # VIARULE GENERATE blocks carry their LAYER sections with
+    # typed sub-clauses (enclosure / rect / spacing / width_range).
     viarules = [it for it in parsed["items"] if it.get("type") == "VIARULE"]
     assert len(viarules) >= 5
-    assert viarules[0].get("properties"), \
-        f"VIARULE lost properties: {viarules[0]}"
+    assert viarules[0].get("layers"), \
+        f"VIARULE lost layer sections: {viarules[0]}"
 
     # The generated Pydantic module imports without error against the
     # new shape (LAYER/VIA/VIARULE now have list[...] properties).
@@ -348,7 +348,9 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     assert hasattr(mod, "Library")
     assert "properties" in mod.LayerBlock.model_fields
     assert "properties" in mod.ViaBlock.model_fields
-    assert "properties" in mod.ViaruleBlock.model_fields
+    # ViaruleBlock now exposes `layers: list[ViaruleLayerSection]`
+    # instead of the flat `properties` list (per task #120).
+    assert "layers" in mod.ViaruleBlock.model_fields
 
 
 def test_sky130_sram_macro_parses_losslessly(tmp_path):
@@ -605,6 +607,21 @@ def test_lef_spec_coverage_phase1(tmp_path):
     viarules = {it["name"]: it for it in items if it.get("type") == "VIARULE"}
     assert "spec_viarule_pair" in viarules
     assert viarules["spec_viarule_gen"]["is_generate"] is True
+    # Each VIARULE body is a list of LAYER sections, each with its
+    # name and typed sub-clauses (enclosure / rect / spacing / etc.).
+    assert viarules["spec_viarule_gen"]["layers"] == [
+        {"name": "li1",  "enclosure": {"overhang1": 0,    "overhang2": 0}},
+        {"name": "met1", "enclosure": {"overhang1": 0.06, "overhang2": 0.03}},
+        {"name": "mcon", "rect": {"x1": -0.085, "y1": -0.085,
+                                    "x2": 0.085,  "y2": 0.085}},
+    ]
+    assert viarules["spec_viarule_pair"]["layers"] == [
+        {"name": "li1",  "enclosure": {"overhang1": 0,    "overhang2": 0}},
+        {"name": "met1", "enclosure": {"overhang1": 0.06, "overhang2": 0.03}},
+        {"name": "mcon", "rect": {"x1": -0.085, "y1": -0.085,
+                                    "x2": 0.085,  "y2": 0.085},
+         "spacing": {"x": 0.36, "y": 0.36}},
+    ]
 
     ndr = next(it for it in items if it.get("type") == "NonDefaultRule")
     assert ndr["name"] == "spec_ndr"

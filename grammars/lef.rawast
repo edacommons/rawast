@@ -1146,11 +1146,11 @@ VIARULE_BLOCK: sequence dict {
   identifier:name=@ space,
   ?<VIARULE_GENERATE_KW>,
   ?<VIA_DEFAULT_KW>,
-  <VIARULE_PROPERTIES>:properties=@,
+  <VIARULE_LAYER_SECTIONS>:layers=@,
   "END" space, identifier:end_name=@ newline
 }
 
-VIARULE_PROPERTIES: sequence array { repeat <VIARULE_PROPERTY> }
+VIARULE_LAYER_SECTIONS: sequence array { repeat <VIARULE_LAYER_SECTION> }
 
 // LEF keyword spec-uppercase ("VIARULE") but some real tools emit
 // mixed-case ("ViaRULE"). Accept both.
@@ -1161,20 +1161,64 @@ VIARULE_KW: choice {
 
 VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }
 
-// VIARULE body items are a flat sequence of: LAYER declarations,
-// LAYER properties (ENCLOSURE / SPACING / etc), and shapes
-// (RECT / POLYGON). Spec-wise the LAYER properties apply to the
-// most recent LAYER declaration; the grammar keeps them flat and
-// leaves grouping to the consumer.
-VIARULE_PROPERTY: choice {
-  <VIARULE_LAYER_DECL>,
-  <VIA_RECT>,
-  <VIA_POLYGON>,
-  <LAYER_PROPERTY>
+// VIARULE body: one or more LAYER sections, each grouping the LAYER
+// name with its specific sub-clauses (ENCLOSURE / RECT / SPACING /
+// WIDTH-range / etc.). Sub-clauses catcher-flatten into the section
+// dict, so the parsed shape reads:
+//   layers: [
+//     {name: "li1",  enclosure: {overhang1: 0,    overhang2: 0}},
+//     {name: "met1", enclosure: {overhang1: 0.06, overhang2: 0.03}},
+//     {name: "mcon", rect: {x1, y1, x2, y2}, spacing: {x, y}},
+//   ]
+// Works for both the LAYER-pair form and the GENERATE form because
+// they share the same LAYER + sub-clause shape.
+VIARULE_LAYER_SECTION: sequence dict {
+  "LAYER" space, identifier:name=@ space, ";" newline,
+  repeat <VIARULE_LAYER_SUB>
 }
 
-VIARULE_LAYER_DECL: sequence dict {
-  "LAYER":type="Layer" space, identifier:layer=@ space, ";" newline
+VIARULE_LAYER_SUB: choice {
+  <VIARULE_ENCLOSURE_CMD>:enclosure=@,
+  <VIARULE_RECT_CMD>:rect=@,
+  <VIARULE_POLYGON_CMD>:polygon=@,
+  <VIARULE_SPACING_CMD>:spacing=@,
+  <VIARULE_WIDTH_RANGE_CMD>:width_range=@,
+  <VIARULE_DIRECTION_CMD>,
+  <VIARULE_RESISTANCE_CMD>,
+  <LAYER_PROPERTY>:properties[]=@
+}
+
+VIARULE_ENCLOSURE_CMD: sequence dict {
+  "ENCLOSURE" space, <NUMBER>:overhang1=@ space, <NUMBER>:overhang2=@ space, ";" newline
+}
+
+VIARULE_RECT_CMD: sequence dict {
+  "RECT" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
+                <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ";" newline
+}
+
+VIARULE_POLYGON_CMD: sequence dict {
+  "POLYGON" space, <POLYGON_POINTS>:points=@, ";" newline
+}
+
+// SPACING in VIARULE GENERATE is `SPACING x BY y` per spec; the
+// `BY` keyword is a structural separator.
+VIARULE_SPACING_CMD: sequence dict {
+  "SPACING" space, <NUMBER>:x=@ space, "BY" space, <NUMBER>:y=@ space, ";" newline
+}
+
+// WIDTH min max — only valid for the GENERATE form's routing-layer
+// sections (spec §"Via Rule Generate").
+VIARULE_WIDTH_RANGE_CMD: sequence dict {
+  "WIDTH" space, <NUMBER>:min=@ space, <NUMBER>:max=@ space, ";" newline
+}
+
+VIARULE_DIRECTION_CMD: sequence {
+  "DIRECTION" space, identifier:direction=@ space, ";" newline
+}
+
+VIARULE_RESISTANCE_CMD: sequence {
+  "RESISTANCE" space, <NUMBER>:resistance=@ space, ";" newline
 }
 
 // === NONDEFAULTRULE block (tech LEF) =====================================
