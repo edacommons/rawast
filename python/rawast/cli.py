@@ -98,6 +98,116 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profile(args: argparse.Namespace) -> int:
+    """Profile parsing across a list of files; print an aggregated
+    per-rule report.
+
+    Aggregates entry_count / fail_count / total_ns per rule_name
+    across every input; max_depth is the deepest seen on any one
+    file. Per-file timings still measure single-call wall-clock,
+    so the total here is the sum of per-call totals (which matches
+    "wall-clock time spent inside parse_from across the corpus" —
+    serial; this CLI doesn't fan out).
+    """
+    from pathlib import Path
+    files = []
+    for arg in args.inputs:
+        p = Path(arg)
+        if p.is_dir():
+            for ext in args.ext.split(","):
+                files.extend(sorted(p.rglob(f"*.{ext.strip()}")))
+        else:
+            files.append(p)
+    if not files:
+        print("profile: no input files", file=sys.stderr)
+        return 1
+
+    g = Grammar.load(args.grammar)
+    g.profile_enable(True)
+
+    # Aggregate: rule_name -> {entry_count, fail_count, total_ns, max_depth}.
+    agg: dict[str, dict[str, int]] = {}
+    grand_total_ns = 0
+    grand_total_frames = 0
+    grand_max_depth = 0
+    file_failures: list[tuple[str, str]] = []
+
+    for f in files:
+        try:
+            g.parse_file(str(f))
+        except Exception as e:
+            file_failures.append((str(f), str(e)[:120]))
+            continue
+        rep = g.last_profile_report()
+        grand_total_ns += rep["total_ns"]
+        grand_total_frames += rep["total_frames"]
+        if rep["max_depth"] > grand_max_depth:
+            grand_max_depth = rep["max_depth"]
+        for e in rep["entries"]:
+            name = e["rule_name"] or f"<inline#{e['node_id']}>"
+            slot = agg.setdefault(name, {
+                "entry_count": 0,
+                "fail_count":  0,
+                "total_ns":    0,
+                "max_depth":   0,
+            })
+            slot["entry_count"] += e["entry_count"]
+            slot["fail_count"]  += e["fail_count"]
+            slot["total_ns"]    += e["total_ns"]
+            if e["max_depth"] > slot["max_depth"]:
+                slot["max_depth"] = e["max_depth"]
+
+    # Skip anonymous unless --top is "all".
+    show_anonymous = (args.top == "all")
+    items = [(name, slot) for name, slot in agg.items()
+             if show_anonymous or not name.startswith("<inline#")]
+
+    sort_key = {
+        "time":  lambda s: s[1]["total_ns"],
+        "count": lambda s: s[1]["entry_count"],
+        "fails": lambda s: s[1]["fail_count"],
+    }[args.by]
+    items.sort(key=sort_key, reverse=True)
+
+    n = 20
+    if args.top == "all":
+        n = 0
+    elif args.top is not None:
+        try:
+            n = max(1, int(args.top))
+        except ValueError:
+            n = 20
+    if n > 0:
+        items = items[:n]
+
+    grand_total_ns = grand_total_ns or 1
+    print("", file=sys.stderr)
+    print(f"corpus profile: {len(files)} files, "
+          f"{grand_total_ns / 1e6:.2f}ms total parse, "
+          f"{grand_total_frames} frames, max depth {grand_max_depth}, "
+          f"sorted by {args.by}",
+          file=sys.stderr)
+    if file_failures:
+        print(f"  ({len(file_failures)} file(s) failed to parse; first: "
+              f"{file_failures[0][0]} — {file_failures[0][1]})",
+              file=sys.stderr)
+    header = (f"  {'rule':<35} {'calls':>9} {'fails':>9} "
+              f"{'ns':>14} {'pct':>5} {'depth':>6}")
+    print(header, file=sys.stderr)
+    print("  " + "-" * (len(header) - 2), file=sys.stderr)
+    for name, slot in items:
+        disp = name if len(name) <= 35 else name[:32] + "..."
+        pct = 100.0 * slot["total_ns"] / grand_total_ns
+        print(f"  {disp:<35} "
+              f"{slot['entry_count']:>9} "
+              f"{slot['fail_count']:>9} "
+              f"{slot['total_ns']:>14} "
+              f"{pct:>4.1f}% "
+              f"{slot['max_depth']:>6}",
+              file=sys.stderr)
+    return 0
+
+
 def cmd_lint(args: argparse.Namespace) -> int:
     g = Grammar.load(args.grammar)
     issues = g.lint()
@@ -182,6 +292,27 @@ def main(argv: list[str] | None = None) -> int:
     p_lint = sub.add_parser("lint", help="Lint a grammar")
     p_lint.add_argument("grammar", help="Grammar file")
     p_lint.set_defaults(func=cmd_lint)
+
+    p_profile = sub.add_parser("profile",
+        help="Parse a list of files (or directories), aggregate per-rule "
+             "entry / fail / time counters, print sorted top-N to stderr")
+    p_profile.add_argument("grammar", help="Grammar file (.rawast or .json)")
+    p_profile.add_argument("inputs", nargs="+",
+                           help="One or more input files / directories. "
+                                "Directories are recursed for files matching "
+                                "the --ext extensions (default: lef,tlef,def).")
+    p_profile.add_argument("--ext", default="lef,tlef,def",
+                           help="Comma-separated extensions to recurse into "
+                                "directories. Default: lef,tlef,def.")
+    p_profile.add_argument("--top", metavar="N",
+                           help="Rows to print (default 20). Pass `all` to "
+                                "print every rule including anonymous "
+                                "(inline) nodes.")
+    p_profile.add_argument("--by", choices=("time", "count", "fails"),
+                           default="time",
+                           help="Sort key: total wall-clock time (default), "
+                                "entry count, or failure count.")
+    p_profile.set_defaults(func=cmd_profile)
 
     p_docs = sub.add_parser("docs", help="Render a grammar as EBNF-flavoured Markdown")
     p_docs.add_argument("grammar", help="Grammar file (.rawast or .json)")
