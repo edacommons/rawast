@@ -105,8 +105,10 @@ are documented in `docs/` and in the prototype's history.
     47 record types, the seven element kinds, full structural schema.
     Parses 1,171 / 1,171 real production GDSII files from open-PDK
     chip flows (Sky130, GF180MCU, IHP130, asap7, gf180, ihp-sg13g2).
-    Synthetic round-trip tests cover save back to byte-identical
-    output (including 2,048-byte alignment padding).
+    Save round-trip on a 750-file local PDK subset is **750 / 750
+    byte-equivalent** through `parse → save → reparse`; synthetic
+    round-trip tests additionally cover byte-identical output
+    (including the 2,048-byte alignment padding).
   - `grammars/lef.rawast` — LEF base-spec (5.8) coverage, less
     LEF58_* (deferred to a consumer-supplied sub-grammar). LAYER
     blocks expose per-TYPE typed fields (`layer_type`, `direction`,
@@ -116,10 +118,13 @@ are documented in `docs/` and in the prototype's history.
     `spacing`); PIN/MACRO bodies cover every spec sub-statement
     including DENSITY, MUSTJOIN, EEQ, FIXEDMASK, and the full
     ANTENNA*-family list capture. Parses 507 / 507 real LEFs across
-    seven PDK / open-platform sources; round-trip-tested against
-    the Sky130 tech LEF, the OpenRAM SRAM, the `top_xres4v2` IO
-    pad, a multi-ANTENNA HD cell, and a synthetic full-spec fixture
-    that exercises every documented clause.
+    seven PDK / open-platform sources; on a 263-file local PDK
+    subset (Sky130 / asap7 / gf130bcd / ihp-sg13g2 / NanGate /
+    gf180 / 74hc_pcb) `parse → save → reparse` is **263 / 263
+    structurally equivalent**, in addition to the synthetic full-
+    spec fixture round-trip and named-cell tests against the Sky130
+    tech LEF, the OpenRAM SRAM, the `top_xres4v2` IO pad, and a
+    multi-ANTENNA HD cell.
   - `grammars/def.rawast` — DEF placement-and-route file format
     (PINS / BLOCKAGES / VIAS / COMPONENTS / NONDEFAULTRULES /
     SPECIALNETS / NETS / FILLS / GCELLGRID / PROPERTYDEFINITIONS).
@@ -135,7 +140,7 @@ are documented in `docs/` and in the prototype's history.
   writes them back via the same save engine. Parse a `.rawast` file,
   modify the AST, emit it back as canonical `.rawast` text — round-
   trips structurally identical.
-- **Test suite**: 252 tests (208 C++ doctest + 44 Python pytest)
+- **Test suite**: 253 tests (208 C++ doctest + 45 Python pytest)
   covering the engine, loader, JSON round-trip, GDSII round-trip,
   linter, pretty-print, the `use:` directive, subparse, per-rule
   ignore, list-append binding, the data-shape schema generator,
@@ -143,7 +148,31 @@ are documented in `docs/` and in the prototype's history.
   LEF-spec fixture plus four real Sky130 PDK files: the HD tech
   LEF, an OpenRAM SRAM, the `top_xres4v2` IO pad, and a multi-
   ANTENNA HD cell). Plus 3,132 real production files across GDSII
-  / LEF / DEF / Tcl parsing 100% end-to-end.
+  / LEF / DEF / Tcl parsing 100% end-to-end, of which a 1,013-file
+  LEF + GDSII subset additionally `parse → save → reparse`s to a
+  structurally equivalent value tree (1,013 / 1,013).
+- **Per-rule parse-time profiling.** `rawast parse --profile <grammar>
+  <file>` prints a top-N table of rules sorted by inclusive parse
+  time, with per-rule entry count, fail count, and deepest stack
+  depth — `--profile-top=N` controls table size (`all` for full).
+  `rawast profile <grammar> <files…>` (or `--from-file LIST`)
+  aggregates the same counters across a corpus, sorted by `time`
+  / `count` / `fails`. The grammar linter and the engine both
+  emit into the same counter pool so the profile and the per-rule
+  dispatch numbers in CI match.
+- **First-byte peek-and-skip engine optimization.** The parse loop
+  precomputes a per-Node first-byte set at grammar-load time
+  (Choice union, Sequence first-non-nullable, Repeat item, Ref
+  chase, known-std-parser sets for `int`/`uint`/`float`/`string`)
+  and uses it to skip optional Refs and Choice alternatives whose
+  first byte can't match the input cursor — no frame push, no
+  parser dispatch, no stream rewind. On the 263-file local LEF
+  corpus this trimmed total parse time from **75.2 s → 60.9 s
+  (-19%)**, with the Sky130 tech LEF alone dropping from
+  **12.5 ms → 6.3 ms (-50%)**. Conservative fallback: anywhere
+  the analysis can't prove a miss (Parse / Raw / cyclic Ref
+  chains), the optimization yields and the original push-and-try
+  path runs.
 
 ## What's planned
 
@@ -190,6 +219,8 @@ pip install -e .
 rawast --help
 rawast lint     grammars/gdsii.rawast
 rawast parse    grammars/json.json file.json
+rawast parse    grammars/lef.rawast file.lef --profile --profile-top=20    # top-20 rules by inclusive parse time
+rawast profile  grammars/lef.rawast --from-file lef_list.txt --by time     # corpus-wide profile aggregation
 rawast docs     grammars/gdsii.rawast      # EBNF-flavoured Markdown reference (grammar input syntax)
 rawast schema   grammars/gdsii.rawast      # value-tree-shape Markdown reference (dict / array / choice — what a producer tool builds before save())
 rawast pydantic grammars/lef.rawast        # generate Pydantic v2 models matching the grammar's parse/save dict shape exactly
