@@ -178,12 +178,59 @@ FirstByteResult compute_node_first_bytes(
         }
         break;
     }
-    case NodeKind::Parse:
-        // Parser-specific. The set is parser-dependent; we don't
-        // statically know it without per-parser introspection. Fall
-        // back to "any" so the engine doesn't wrongly reject.
-        result = any_byte_result();
+    case NodeKind::Parse: {
+        // Some standard terminal parsers have well-defined first-byte
+        // sets that we can hardcode here — `int`/`uint`/`float`
+        // accept only `[0-9+-]` (plus `.` for float), and `string`
+        // requires a leading `"`. Knowing those lets the engine
+        // skip ?<X> optionals like `?<STEP_PATTERN>` (4 int/float
+        // arguments) when the input cursor is on `;` or any other
+        // non-numeric byte. Tested on the LEF corpus: profiles
+        // showed STEP_PATTERN burning 4.7% of parse time at 100%
+        // fail rate, almost entirely from `;`-position dispatches.
+        //
+        // Bare `identifier` / `qualified_identifier` are NOT hardcoded
+        // because they may resolve to either std (strict
+        // `[A-Za-z_]…`) or lefdef (permissive — accepts dots,
+        // hyphens, brackets, digits) — taking the union would be
+        // too permissive to optimize, and being stricter than the
+        // active parser would wrongly skip valid input. Leave them
+        // as "any" until the bare-alias resolution is deterministic
+        // at compute time.
+        std::string pname;
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(n.value)) {
+            pname = sv->data();
+        }
+        auto set_digit_signs = [](std::bitset<256>& b, bool with_plus,
+                                   bool with_dot) {
+            b.set(static_cast<unsigned char>('-'));
+            if (with_plus) b.set(static_cast<unsigned char>('+'));
+            if (with_dot)  b.set(static_cast<unsigned char>('.'));
+            for (char c = '0'; c <= '9'; ++c) {
+                b.set(static_cast<unsigned char>(c));
+            }
+        };
+        if (pname == "int" || pname == "std.int") {
+            set_digit_signs(result.bytes, /*with_plus=*/false,
+                            /*with_dot=*/false);
+            result.known = true;
+        } else if (pname == "uint" || pname == "std.uint") {
+            for (char c = '0'; c <= '9'; ++c) {
+                result.bytes.set(static_cast<unsigned char>(c));
+            }
+            result.known = true;
+        } else if (pname == "float" || pname == "std.float") {
+            set_digit_signs(result.bytes, /*with_plus=*/true,
+                            /*with_dot=*/true);
+            result.known = true;
+        } else if (pname == "string" || pname == "std.string") {
+            result.bytes.set(static_cast<unsigned char>('"'));
+            result.known = true;
+        } else {
+            result = any_byte_result();
+        }
         break;
+    }
     case NodeKind::Raw:
         // Raw consumes anything until a stop literal; first byte
         // unconstrained.
