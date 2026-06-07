@@ -37,11 +37,23 @@
 
 use: std, lefdef
 
-start: <LIBRARY>
+start: <LEF>
 
 // === Top level ============================================================
-
-LIBRARY ignore whitespace line_comment: sequence dict {
+//
+// `LEF` (formerly `LIBRARY`) is the LEF file's top rule. The rename
+// reserves `LIBRARY` for use as one of the PROPERTYDEFINITIONS
+// object-kind keywords (line 230) and leaves room for a sibling
+// `DEF` top rule to live in this same grammar later — `Grammar
+// .parse_file(p, start="DEF")` would dispatch into DEF parsing
+// from the same file, sharing the LEF/DEF common sub-rules
+// (RECT_SHAPE, ANTENNA_KIND, NUMBER, identifier, …). Until DEF
+// rules land, this is just a name change with no behaviour shift.
+// The child rules (LIBRARY_ITEM, LIBRARY_ITEMS, END_LIBRARY) keep
+// their names — they encode LEF spec terminology (the file's
+// inner contents form the "library" of cells per the LEF/DEF 5.8
+// reference; the file is closed by the spec literal `END LIBRARY`).
+LEF ignore whitespace line_comment: sequence dict {
   <HDR>:hdr=@,
   <LIBRARY_ITEMS>:items=@,
   ?<END_LIBRARY>

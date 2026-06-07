@@ -69,7 +69,7 @@ def test_round_trip_min_lef(tmp_path):
     parsed = g.parse_file(str(lef_path))
 
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     dumped = model.model_dump(exclude_none=True, by_alias=True)
 
     assert dumped == parsed, (
@@ -169,7 +169,7 @@ def test_round_trip_macro_lef(tmp_path):
     parsed = g.parse_file(str(lef_path))
 
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     dumped = model.model_dump(exclude_none=True, by_alias=True)
 
     assert dumped == parsed
@@ -250,7 +250,7 @@ def test_round_trip_macro_with_obs(tmp_path):
     parsed = g.parse_file(str(lef_path))
 
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     dumped = model.model_dump(exclude_none=True, by_alias=True)
 
     assert dumped == parsed
@@ -345,7 +345,7 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     # The generated Pydantic module imports without error against the
     # new shape (LAYER/VIA/VIARULE now have list[...] properties).
     mod = _generate_lef_models(tmp_path)
-    assert hasattr(mod, "Library")
+    assert hasattr(mod, "Lef")
     assert "properties" in mod.LayerBlock.model_fields
     assert "properties" in mod.ViaBlock.model_fields
     # ViaruleBlock now exposes `layers: list[ViaruleLayerSection]`
@@ -407,7 +407,7 @@ def test_sky130_sram_macro_parses_losslessly(tmp_path):
     # Generated Pydantic validates against the parsed dict (no extra
     # fields rejected by extra="forbid").
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     assert model is not None
 
 
@@ -457,7 +457,7 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
 
     # Generated Pydantic validates the whole file under extra="forbid".
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     assert model.items[0].source == "USER"
     assert isinstance(model.items[0].pins[0].antennas, list)
 
@@ -791,7 +791,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
 
     # Generated Pydantic validates the whole thing under extra="forbid".
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     assert model is not None
 
 
@@ -858,7 +858,7 @@ def test_sky130_multi_antenna_cell_round_trips(tmp_path):
 
     # Full round-trip through generated Pydantic models.
     mod = _generate_lef_models(tmp_path)
-    model = mod.Library.model_validate(parsed)
+    model = mod.Lef.model_validate(parsed)
     dumped = model.model_dump(exclude_none=True, by_alias=True)
     assert dumped == parsed
 
