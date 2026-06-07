@@ -894,6 +894,19 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                     return {};
                 }
                 for (NodeId c : n.children) {
+                    // Per-child optional skip applies inside an
+                    // optional Sequence too — e.g. `?<STRANS_GROUP>`
+                    // resolves to a Sequence whose children include
+                    // `?gdsii.mag:mag=@` and `?gdsii.angle:angle=@`.
+                    // Without this check, the wrapped Sequence emits
+                    // every child unconditionally and produces an
+                    // empty `angle: []` record on save (which
+                    // re-parses back as a present-but-empty field,
+                    // breaking GDSII binary round-trip on real cells).
+                    if (would_skip_optional(g, c, s)) {
+                        s.clear_pending();
+                        continue;
+                    }
                     auto r = do_consume(g, out, c, s, depth, pretty);
                     if (!r) return r;
                 }
