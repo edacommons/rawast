@@ -520,7 +520,12 @@ MACRO_CLASS: sequence {
   <CLASS_LIST>:class=@,
   ";" newline
 }
-CLASS_LIST: sequence array { repeat identifier }
+// `space` postfix on the identifier — the engine auto-skips
+// whitespace between tokens on parse but needs an explicit
+// separator on save. Without it `["PAD", "POWER"]` (from
+// `CLASS PAD POWER ;`) round-trips as `CLASS PADPOWER ;` and
+// reparses as a single one-word class.
+CLASS_LIST: sequence array { repeat identifier space }
 
 // Dict-container so callers bind it as `:origin=@`, landing on the
 // parent dict as `origin: {x, y}`. Shared between MACRO ORIGIN and
@@ -965,8 +970,13 @@ LAYER_VALUE: choice {
 // piecewise-linear functions like
 //   ANTENNACUMDIFFAREARATIO PWL ( ( 0 200 ) ( 0.159 200 ) ... ) ;
 // Recursive — inner parens are themselves parenthesized groups.
+// `space` postfix on the repeat item: the engine auto-skips
+// whitespace between tokens on parse but needs an explicit
+// separator on save. Without it `(0 75)` round-trips as `(075)`
+// and reparses as the single number `75`, then `(0.0125 75)`
+// becomes `(0.012575)` etc. — every PWL point collapses.
 LAYER_PAREN_GROUP: sequence array {
-  "(" space, repeat <LAYER_VALUE>, ")" space
+  "(" space, repeat <LAYER_VALUE> space, ")" space
 }
 
 // Enumeration of LAYER property keywords used by the generic
