@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include <rawast/node.hpp>
 #include <rawast/value.hpp>
 
 #include <tl/expected.hpp>
@@ -36,7 +37,13 @@ namespace rawast {
 class Grammar;
 struct SaveError;
 
+// `start` is the NodeId of the rule to dispatch from — pass an
+// invalid NodeId (the default-constructed one) to fall back to
+// `g.top()`. Lets a single grammar carry multiple top-level rules
+// (LEF vs DEF in one file) and have the host pick which to save
+// against.
 tl::expected<void, SaveError>
-save_v2(const Grammar& g, std::ostream& out, const ValuePtr& root, bool pretty);
+save_v2(const Grammar& g, std::ostream& out, const ValuePtr& root,
+        bool pretty, NodeId start = {});
 
 } // namespace rawast

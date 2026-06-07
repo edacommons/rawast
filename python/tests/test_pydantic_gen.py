@@ -874,3 +874,49 @@ def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     assert not hasattr(mod, "VersionCmd")
     # The catcher-only choice rule SITE_PROPERTY also has no class.
     assert not hasattr(mod, "SiteProperty")
+
+
+def test_def_prelude_parses_and_saves_round_trip(tmp_path):
+    """The lef.rawast grammar carries a second top rule `DEF` reachable
+    via `start="DEF"` on parse and save. Initial coverage: the file
+    prelude (VERSION / BUSBITCHARS / DIVIDERCHAR), DESIGN, UNITS
+    DISTANCE MICRONS, DIEAREA, ROW (with DO/BY/STEP), and END
+    DESIGN. Exercises the save-side `start=` parameter added so a
+    single grammar with multiple top rules can save against any of
+    them."""
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    src = (
+        "VERSION 5.8 ;\n"
+        'BUSBITCHARS "[]" ;\n'
+        'DIVIDERCHAR "/" ;\n'
+        "DESIGN test_design ;\n"
+        "UNITS DISTANCE MICRONS 1000 ;\n"
+        "DIEAREA ( 0 0 ) ( 200000 200000 ) ;\n"
+        "ROW ROW_0 core 0 0 N DO 78 BY 1 STEP 2540 0 ;\n"
+        "ROW ROW_1 core 0 2540 N DO 78 BY 1 STEP 2540 0 ;\n"
+        "END DESIGN\n"
+    )
+    ast = g.parse_string(src, start="DEF")
+    assert ast["design"]["name"] == "test_design"
+    assert ast["design"]["type"] == "Design"
+
+    units = next(it for it in ast["items"] if it.get("type") == "Units")
+    assert units["database_microns"] == 1000
+
+    diearea = next(it for it in ast["items"] if it.get("type") == "DieArea")
+    assert (diearea["x1"], diearea["y1"]) == (0, 0)
+    assert (diearea["x2"], diearea["y2"]) == (200000, 200000)
+
+    rows = [it for it in ast["items"] if it.get("type") == "Row"]
+    assert len(rows) == 2
+    assert rows[0]["name"] == "ROW_0"
+    assert rows[0]["site"] == "core"
+    assert rows[0]["orient"] == "N"
+    assert rows[0]["num_x"] == 78
+    assert rows[0]["step_x"] == 2540
+
+    # Save round-trip through the new start= parameter — saves
+    # against `DEF` instead of the grammar's default `LEF` top rule.
+    saved = g.save(ast, start="DEF").decode("utf-8")
+    ast2 = g.parse_string(saved, start="DEF")
+    assert ast == ast2

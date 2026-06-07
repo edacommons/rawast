@@ -1396,3 +1396,98 @@ NDR_MINCUTS: sequence dict {
   identifier:cut_layer=@ space,
   int:num_cuts=@ space, ";" newline
 }
+
+// ===========================================================================
+// === DEF top rule + initial body items =====================================
+// ===========================================================================
+//
+// DEF (Design Exchange Format) shares HDR (VERSION / BUSBITCHARS /
+// DIVIDERCHAR) with LEF; everything else is its own rule set,
+// kept namespaced under `DEF_*` so the two top rules can coexist
+// in one grammar file. Future shared sub-rules (RECT_SHAPE,
+// ANTENNA_KIND, NUMBER, identifier, …) will be pulled out of
+// their current LEF homes when DEF starts reusing them; for now
+// each side stays self-contained.
+//
+// Coverage scope of this initial cut (validated against
+// serv/openroad_pcb/serv_rf_top.def):
+//
+//   DESIGN name ;
+//   UNITS DISTANCE MICRONS dbu ;
+//   DIEAREA ( x1 y1 ) ( x2 y2 ) ;
+//   ROW name site x y orient DO numX BY numY STEP stepX stepY ;
+//   END DESIGN
+//
+// Pending and tracked as TODO at the bottom: TRACKS, GCELLGRID,
+// VIAS, NONDEFAULTRULES, COMPONENTS, PINS, NETS, SPECIALNETS,
+// BLOCKAGES, FILLS, PROPERTYDEFINITIONS, HISTORY, REGIONS,
+// SCANCHAINS, GROUPS, BEGINEXT/ENDEXT, plus the trailing
+// PROPERTY/SOURCE/etc. clauses inside each.
+//
+// Reachable via `Grammar.parse_file(p, start="DEF")` /
+// `Grammar.parse_string(...)`. Default start (`<LEF>` in the
+// header) is unchanged — DEF is opt-in.
+DEF ignore whitespace line_comment: sequence dict {
+  <HDR>:hdr=@,
+  <DEF_DESIGN>:design=@,
+  <DEF_ITEMS>:items=@,
+  ?<END_DESIGN>
+}
+
+// `DESIGN name ;` — the DEF spec's required first statement after
+// the optional header block. Emitted as a dict so the design name
+// lands on a `name` field alongside any future DESIGN-attached
+// attributes (TECHNOLOGY, PROPERTY trailers per LEF/DEF 5.8).
+DEF_DESIGN: sequence dict {
+  "DESIGN":type="Design" space, identifier:name=@ space, ";" newline
+}
+
+DEF_ITEMS: sequence array { repeat <DEF_ITEM> }
+
+// Body item Choice — order matters under the predictive PEG: longer
+// or more-distinctive keyword prefixes go first only when needed to
+// disambiguate. UNITS / DIEAREA / ROW have non-overlapping first
+// keywords here.
+DEF_ITEM: choice {
+  <DEF_UNITS_CMD>,
+  <DEF_DIEAREA_CMD>,
+  <DEF_ROW_CMD>
+}
+
+// `UNITS DISTANCE MICRONS n ;` — DEF's UNITS is a single one-line
+// statement, NOT the LEF UNITS block. They share the keyword but
+// nothing else, hence the separate rule.
+DEF_UNITS_CMD: sequence dict {
+  "UNITS":type="Units" space, "DISTANCE" space, "MICRONS" space,
+  <NUMBER>:database_microns=@ space, ";" newline
+}
+
+// `DIEAREA ( x1 y1 ) ( x2 y2 [ x3 y3 …] ) ;` — for an axis-aligned
+// rectangular die, two points. The spec also allows additional
+// points to describe a non-rectangular die polygon; this cut
+// captures the two-point common case. Polygon-die handling lands
+// once a real polygon-die DEF appears in the corpus.
+DEF_DIEAREA_CMD: sequence dict {
+  "DIEAREA":type="DieArea" space,
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space,
+  ";" newline
+}
+
+// `ROW rowName siteName x y orient DO numX BY numY STEP stepX stepY ;`
+// — the LEF/DEF 5.8 §"Row" canonical form. `orient` is one of
+// `N | S | E | W | FN | FS | FE | FW`; captured as an identifier
+// for now (downstream consumers / Pydantic can constrain via Enum
+// if they need it).
+DEF_ROW_CMD: sequence dict {
+  "ROW":type="Row" space,
+  identifier:name=@ space, identifier:site=@ space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  identifier:orient=@ space,
+  "DO" space, <NUMBER>:num_x=@ space,
+  "BY" space, <NUMBER>:num_y=@ space,
+  "STEP" space, <NUMBER>:step_x=@ space, <NUMBER>:step_y=@ space,
+  ";" newline
+}
+
+END_DESIGN: sequence { "END" space, "DESIGN" newline }

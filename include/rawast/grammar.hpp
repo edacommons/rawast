@@ -231,7 +231,8 @@ public:
     // convention ("int" / "uint" / "float" / "string"); null/true/false
     // pick the Key alternative whose Value-child constant identity-matches.
     tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value,
-                                       bool pretty = true) const;
+                                       bool pretty = true,
+                                       NodeId start = {}) const;
 
     // --- Performance: peek-and-skip optional/choice optimization ------
     //

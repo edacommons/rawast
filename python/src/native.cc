@@ -4,6 +4,7 @@
 // (None/bool/int/float/str/list/dict) with no JSON intermediary.
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
@@ -233,17 +234,29 @@ NB_MODULE(_native, m) {
             "Parse a bytes object starting from the named rule.")
 
         .def("save",
-            [](rawast::Grammar& g, nb::handle value, bool pretty) -> nb::object {
+            [](rawast::Grammar& g, nb::handle value, bool pretty,
+               std::optional<std::string> start) -> nb::object {
                 auto v = python_to_value(value);
+                rawast::NodeId start_id{};
+                if (start) {
+                    if (!g.has_rule(*start)) {
+                        throw std::runtime_error(
+                            "save: unknown start rule '" + *start + "'");
+                    }
+                    start_id = g.rule_id(*start);
+                }
                 std::ostringstream out;
-                auto r = g.save(out, v, pretty);
+                auto r = g.save(out, v, pretty, start_id);
                 if (!r) throw std::runtime_error(r.error().message);
                 const std::string s = out.str();
                 // Return bytes — binary-safe for GDSII and similar.
                 return nb::bytes(s.data(), s.size());
             },
             nb::arg("value"), nb::arg("pretty") = true,
-            "Save a value through the grammar. Returns bytes (binary-safe).")
+            nb::arg("start") = nb::none(),
+            "Save a value through the grammar. Returns bytes (binary-"
+            "safe). `start` picks a top rule other than the grammar's "
+            "default (mirrors parse_string/parse_file/parse_bytes).")
 
         .def("lint",
             [](const rawast::Grammar& g) {

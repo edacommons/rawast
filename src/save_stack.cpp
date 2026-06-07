@@ -1156,11 +1156,13 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
 } // namespace
 
 tl::expected<void, SaveError>
-save_v2(const Grammar& g, std::ostream& out, const ValuePtr& root, bool pretty) {
+save_v2(const Grammar& g, std::ostream& out, const ValuePtr& root,
+        bool pretty, NodeId start) {
     if (!root) return tl::unexpected(SaveError{"save: null root value"});
     SaveState s;
     s.push_q({root, false, ""});
-    return do_consume(g, out, g.top(), s, 0, pretty);
+    if (!start.valid()) start = g.top();
+    return do_consume(g, out, start, s, 0, pretty);
 }
 
 } // namespace rawast
