@@ -9,6 +9,7 @@
 
 #include <tl/expected.hpp>
 
+#include <bitset>
 #include <cstddef>
 #include <functional>
 #include <map>
@@ -232,6 +233,31 @@ public:
     tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value,
                                        bool pretty = true) const;
 
+    // --- Performance: peek-and-skip optional/choice optimization ------
+    //
+    // For each Node, precompute the set of input first-bytes its
+    // first non-nullable terminal can begin with. When the parse
+    // driver is about to push a frame for an *optional* Ref (`?<X>`
+    // pattern) or a Choice alternative, it peeks the next input byte
+    // (after ignore-skip) and bails immediately if the byte isn't in
+    // the node's first-byte set. Saves the frame push + key-parse
+    // attempt + rewind that would otherwise burn cycles on shapes
+    // without MASK_MOD / ITERATE_PREFIX / etc.
+    //
+    // Computed by `compute_first_bytes()`, called once at end of
+    // grammar load. Idempotent — safe to call multiple times.
+    //
+    // The bitset has a "wildcard" semantic when `first_bytes_known_`
+    // is false for that NodeId: the engine falls back to the normal
+    // push-and-try path (correctness preserved when the analysis
+    // can't determine a specific set).
+    void compute_first_bytes() const;
+    bool first_byte_might_match(NodeId id, unsigned char byte) const noexcept {
+        if (id.value() >= first_bytes_known_.size()) return true;
+        if (!first_bytes_known_[id.value()])         return true;
+        return first_bytes_[id.value()].test(byte);
+    }
+
     // --- Profiling -----------------------------------------------------
     //
     // When enabled, `parse_from` collects per-node entry / failure /
@@ -287,6 +313,25 @@ private:
     // toggle (see profile_enable()).
     mutable bool          profile_enabled_ = false;
     mutable ProfileReport last_profile_report_;
+
+    // Precomputed per-Node first-byte sets. Indexed by NodeId.value().
+    // first_bytes_known_[i] = true means first_bytes_[i] is the exact
+    // set of input first-bytes the node can begin with; false means
+    // "unknown — fall back to push-and-try". 256 bits = 32 bytes per
+    // entry; reasonable cost for the speed-up. Mutable so
+    // compute_first_bytes() can populate from a `const` Grammar
+    // method (called lazily by parse_from on first use).
+    mutable std::vector<std::bitset<256>> first_bytes_;
+    mutable std::vector<bool>             first_bytes_known_;
+    // Per-NodeId flag: this node is at an `?<...>` use-site optional
+    // position (its own is_optional is set, OR it's a Ref into a
+    // chain where some link carries is_optional). The parse-loop
+    // peek-and-skip check uses this as a fast O(1) guard before
+    // doing the run_ignore + peek work; non-optional pushes (the
+    // common case) early-return without touching the input stream.
+    // Computed alongside first_bytes_.
+    mutable std::vector<bool>             is_optional_chain_;
+    mutable bool                          first_bytes_computed_ = false;
 
     NodeId allocate_(NodeKind kind);
 };

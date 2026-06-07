@@ -114,6 +114,203 @@ void Grammar::set_container(NodeId id, Container c) {
     nodes_[id.value()].container = c;
 }
 
+// --- First-byte precomputation ------------------------------------------
+//
+// For each node, compute the set of input first-bytes its first
+// non-nullable terminal can begin with. Used by parse_from to skip
+// optional / choice-alt frame pushes when the input first byte
+// can't match. Recursive; we memoize during the walk.
+namespace {
+
+struct FirstByteResult {
+    std::bitset<256> bytes;
+    bool nullable = false;
+    bool known    = true;  // false ⇒ "any byte possible, fall back"
+};
+
+// Mark "every byte possible" — used for Parse nodes whose set
+// we don't try to derive analytically.
+inline FirstByteResult any_byte_result() {
+    FirstByteResult r;
+    r.bytes.set();
+    r.nullable = false;
+    r.known    = false;
+    return r;
+}
+
+FirstByteResult compute_node_first_bytes(
+        const Grammar& g, NodeId id,
+        std::vector<int>& state, std::vector<FirstByteResult>& cache) {
+    if (!id.valid()) {
+        FirstByteResult r;
+        r.nullable = true;
+        return r;
+    }
+    std::size_t i = id.value();
+    if (state[i] == 2) return cache[i];
+    if (state[i] == 1) {
+        // Cycle — treat as "unknown" so the parse driver falls back.
+        return any_byte_result();
+    }
+    state[i] = 1;
+
+    FirstByteResult result;
+    NodeId resolved = g.resolve_ref(id);
+    const Node& n = g.node(resolved);
+
+    switch (n.kind) {
+    case NodeKind::Value:
+        // Doesn't consume input.
+        result.nullable = true;
+        break;
+    case NodeKind::Key: {
+        // Single literal token. First byte is the first char of the
+        // key (if non-empty). Otherwise nullable.
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(n.value)) {
+            if (!sv->data().empty()) {
+                result.bytes.set(static_cast<unsigned char>(sv->data().front()));
+                result.known = true;
+            } else {
+                result.nullable = true;
+            }
+        } else {
+            result = any_byte_result();
+        }
+        break;
+    }
+    case NodeKind::Parse:
+        // Parser-specific. The set is parser-dependent; we don't
+        // statically know it without per-parser introspection. Fall
+        // back to "any" so the engine doesn't wrongly reject.
+        result = any_byte_result();
+        break;
+    case NodeKind::Raw:
+        // Raw consumes anything until a stop literal; first byte
+        // unconstrained.
+        result = any_byte_result();
+        break;
+    case NodeKind::Choice: {
+        // Union of children's first-byte sets. Nullable iff any
+        // alternative is nullable.
+        for (NodeId c : n.children) {
+            auto sub = compute_node_first_bytes(g, c, state, cache);
+            if (!sub.known) {
+                result = any_byte_result();
+                break;
+            }
+            result.bytes |= sub.bytes;
+            if (sub.nullable) result.nullable = true;
+        }
+        break;
+    }
+    case NodeKind::Sequence: {
+        // Walk children until we hit a non-nullable one. Children
+        // before that contribute their first-bytes to the union.
+        // If all children nullable, the sequence is nullable.
+        result.nullable = true;
+        bool ok = true;
+        for (NodeId c : n.children) {
+            const Node& cn = g.node(g.resolve_ref(c));
+            if (cn.kind == NodeKind::Value) continue;
+            auto sub = compute_node_first_bytes(g, c, state, cache);
+            if (!sub.known) {
+                result = any_byte_result();
+                ok = false;
+                break;
+            }
+            result.bytes |= sub.bytes;
+            if (!sub.nullable) {
+                result.nullable = false;
+                break;
+            }
+        }
+        if (!ok) break;
+        break;
+    }
+    case NodeKind::Repeat: {
+        // `repeat <X>` is nullable (0 iterations possible) — its
+        // first-byte set is X's first-byte set.
+        result.nullable = true;
+        const std::size_t item_idx = n.has_separator ? 1 : 0;
+        if (item_idx < n.children.size()) {
+            auto sub = compute_node_first_bytes(
+                g, n.children[item_idx], state, cache);
+            if (!sub.known) {
+                result = any_byte_result();
+                result.nullable = true;
+            } else {
+                result.bytes |= sub.bytes;
+            }
+        }
+        break;
+    }
+    case NodeKind::Ref:
+        // Should have been resolved above.
+        result = any_byte_result();
+        break;
+    }
+
+    state[i] = 2;
+    cache[i] = result;
+    return result;
+}
+
+} // namespace
+
+void Grammar::compute_first_bytes() const {
+    if (first_bytes_computed_) return;
+    const std::size_t N = nodes_.size();
+    first_bytes_.assign(N, std::bitset<256>{});
+    first_bytes_known_.assign(N, false);
+    is_optional_chain_.assign(N, false);
+    std::vector<int>             state(N, 0);
+    std::vector<FirstByteResult> cache(N);
+    for (std::size_t i = 0; i < N; ++i) {
+        if (state[i] != 0) continue;
+        compute_node_first_bytes(*this, NodeId{i}, state, cache);
+    }
+    for (std::size_t i = 0; i < N; ++i) {
+        if (state[i] == 2 && cache[i].known) {
+            first_bytes_known_[i] = true;
+            // Nullable nodes: any byte is fine (since "skip" is a
+            // valid match). Encode as "known" + all bits set so the
+            // parse loop's peek check never rejects them.
+            if (cache[i].nullable) {
+                first_bytes_[i].set();
+            } else {
+                first_bytes_[i] = cache[i].bytes;
+            }
+        }
+    }
+    // Precompute the "is this node in an optional chain?" flag per
+    // NodeId. Lets should_skip_optional in parse_from short-circuit
+    // in O(1) on the common case (non-optional pushes). A node is in
+    // an optional chain if its own is_optional is set, OR it's a Ref
+    // and the resolved chain contains an is_optional link.
+    for (std::size_t i = 0; i < N; ++i) {
+        if (nodes_[i].is_optional) {
+            is_optional_chain_[i] = true;
+            continue;
+        }
+        if (nodes_[i].kind != NodeKind::Ref) continue;
+        NodeId cur{i};
+        bool optional = false;
+        while (cur.valid()) {
+            const Node& cn = nodes_[cur.value()];
+            if (cn.is_optional) { optional = true; break; }
+            if (cn.kind != NodeKind::Ref) break;
+            auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
+            if (!sv) break;
+            if (!has_rule(sv->data())) break;
+            NodeId next = rule_id(sv->data());
+            if (next.value() == cur.value()) break;
+            cur = next;
+        }
+        is_optional_chain_[i] = optional;
+    }
+    first_bytes_computed_ = true;
+}
+
 void Grammar::set_separator(NodeId parent, NodeId sep) {
     Node& p = nodes_[parent.value()];
     if (p.has_separator && !p.children.empty()) {
@@ -544,6 +741,68 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // mid-parse would leave the stream advanced — the "treat as empty"
     // path in handle_failure would never rewind. Parallel to Choice's
     // mark/reject around alternative attempts.
+    // Lazily compute per-Node first-byte sets the first time we need
+    // them. Cached on the Grammar across parses.
+    auto ensure_first_bytes = [this]() {
+        if (!first_bytes_computed_) compute_first_bytes();
+    };
+
+    // True if the about-to-be-pushed node is an optional whose
+    // first-byte set is known and doesn't include the next input
+    // byte. Lets the parse driver skip the push + key-parse + rewind
+    // for `?<MASK_MOD>` / `?<ITERATE_PREFIX>` / `?<STEP_PATTERN>` and
+    // every other optional clause that doesn't fire on the current
+    // input. Profiling showed those three alone burn ~14% of the
+    // wall-clock parse time on a real Sky130 / asap7 / gf130bcd
+    // corpus, all at 100% fail rate.
+    //
+    // Conservative: returns false unless the optionality AND the
+    // first-byte miss are both confirmed. Anything ambiguous falls
+    // back to the normal push-and-try path, preserving correctness.
+    // Choice-alt peek-and-skip. Distinct from should_skip_optional:
+    // applies to ANY Choice alternative regardless of optional-chain
+    // status — at a Choice dispatch site, an alt whose first-byte
+    // set is known and doesn't include the next input byte cannot
+    // possibly match, so we can step past it without pushing. The
+    // big payoff is on 46-alt closed-keyword choices like
+    // LAYER_KEYWORD where ~97% of attempts on real LEFs rewind on
+    // the first character of the key.
+    auto choice_alt_cant_match = [this, &sr, &current_ignore,
+                                   &ensure_first_bytes](NodeId alt) -> bool {
+        ensure_first_bytes();
+        NodeId resolved = resolve_ref(alt);
+        if (resolved.value() >= first_bytes_known_.size()) return false;
+        if (!first_bytes_known_[resolved.value()])         return false;
+        run_ignore(sr, current_ignore());
+        auto c = sr.peek();
+        if (!c) return false;
+        return !first_bytes_[resolved.value()].test(
+            static_cast<unsigned char>(*c));
+    };
+
+    auto should_skip_optional = [this, &sr, &current_ignore,
+                                  &ensure_first_bytes](NodeId id) -> bool {
+        // Fast path: precomputed flag tells us in O(1) whether this
+        // node is in an `?<...>` use-site optional chain. Non-
+        // optional pushes (the vast majority — Sequence children,
+        // Choice alts, Repeat items) return immediately without
+        // touching the input stream.
+        ensure_first_bytes();
+        if (id.value() >= is_optional_chain_.size()) return false;
+        if (!is_optional_chain_[id.value()])         return false;
+        NodeId resolved = resolve_ref(id);
+        if (resolved.value() >= first_bytes_known_.size()) return false;
+        if (!first_bytes_known_[resolved.value()])         return false;
+        // Peek the next byte after ignore-skip. Whitespace skipping
+        // is idempotent; if we later push the frame, the inner
+        // terminal re-runs ignore harmlessly.
+        run_ignore(sr, current_ignore());
+        auto c = sr.peek();
+        if (!c) return false;   // EOF — let the engine handle
+        return !first_bytes_[resolved.value()].test(
+            static_cast<unsigned char>(*c));
+    };
+
     auto push_with_optional_mark = [&](NodeId id) {
         push_node(stack, *this, id);
         if (trace_enabled && !stack.empty()) {
@@ -618,6 +877,23 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             popped.pass_values_to(stack.back());
             // Loop to advance the new top frame.
+        }
+    };
+
+    // Push `child_id` or, if it's an optional whose first-byte set
+    // doesn't include the next input byte, advance the parent's
+    // iteration instead. Same observable effect as pushing a
+    // doomed-to-fail frame and recovering through the optional
+    // fallback path — just skips the frame churn. Use this in
+    // place of `push_with_optional_mark` at the dispatch sites
+    // where the next child can be optional.
+    auto push_or_skip_optional = [&](NodeId child_id) {
+        if (should_skip_optional(child_id)) {
+            if (stack.empty()) return;
+            bool more = stack.back().step_next();
+            if (!more) advance_after_child();
+        } else {
+            push_with_optional_mark(child_id);
         }
     };
 
@@ -788,7 +1064,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             produced = pool.intern(produced);
             top.add_value(produced, top.is_name());
             if (top.has_current()) {
-                push_with_optional_mark(top.current_child());
+                push_or_skip_optional(top.current_child());
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
@@ -818,7 +1094,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // Value-kind children, however, contribute their
                 // constants when iterated.
                 if (top.has_current()) {
-                    push_with_optional_mark(top.current_child());
+                    push_or_skip_optional(top.current_child());
                 } else {
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
@@ -882,7 +1158,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 ValuePtr canonical = pool.intern(produced);
                 top.add_value(canonical, top.is_name());
                 if (top.has_current()) {
-                    push_with_optional_mark(top.current_child());
+                    push_or_skip_optional(top.current_child());
                 } else {
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
@@ -920,6 +1196,15 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
 
         case NodeKind::Choice: {
+            // Peek-and-skip alts whose first-byte set can't include
+            // the next input byte. Steps past doomed alts in O(1)
+            // each — for LAYER_KEYWORD (46 alts) and similar
+            // closed-keyword choices, this collapses a 97%
+            // try-and-rewind workload into a single peek + lookup.
+            while (top.has_current()
+                   && choice_alt_cant_match(top.current_child())) {
+                top.step_next();
+            }
             if (top.has_current()) {
                 // Opt-in: if this Choice is marked as backtracking and we
                 // haven't yet issued a stream mark for the current
@@ -931,7 +1216,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
-                push_with_optional_mark(top.current_child());
+                push_or_skip_optional(top.current_child());
+            } else if (stack.size() > 1) {
+                // Every alt's first-byte set excluded the input. The
+                // Choice has nothing more to try; trigger the same
+                // failure-recovery path the normal "Choice exhausted"
+                // unwind takes. handle_failure walks back to the
+                // nearest recoverable level (outer Choice with more
+                // alts, or optional, or repeat).
+                handle_failure(ParseError{
+                    sr.position(),
+                    "no choice alternative matched input first byte"});
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
@@ -951,7 +1246,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         case NodeKind::Sequence:
         case NodeKind::Repeat: {
             if (top.has_current()) {
-                push_with_optional_mark(top.current_child());
+                push_or_skip_optional(top.current_child());
             } else {
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
