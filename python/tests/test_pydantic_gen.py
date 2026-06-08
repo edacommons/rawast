@@ -1402,6 +1402,67 @@ def test_def_spec_coverage_phase1(tmp_path):
         "Net", "Direction", "Unplaced",
     ]
 
+    # Phase 7: PINPROPERTIES + BLOCKAGES + SLOTS.
+    pps = next(it for it in parsed["items"]
+               if it.get("type") == "PinProperties")
+    assert pps["count"] == 3
+    assert [e["type"] for e in pps["entries"]] == [
+        "ComponentPin", "Pin", "ComponentPin",
+    ]
+    # First entry: COMPONENT scope with 2 trailing PROPERTYs.
+    first = pps["entries"][0]
+    assert first["component"] == "spec_comp_full"
+    assert first["pin"] == "in1"
+    assert len(first["properties"]) == 2
+    # Second entry: PIN scope with 1 property.
+    pin_entry = pps["entries"][1]
+    assert pin_entry["pin"] == "spec_pin_clk"
+    assert pin_entry["properties"] == [
+        {"type": "Property", "prop_name": "prop_design_i",
+         "prop_value": 7},
+    ]
+
+    blockages = next(it for it in parsed["items"]
+                     if it.get("type") == "Blockages")
+    assert blockages["count"] == 3
+    # 2 LAYER blockages + 1 PLACEMENT blockage.
+    assert [b["type"] for b in blockages["blockages"]] == [
+        "LayerBlockage", "LayerBlockage", "PlacementBlockage",
+    ]
+    # First LAYER blockage: SLOTS + PUSHDOWN + COMPONENT qualifier
+    # + RECT + POLYGON shapes.
+    lb1 = blockages["blockages"][0]
+    assert lb1["layer"] == "met1"
+    lb1_types = [c["type"] for c in lb1["clauses"]]
+    assert lb1_types == [
+        "SlotsFlag", "PushdownFlag", "Component", "Rect", "Polygon",
+    ]
+    # Second LAYER blockage: 5 qualifier clauses + 1 RECT.
+    lb2 = blockages["blockages"][1]
+    assert lb2["layer"] == "met2"
+    lb2_types = [c["type"] for c in lb2["clauses"]]
+    assert lb2_types == [
+        "FillsFlag", "ExceptPgNetFlag", "Spacing",
+        "DesignRuleWidth", "Mask", "Rect",
+    ]
+    # PLACEMENT blockage: SOFT + PARTIAL + PUSHDOWN + RECT.
+    pb = blockages["blockages"][2]
+    pb_types = [c["type"] for c in pb["clauses"]]
+    assert pb_types == ["SoftFlag", "Partial", "PushdownFlag", "Rect"]
+    partial = next(c for c in pb["clauses"] if c["type"] == "Partial")
+    assert partial["max_density"] == 0.5
+
+    slots = next(it for it in parsed["items"]
+                 if it.get("type") == "Slots")
+    assert slots["count"] == 2
+    s1 = slots["slots"][0]
+    assert s1["layer"] == "met1"
+    assert [sh["type"] for sh in s1["shapes"]] == ["Rect", "Rect"]
+    s2 = slots["slots"][1]
+    assert s2["layer"] == "met2"
+    assert s2["shapes"][0]["type"] == "Polygon"
+    assert len(s2["shapes"][0]["points"]) == 4
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")

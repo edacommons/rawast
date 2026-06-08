@@ -313,4 +313,55 @@ PINS 3 ;
       + UNPLACED ;
 END PINS
 
+# ----- Phase 7: PINPROPERTIES + BLOCKAGES + SLOTS -----
+
+# Per LEF/DEF 5.8 §"Pin Properties". Two entry forms: COMPONENT
+# (component instance + pin name) and PIN (pin name only). Each
+# entry carries `+ PROPERTY` trailers; bound as `properties[]`.
+PINPROPERTIES 3 ;
+  - COMPONENT spec_comp_full in1
+      + PROPERTY prop_d_def_i 100
+      + PROPERTY prop_n_def_s "comp-pin-attr" ;
+  - PIN spec_pin_clk
+      + PROPERTY prop_design_i 7 ;
+  - COMPONENT spec_comp_full out1
+      + PROPERTY prop_design_s "another-attr" ;
+END PINPROPERTIES
+
+# Per LEF/DEF 5.8 §"Blockages". Two entry types: LAYER blockages
+# (per-routing-layer with qualifier flags + RECT/POLYGON shapes)
+# and PLACEMENT blockages (cell-placement exclusion zones with a
+# narrower qualifier set; RECT shapes only).
+BLOCKAGES 3 ;
+  - LAYER met1
+      + SLOTS
+      + PUSHDOWN
+      + COMPONENT spec_comp_full
+      RECT ( 0 0 ) ( 100 100 )
+      POLYGON ( 0 0 ) ( 100 0 ) ( 100 100 ) ( 0 100 ) ;
+  - LAYER met2
+      + FILLS
+      + EXCEPTPGNET
+      + SPACING 0.05
+      + DESIGNRULEWIDTH 0.10
+      + MASK 2
+      RECT ( 200 0 ) ( 300 100 ) ;
+  - PLACEMENT
+      + SOFT
+      + PARTIAL 0.5
+      + PUSHDOWN
+      RECT ( 500 500 ) ( 1500 1500 ) ;
+END BLOCKAGES
+
+# Per LEF/DEF 5.8 §"Slots". Simpler than BLOCKAGES — just
+# LAYER entries with RECT/POLYGON shapes, no `+` qualifier
+# clauses.
+SLOTS 2 ;
+  - LAYER met1
+      RECT ( 0 0 ) ( 10 10 )
+      RECT ( 20 0 ) ( 30 10 ) ;
+  - LAYER met2
+      POLYGON ( 0 0 ) ( 50 0 ) ( 50 50 ) ( 0 50 ) ;
+END SLOTS
+
 END DESIGN

@@ -1689,6 +1689,9 @@ DEF_ITEMS: sequence array { repeat <DEF_ITEM> }
 // `"COMPONENTS"` would otherwise prefix-match `COMPONENTMASKSHIFT`
 // at the leading edge of the input line. Same hazard pattern as
 // SPACING ⊂ SPACINGTABLE in LAYER_KEYWORD.
+// PINPROPERTIES before PINS — same KeyParser-no-word-boundary
+// hazard: `PINS` would otherwise prefix-match the first 4 chars
+// of `PINPROPERTIES`.
 DEF_ITEM: choice {
   <DEF_TECHNOLOGY_CMD>,
   <DEF_HISTORY_CMD>,
@@ -1703,7 +1706,10 @@ DEF_ITEM: choice {
   <DEF_REGIONS_BLOCK>,
   <DEF_COMPONENTMASKSHIFT_CMD>,
   <DEF_COMPONENTS_BLOCK>,
-  <DEF_PINS_BLOCK>
+  <DEF_PINPROPERTIES_BLOCK>,
+  <DEF_PINS_BLOCK>,
+  <DEF_BLOCKAGES_BLOCK>,
+  <DEF_SLOTS_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -2396,5 +2402,207 @@ DEF_PIN_UNPLACED_CLAUSE: sequence dict {
 // pin-level shapes, which the LAYER / POLYGON / VIA clauses
 // above cover directly. Multi-PORT pins will land in a follow-
 // up commit when a real DEF in the corpus uses the form.)
+
+// ===========================================================================
+// === DEF Phase 7 — PINPROPERTIES + BLOCKAGES + SLOTS =======================
+// ===========================================================================
+
+// `PINPROPERTIES num ; - {COMPONENT compName pinName | PIN pinName}
+//  + PROPERTY name value ; ... END PINPROPERTIES` per LEF/DEF 5.8
+// §"Pin Properties". Per-pin metadata; two entry forms.
+DEF_PINPROPERTIES_BLOCK: sequence dict {
+  "PINPROPERTIES":type="PinProperties" space,
+  int:count=@ space, ";" newline,
+  <DEF_PINPROPERTIES_LIST>:entries=@,
+  "END" space, "PINPROPERTIES" newline
+}
+
+DEF_PINPROPERTIES_LIST: sequence array { repeat <DEF_PINPROPERTY_ENTRY> }
+
+// Two entry forms: `COMPONENT compName pinName` or `PIN pinName`.
+// Distinct `type` discriminator per form for save dispatch.
+DEF_PINPROPERTY_ENTRY: choice {
+  <DEF_PINPROPERTY_COMPONENT_ENTRY>,
+  <DEF_PINPROPERTY_PIN_ENTRY>
+}
+
+DEF_PINPROPERTY_COMPONENT_ENTRY: sequence dict {
+  "-" space, "COMPONENT":type="ComponentPin" space,
+  identifier:component=@ space, identifier:pin=@ space,
+  repeat <DEF_PINPROPERTY_CLAUSE>:properties[]=@,
+  ";" newline
+}
+
+DEF_PINPROPERTY_PIN_ENTRY: sequence dict {
+  "-" space, "PIN":type="Pin" space,
+  identifier:pin=@ space,
+  repeat <DEF_PINPROPERTY_CLAUSE>:properties[]=@,
+  ";" newline
+}
+
+DEF_PINPROPERTY_CLAUSE: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space
+}
+
+// `BLOCKAGES num ; - {LAYER name | PLACEMENT} clause+ ;
+//  ... END BLOCKAGES` per LEF/DEF 5.8 §"Blockages". Two entry
+// types: LAYER blockages (per-layer routing-blockage shapes
+// with qualifier clauses for SLOTS/FILLS/PUSHDOWN/etc.) and
+// PLACEMENT blockages (cell-placement exclusion zones, simpler
+// qualifier set).
+DEF_BLOCKAGES_BLOCK: sequence dict {
+  "BLOCKAGES":type="Blockages" space,
+  int:count=@ space, ";" newline,
+  <DEF_BLOCKAGES_LIST>:blockages=@,
+  "END" space, "BLOCKAGES" newline
+}
+
+DEF_BLOCKAGES_LIST: sequence array { repeat <DEF_BLOCKAGE_ENTRY> }
+
+DEF_BLOCKAGE_ENTRY: choice {
+  <DEF_BLOCKAGE_LAYER_ENTRY>,
+  <DEF_BLOCKAGE_PLACEMENT_ENTRY>
+}
+
+// `- LAYER layerName { + qualifier | + RECT/POLYGON shape }+ ;`
+// — qualifier clauses and shape clauses interleave freely in
+// real DEFs; both kinds catcher-flatten into a single
+// `clauses` list on the entry dict, with distinct type
+// discriminators per kind.
+DEF_BLOCKAGE_LAYER_ENTRY: sequence dict {
+  "-" space, "LAYER":type="LayerBlockage" space,
+  identifier:layer=@ space,
+  repeat <DEF_BLOCKAGE_LAYER_CLAUSE>,
+  ";" newline
+}
+
+DEF_BLOCKAGE_LAYER_CLAUSE: choice {
+  // Qualifier flags (boolean) and qualifier values.
+  <DEF_BLOCKAGE_SLOTS_FLAG>:clauses[]=@,
+  <DEF_BLOCKAGE_FILLS_FLAG>:clauses[]=@,
+  <DEF_BLOCKAGE_PUSHDOWN_FLAG>:clauses[]=@,
+  <DEF_BLOCKAGE_EXCEPTPGNET_FLAG>:clauses[]=@,
+  <DEF_BLOCKAGE_COMPONENT>:clauses[]=@,
+  <DEF_BLOCKAGE_SPACING>:clauses[]=@,
+  <DEF_BLOCKAGE_DRW>:clauses[]=@,
+  <DEF_BLOCKAGE_MASK>:clauses[]=@,
+  // Shape clauses.
+  <DEF_BLOCKAGE_RECT>:clauses[]=@,
+  <DEF_BLOCKAGE_POLYGON>:clauses[]=@
+}
+
+DEF_BLOCKAGE_SLOTS_FLAG: sequence dict {
+  "+" space, "SLOTS":type="SlotsFlag":is_slots=true space
+}
+DEF_BLOCKAGE_FILLS_FLAG: sequence dict {
+  "+" space, "FILLS":type="FillsFlag":is_fills=true space
+}
+DEF_BLOCKAGE_PUSHDOWN_FLAG: sequence dict {
+  "+" space, "PUSHDOWN":type="PushdownFlag":is_pushdown=true space
+}
+DEF_BLOCKAGE_EXCEPTPGNET_FLAG: sequence dict {
+  "+" space, "EXCEPTPGNET":type="ExceptPgNetFlag":is_except_pgnet=true space
+}
+DEF_BLOCKAGE_COMPONENT: sequence dict {
+  "+" space, "COMPONENT":type="Component" space,
+  identifier:component=@ space
+}
+DEF_BLOCKAGE_SPACING: sequence dict {
+  "+" space, "SPACING":type="Spacing" space,
+  <NUMBER>:spacing=@ space
+}
+DEF_BLOCKAGE_DRW: sequence dict {
+  "+" space, "DESIGNRULEWIDTH":type="DesignRuleWidth" space,
+  <NUMBER>:design_rule_width=@ space
+}
+DEF_BLOCKAGE_MASK: sequence dict {
+  "+" space, "MASK":type="Mask" space, int:mask=@ space
+}
+
+DEF_BLOCKAGE_RECT: sequence dict {
+  "RECT":type="Rect" space,
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+
+DEF_BLOCKAGE_POLYGON: sequence dict {
+  "POLYGON":type="Polygon" space,
+  <DEF_BLOCKAGE_POLYGON_POINTS>:points=@
+}
+DEF_BLOCKAGE_POLYGON_POINTS: sequence array {
+  repeat+ <DEF_BLOCKAGE_POLYGON_POINT>
+}
+DEF_BLOCKAGE_POLYGON_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+// `- PLACEMENT [+ SOFT | + PARTIAL maxDensity | + PUSHDOWN |
+//   + COMPONENT name] RECT ( pt pt )+ ;` — placement-blockage
+// entry. Simpler qualifier set than LAYER blockage; only RECT
+// shapes (no POLYGON per spec).
+DEF_BLOCKAGE_PLACEMENT_ENTRY: sequence dict {
+  "-" space, "PLACEMENT":type="PlacementBlockage" space,
+  repeat <DEF_BLOCKAGE_PLACEMENT_CLAUSE>,
+  ";" newline
+}
+
+DEF_BLOCKAGE_PLACEMENT_CLAUSE: choice {
+  <DEF_BLOCKAGE_PLACEMENT_SOFT>:clauses[]=@,
+  <DEF_BLOCKAGE_PLACEMENT_PARTIAL>:clauses[]=@,
+  <DEF_BLOCKAGE_PUSHDOWN_FLAG>:clauses[]=@,
+  <DEF_BLOCKAGE_COMPONENT>:clauses[]=@,
+  <DEF_BLOCKAGE_RECT>:clauses[]=@
+}
+
+DEF_BLOCKAGE_PLACEMENT_SOFT: sequence dict {
+  "+" space, "SOFT":type="SoftFlag":is_soft=true space
+}
+DEF_BLOCKAGE_PLACEMENT_PARTIAL: sequence dict {
+  "+" space, "PARTIAL":type="Partial" space,
+  <NUMBER>:max_density=@ space
+}
+
+// `SLOTS num ; - LAYER name shape+ ; ... END SLOTS` per
+// LEF/DEF 5.8 §"Slots". Per-layer slot shapes (gaps in metal
+// fills, used by some PDKs for density control). Simpler than
+// BLOCKAGES — no qualifier clauses, just RECT/POLYGON shapes.
+DEF_SLOTS_BLOCK: sequence dict {
+  "SLOTS":type="Slots" space,
+  int:count=@ space, ";" newline,
+  <DEF_SLOTS_LIST>:slots=@,
+  "END" space, "SLOTS" newline
+}
+
+DEF_SLOTS_LIST: sequence array { repeat <DEF_SLOT_ENTRY> }
+
+DEF_SLOT_ENTRY: sequence dict {
+  "-" space, "LAYER":type="Slot" space, identifier:layer=@ space,
+  repeat <DEF_SLOT_SHAPE>,
+  ";" newline
+}
+
+DEF_SLOT_SHAPE: choice {
+  <DEF_SLOT_RECT>:shapes[]=@,
+  <DEF_SLOT_POLYGON>:shapes[]=@
+}
+
+DEF_SLOT_RECT: sequence dict {
+  "RECT":type="Rect" space,
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+
+DEF_SLOT_POLYGON: sequence dict {
+  "POLYGON":type="Polygon" space,
+  <DEF_SLOT_POLYGON_POINTS>:points=@
+}
+DEF_SLOT_POLYGON_POINTS: sequence array {
+  repeat+ <DEF_SLOT_POLYGON_POINT>
+}
+DEF_SLOT_POLYGON_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
