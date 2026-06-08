@@ -4,6 +4,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace rawast {
 
@@ -164,6 +165,224 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
                 "unreachable. Either set `backtrack: true` on the Choice or "
                 "restructure the grammar so the alternatives have distinct "
                 "initial terminals.";
+            issues.push_back(std::move(issue));
+        }
+    }
+
+    // Wildcard-rule-with-nested-Choice-type-emit anti-pattern.
+    //
+    // Save-side Choice dispatch picks an alternative by examining
+    // each alt's discriminator. When the alt is a Rule body of shape
+    // `sequence dict { ... }` with NO top-level (Value-name X,
+    // Value-const C) / (Value-name X, Key-with-Value-child) pair —
+    // i.e. no `:type="..."`-style emit directly in the rule body —
+    // the can_consume() check at can_consume_peek's Dict-container
+    // fast-path returns TRUE for any input dict (no discriminator
+    // can mismatch when there's no discriminator). The alt becomes
+    // a wildcard.
+    //
+    // That's normally fine — wildcards are intentional catch-alls.
+    // BUT when the rule body contains a Ref to a nested Choice whose
+    // own alternatives each emit a `type=` discriminator, the rule
+    // ISN'T really a catch-all: it only handles the type values its
+    // nested Choice covers. The outer dispatch can't see those
+    // values though, so the wildcard rule swallows ALL dict types,
+    // and the inner Choice fails when the input's type is one the
+    // nested Choice doesn't cover.
+    //
+    // Concrete failure mode (commit before c0c7029):
+    //   DEF_SPECIALNET_CLAUSE: choice {
+    //     <DEF_SPECIALNET_ROUTED>:clauses[]=@,           // <- alt
+    //     <DEF_SPECIALNET_BODY_RECT>:clauses[]=@, ...
+    //   }
+    //   DEF_SPECIALNET_ROUTED: sequence dict {
+    //     "+" space,
+    //     <DEF_SPECIALNET_ROUTE_KW>,                     // <- nested Choice
+    //     ...
+    //   }
+    //   DEF_SPECIALNET_ROUTE_KW: choice {
+    //     <DEF_SPECIALNET_ROUTE_ROUTED>,                 // type="Routed"
+    //     <DEF_SPECIALNET_ROUTE_FIXED>,                  // type="FixedRoute"
+    //   }
+    // No (Value-name, Value-const) pair at DEF_SPECIALNET_ROUTED's
+    // top level, so it's a wildcard. A `+ RECT ...` clause
+    // (type="Rect") gets dispatched there. Inside, ROUTE_KW's alts
+    // don't match "Rect", and the save fails with "no matching
+    // grammar alternative for value at save".
+    //
+    // Fix is to lift each nested Choice alternative to a sibling
+    // rule of the outer Choice so each one ends up with a direct
+    // type discriminator visible to the outer dispatcher.
+
+    // Helper: does this rule body have a top-level discriminator
+    // pair? Mirrors discriminator_pair_matches' SHAPE check in
+    // save_stack.cpp — three legitimate shapes:
+    //   (Value-name X, Value-const C)
+    //   (Value-name X, Key-with-Value-child)
+    //   (Value-name X, Ref-to-Choice-of-emit-keys)
+    // The third shape (`<KW>:type=@` where KW is a choice of direct
+    // `"FOO":@` / `"BAR":@` keys) is the LEGITIMATE multi-value
+    // discriminator pattern — save's discriminator_choice_values
+    // sees through it. NOT the bug case.
+    auto rule_has_top_level_discriminator =
+        [&g](const Node& body) -> bool {
+        if (body.kind != NodeKind::Sequence) return false;
+        for (std::size_t i = 0; i + 1 < body.children.size(); ++i) {
+            const Node& a = g.node(g.resolve_ref(body.children[i]));
+            const Node& b = g.node(g.resolve_ref(body.children[i + 1]));
+            if (a.kind != NodeKind::Value || !a.is_name) continue;
+            // Shape 1: Value-name + Value-const.
+            if (b.kind == NodeKind::Value && !b.is_name && b.value) return true;
+            // Shape 2: Value-name + Key-with-Value-child.
+            if (b.kind == NodeKind::Key) {
+                for (NodeId kc : b.children) {
+                    const Node& kcn = g.node(g.resolve_ref(kc));
+                    if (kcn.kind == NodeKind::Value && kcn.value) return true;
+                }
+            }
+            // Shape 3: Value-name + Ref-to-Choice-of-emit-keys.
+            // The Choice must have alts that are themselves direct
+            // Keys with Value-child emit — the
+            // discriminator_choice_values pattern.
+            if (b.kind == NodeKind::Choice) {
+                bool all_emit_keys = !b.children.empty();
+                for (NodeId alt : b.children) {
+                    const Node& altn = g.node(g.resolve_ref(alt));
+                    if (altn.kind != NodeKind::Key) {
+                        all_emit_keys = false; break;
+                    }
+                    bool emits = false;
+                    for (NodeId kc : altn.children) {
+                        const Node& kcn = g.node(g.resolve_ref(kc));
+                        if (kcn.kind == NodeKind::Value && kcn.value) {
+                            emits = true; break;
+                        }
+                    }
+                    if (!emits) { all_emit_keys = false; break; }
+                }
+                if (all_emit_keys) return true;
+            }
+        }
+        return false;
+    };
+
+    // Helper: does this node resolve to a Choice whose alternatives
+    // each carry a `type=` emit (Key with Value-child somewhere
+    // inside the alt's Sequence body)?
+    auto choice_alts_carry_type = [&g](NodeId node_id) -> bool {
+        NodeId resolved = g.resolve_ref(node_id);
+        if (!resolved.valid()) return false;
+        const Node& n = g.node(resolved);
+        if (n.kind != NodeKind::Choice) return false;
+        if (n.children.empty()) return false;
+        for (NodeId alt : n.children) {
+            NodeId alt_resolved = g.resolve_ref(alt);
+            if (!alt_resolved.valid()) return false;
+            // Walk the alt looking for a discriminator emit:
+            //   * A Key node with a Value-child holding a const.
+            //   * A standalone Value node (not is_name) with a value
+            //     — the (Value-name, Value-const) pair shape that
+            //     discriminator_const_value also accepts.
+            bool has_emit = false;
+            std::vector<NodeId> walk = {alt_resolved};
+            for (std::size_t i = 0; i < walk.size() && !has_emit; ++i) {
+                const Node& w = g.node(walk[i]);
+                if (w.kind == NodeKind::Key) {
+                    for (NodeId kc : w.children) {
+                        const Node& kcn = g.node(g.resolve_ref(kc));
+                        if (kcn.kind == NodeKind::Value && kcn.value) {
+                            has_emit = true; break;
+                        }
+                    }
+                } else if (w.kind == NodeKind::Value
+                           && !w.is_name && w.value) {
+                    has_emit = true;
+                } else if (w.kind == NodeKind::Sequence) {
+                    for (NodeId c : w.children) {
+                        walk.push_back(g.resolve_ref(c));
+                    }
+                }
+            }
+            if (!has_emit) return false;
+        }
+        return true;
+    };
+
+    // Reverse-lookup: NodeId -> rule name (for human-readable lint
+    // messages). Built once.
+    std::map<std::size_t, std::string> node_to_rule;
+    for (const auto& [name, id] : g.named_rules()) {
+        node_to_rule.emplace(id.value(), name);
+    }
+    auto name_of = [&](NodeId id) -> std::string {
+        auto it = node_to_rule.find(id.value());
+        return it == node_to_rule.end() ? std::string("?") : it->second;
+    };
+
+    for (std::size_t i = 0; i < g.node_count(); ++i) {
+        NodeId outer_id{i};
+        const Node& outer = g.node(outer_id);
+        if (outer.kind != NodeKind::Choice) continue;
+        if (outer.children.size() < 2) continue;
+
+        for (std::size_t a = 0; a < outer.children.size(); ++a) {
+            NodeId alt_id = outer.children[a];
+            NodeId alt_resolved = g.resolve_ref(alt_id);
+            if (!alt_resolved.valid()) continue;
+            const Node& alt = g.node(alt_resolved);
+
+            // Find the underlying sequence-dict rule body. The alt
+            // is typically a wrapper Sequence containing a Ref-to-
+            // Rule plus a binding marker; alternatively it could be
+            // an inline sequence-dict directly.
+            NodeId rule_body_id;
+            if (alt.kind == NodeKind::Sequence
+                && alt.container == Container::Dict) {
+                rule_body_id = alt_resolved;
+            } else if (alt.kind == NodeKind::Sequence) {
+                for (NodeId c : alt.children) {
+                    NodeId c_resolved = g.resolve_ref(c);
+                    if (!c_resolved.valid()) continue;
+                    const Node& cn = g.node(c_resolved);
+                    if (cn.kind == NodeKind::Sequence
+                        && cn.container == Container::Dict
+                        && c_resolved != alt_resolved) {
+                        rule_body_id = c_resolved;
+                        break;
+                    }
+                }
+            }
+            if (!rule_body_id.valid()) continue;
+
+            const Node& body = g.node(rule_body_id);
+            if (rule_has_top_level_discriminator(body)) continue;
+
+            bool found = false;
+            for (NodeId c : body.children) {
+                if (choice_alts_carry_type(c)) { found = true; break; }
+            }
+            if (!found) continue;
+
+            LintIssue issue;
+            issue.choice_node  = outer_id;
+            issue.token        = "(wildcard-with-nested-type-choice)";
+            issue.alternatives = {a};
+            issue.description =
+                "Choice rule `" + name_of(outer_id) + "` "
+                "alternative " + std::to_string(a) + " (`" +
+                name_of(rule_body_id) + "`) is a dict rule with "
+                "NO top-level `:type=...` discriminator, but its "
+                "body contains a nested Choice whose alternatives "
+                "DO emit `type=` values. Save-side dispatch can't "
+                "introspect into the nested Choice, so this rule "
+                "looks like a wildcard catch-all and may swallow "
+                "values destined for sibling alternatives, then "
+                "fail on the inner Choice with \"no matching "
+                "grammar alternative for value at save\". Lift "
+                "each nested-Choice alternative to a sibling rule "
+                "of the outer Choice so each one ends up with a "
+                "direct type discriminator visible to the outer "
+                "dispatcher.";
             issues.push_back(std::move(issue));
         }
     }

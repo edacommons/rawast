@@ -3272,7 +3272,10 @@ DEF_NET_CLAUSE: choice {
   <DEF_NET_ESTCAP>:clauses[]=@,
   <DEF_NET_WEIGHT>:clauses[]=@,
   <DEF_NET_PROPERTY>:clauses[]=@,
-  <DEF_NET_ROUTED>:clauses[]=@
+  <DEF_NET_ROUTED>:clauses[]=@,
+  <DEF_NET_FIXED>:clauses[]=@,
+  <DEF_NET_COVER>:clauses[]=@,
+  <DEF_NET_NOSHIELD>:clauses[]=@
 }
 
 DEF_NET_FREQUENCY: sequence dict {
@@ -3321,34 +3324,39 @@ DEF_NET_PROPERTY: sequence dict {
   identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
 }
 
-// NET routing clause — `+ {ROUTED|FIXED|COVER|NOSHIELD} layer
-// [+ qualifiers] (path elements)+`. Note: NET routes don't
-// have an explicit width — it's inherited from the NDR or the
-// LEF technology.
+// NET routing clauses — `+ {ROUTED|FIXED|COVER|NOSHIELD} layer
+// [+ qualifiers] (path elements)+`. Note: NET routes don't have
+// an explicit width (inherited from NDR or tech LEF).
+//
+// Same pattern as DEF_SPECIALNET_ROUTED/_FIXED/_COVER/_SHIELD:
+// four separate sibling rules with direct `:type=...`
+// discriminators, NOT a nested Choice keyword. Save-side
+// dispatch can introspect the type discriminator on each rule;
+// the lint catches the nested-Choice anti-pattern and flagged
+// the previous shape here.
 DEF_NET_ROUTED: sequence dict {
-  "+" space,
-  <DEF_NET_ROUTE_KW>,
+  "+" space, "ROUTED":type="Routed" space,
   identifier:layer=@ space,
   repeat <DEF_NET_ROUTE_QUAL>,
   repeat+ <DEF_NET_PATH_ELEM>
 }
-DEF_NET_ROUTE_KW: choice {
-  <DEF_NET_ROUTE_NOSHIELD>,
-  <DEF_NET_ROUTE_ROUTED>,
-  <DEF_NET_ROUTE_FIXED>,
-  <DEF_NET_ROUTE_COVER>
+DEF_NET_FIXED: sequence dict {
+  "+" space, "FIXED":type="FixedRoute" space,
+  identifier:layer=@ space,
+  repeat <DEF_NET_ROUTE_QUAL>,
+  repeat+ <DEF_NET_PATH_ELEM>
 }
-DEF_NET_ROUTE_ROUTED: sequence {
-  "ROUTED":type="Routed" space
+DEF_NET_COVER: sequence dict {
+  "+" space, "COVER":type="CoverRoute" space,
+  identifier:layer=@ space,
+  repeat <DEF_NET_ROUTE_QUAL>,
+  repeat+ <DEF_NET_PATH_ELEM>
 }
-DEF_NET_ROUTE_FIXED: sequence {
-  "FIXED":type="FixedRoute" space
-}
-DEF_NET_ROUTE_COVER: sequence {
-  "COVER":type="CoverRoute" space
-}
-DEF_NET_ROUTE_NOSHIELD: sequence {
-  "NOSHIELD":type="NoShield" space
+DEF_NET_NOSHIELD: sequence dict {
+  "+" space, "NOSHIELD":type="NoShield" space,
+  identifier:layer=@ space,
+  repeat <DEF_NET_ROUTE_QUAL>,
+  repeat+ <DEF_NET_PATH_ELEM>
 }
 
 // ===========================================================================
