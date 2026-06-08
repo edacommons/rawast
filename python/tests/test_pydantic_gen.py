@@ -1568,6 +1568,53 @@ def test_def_spec_coverage_phase1(tmp_path):
         "Use", "FixedRoute", "CoverRoute",
     ]
 
+    # Phase 10: SCANCHAINS + GROUPS + BEGINEXT.
+    chains = next(it for it in parsed["items"]
+                  if it.get("type") == "ScanChains")
+    assert chains["count"] == 2
+    full_chain = chains["chains"][0]
+    assert full_chain["name"] == "chain_full"
+    full_clause_types = [c["type"] for c in full_chain["clauses"]]
+    assert full_clause_types == [
+        "CommonScanPins", "Start", "Floating", "Ordered",
+        "Stop", "Partition",
+    ]
+    # FLOATING entries — each is `compName + optional (IN/OUT/BITS)`.
+    floating = next(c for c in full_chain["clauses"]
+                    if c["type"] == "Floating")
+    assert len(floating["entries"]) == 2
+    assert floating["entries"][0]["comp"] == "flop_a"
+    # PARTITION with optional MAXBITS.
+    partition = next(c for c in full_chain["clauses"]
+                     if c["type"] == "Partition")
+    assert partition["partition"] == "partition_a"
+    assert partition["max_bits"] == 32
+    # Minimal chain — just START + STOP.
+    minimal_chain = chains["chains"][1]
+    assert [c["type"] for c in minimal_chain["clauses"]] == ["Start", "Stop"]
+
+    groups = next(it for it in parsed["items"]
+                  if it.get("type") == "Groups")
+    assert groups["count"] == 2
+    main_group = groups["groups"][0]
+    assert main_group["name"] == "cluster_main"
+    # Two comp-name patterns BEFORE the `+` clauses.
+    assert main_group["patterns"] == ["spec_comp_full", "spec_comp_fixed"]
+    # REGION + SOFT + PROPERTY clauses.
+    main_types = [c["type"] for c in main_group["clauses"]]
+    assert main_types == ["Region", "Soft", "Property"]
+    # SOFT carries three positional qualifiers.
+    soft = next(c for c in main_group["clauses"] if c["type"] == "Soft")
+    soft_quals = [q["type"] for q in soft["quals"]]
+    assert soft_quals == ["MaxHalfPerimeter", "MaxX", "MaxY"]
+
+    # BEGINEXT/ENDEXT — reuses the existing LEF rule. Body is
+    # captured opaquely via the `*` raw-consume primitive.
+    ext = next(it for it in parsed["items"]
+               if it.get("type") == "BeginExt")
+    assert ext["name"] == "spec_vendor"
+    assert "vendor_directive" in ext["body"]
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")

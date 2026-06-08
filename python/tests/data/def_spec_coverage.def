@@ -444,4 +444,42 @@ NETS 3 ;
       + COVER met3 ( 0 300 ) ( 100 300 ) ;
 END NETS
 
+# ----- Phase 10: SCANCHAINS + GROUPS + BEGINEXT -----
+
+# Per LEF/DEF 5.8 §"Scan Chains". DFT scan-chain declarations
+# — chain entries with COMMONSCANPINS/START/STOP/FLOATING/
+# ORDERED/PARTITION clauses. FLOATING/ORDERED entries
+# themselves contain compName + optional (IN/OUT/BITS).
+SCANCHAINS 2 ;
+  - chain_full
+      + COMMONSCANPINS ( IN scanin ) ( OUT scanout )
+      + START PIN test_pin_si
+      + FLOATING flop_a ( IN i_a ) ( OUT o_a ) flop_b ( BITS 4 )
+      + ORDERED flop_c ( IN i_c ) flop_d
+      + STOP inst_end stoppin
+      + PARTITION partition_a MAXBITS 32 ;
+  - chain_minimal
+      + START spec_comp_full outpin
+      + STOP spec_comp_full inpin ;
+END SCANCHAINS
+
+# Per LEF/DEF 5.8 §"Groups". Bind design instances to regions
+# via name patterns.
+GROUPS 2 ;
+  - cluster_main spec_comp_full spec_comp_fixed
+      + REGION spec_region_fence
+      + SOFT MAXHALFPERIMETER 100 MAXX 50 MAXY 50
+      + PROPERTY prop_grp_s "main-cluster" ;
+  - cluster_small spec_comp_cover
+      + REGION spec_region_guide ;
+END GROUPS
+
+# Per LEF/DEF 5.8 §"Begin Extension". Free-form vendor data
+# captured opaquely via the `*` raw-consume primitive — same
+# rule as LEF's BEGINEXT_BLOCK.
+BEGINEXT "spec_vendor"
+  vendor_directive setting = 42 ;
+  another_thing "value" ;
+ENDEXT
+
 END DESIGN

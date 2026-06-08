@@ -1712,7 +1712,12 @@ DEF_ITEM: choice {
   <DEF_SLOTS_BLOCK>,
   <DEF_FILLS_BLOCK>,
   <DEF_SPECIALNETS_BLOCK>,
-  <DEF_NETS_BLOCK>
+  <DEF_NETS_BLOCK>,
+  <DEF_SCANCHAINS_BLOCK>,
+  <DEF_GROUPS_BLOCK>,
+  // BEGINEXT_BLOCK is shared with LEF — same `*` raw-consume
+  // until-ENDEXT shape; reuse the existing rule.
+  <BEGINEXT_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -3018,6 +3023,174 @@ DEF_NET_ROUTE_COVER: sequence {
 }
 DEF_NET_ROUTE_NOSHIELD: sequence {
   "NOSHIELD":type="NoShield" space
+}
+
+// ===========================================================================
+// === DEF Phase 10 — SCANCHAINS + GROUPS ===================================
+// ===========================================================================
+//
+// Final DEF phase. BEGINEXT/ENDEXT lives at the top of the
+// grammar (shared with LEF) and is wired into DEF_ITEM directly.
+
+// `SCANCHAINS num ; - chainName clause+ ; ... END SCANCHAINS`
+// per LEF/DEF 5.8 §"Scan Chains". DFT scan-chain declarations
+// linking flip-flops along test paths. Six typed clause variants:
+// COMMONSCANPINS, START, STOP, FLOATING, ORDERED, PARTITION.
+DEF_SCANCHAINS_BLOCK: sequence dict {
+  "SCANCHAINS":type="ScanChains" space,
+  int:count=@ space, ";" newline,
+  <DEF_SCANCHAINS_LIST>:chains=@,
+  "END" space, "SCANCHAINS" newline
+}
+
+DEF_SCANCHAINS_LIST: sequence array { repeat <DEF_SCANCHAIN_ENTRY> }
+
+DEF_SCANCHAIN_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  repeat <DEF_SCANCHAIN_CLAUSE>,
+  ";" newline
+}
+
+DEF_SCANCHAIN_CLAUSE: choice {
+  <DEF_SCAN_COMMONSCANPINS>:clauses[]=@,
+  <DEF_SCAN_START>:clauses[]=@,
+  <DEF_SCAN_STOP>:clauses[]=@,
+  <DEF_SCAN_FLOATING>:clauses[]=@,
+  <DEF_SCAN_ORDERED>:clauses[]=@,
+  <DEF_SCAN_PARTITION>:clauses[]=@
+}
+
+// `+ COMMONSCANPINS [(IN inPin)] [(OUT outPin)]` — IN/OUT pins
+// shared by every flop in the chain. Modeled as a list of
+// typed sub-clauses (In / Out) so the optional pair survives
+// round-trip in source order.
+DEF_SCAN_COMMONSCANPINS: sequence dict {
+  "+" space, "COMMONSCANPINS":type="CommonScanPins" space,
+  repeat <DEF_SCAN_IN_OUT>
+}
+
+// Shared sub-clause: `( IN pinName )` / `( OUT pinName )` /
+// `( BITS n )`. Used by COMMONSCANPINS plus FLOATING/ORDERED
+// entries below.
+DEF_SCAN_IN_OUT: choice {
+  <DEF_SCAN_IN_PIN>:pins[]=@,
+  <DEF_SCAN_OUT_PIN>:pins[]=@,
+  <DEF_SCAN_BITS_PIN>:pins[]=@
+}
+DEF_SCAN_IN_PIN: sequence dict {
+  "(" space, "IN":type="In" space, identifier:pin=@ space, ")" space
+}
+DEF_SCAN_OUT_PIN: sequence dict {
+  "(" space, "OUT":type="Out" space, identifier:pin=@ space, ")" space
+}
+DEF_SCAN_BITS_PIN: sequence dict {
+  "(" space, "BITS":type="Bits" space, int:bits=@ space, ")" space
+}
+
+// `+ START {compName | PIN} outPin` — chain entry point.
+// Per spec the first arg is either a component name OR the
+// literal `PIN` keyword. We capture both as the same
+// `comp` identifier field; downstream code checks for `PIN`
+// to know it's a port-reference form.
+DEF_SCAN_START: sequence dict {
+  "+" space, "START":type="Start" space,
+  identifier:comp=@ space, identifier:pin=@ space
+}
+DEF_SCAN_STOP: sequence dict {
+  "+" space, "STOP":type="Stop" space,
+  identifier:comp=@ space, identifier:pin=@ space
+}
+
+// `+ FLOATING / ORDERED { compName [(IN p)] [(OUT p)] [(BITS n)] }...`
+// — lists of comp + optional IN/OUT/BITS triples. Each comp
+// entry repeats the sub-clause pattern; both clause types share
+// the entry shape.
+DEF_SCAN_FLOATING: sequence dict {
+  "+" space, "FLOATING":type="Floating" space,
+  repeat <DEF_SCAN_FLOATING_ENTRY>:entries[]=@
+}
+DEF_SCAN_FLOATING_ENTRY: sequence dict {
+  identifier:comp=@ space,
+  repeat <DEF_SCAN_IN_OUT>
+}
+DEF_SCAN_ORDERED: sequence dict {
+  "+" space, "ORDERED":type="Ordered" space,
+  repeat <DEF_SCAN_ORDERED_ENTRY>:entries[]=@
+}
+DEF_SCAN_ORDERED_ENTRY: sequence dict {
+  identifier:comp=@ space,
+  repeat <DEF_SCAN_IN_OUT>
+}
+
+// `+ PARTITION partitionName [MAXBITS n]`.
+DEF_SCAN_PARTITION: sequence dict {
+  "+" space, "PARTITION":type="Partition" space,
+  identifier:partition=@ space,
+  ?<DEF_SCAN_PARTITION_MAXBITS>
+}
+DEF_SCAN_PARTITION_MAXBITS: sequence {
+  "MAXBITS" space, int:max_bits=@ space
+}
+
+// `GROUPS num ; - groupName compPattern+ + clauses ;
+//  ... END GROUPS` per LEF/DEF 5.8 §"Groups". Groups bind
+// design instances to regions via name patterns.
+DEF_GROUPS_BLOCK: sequence dict {
+  "GROUPS":type="Groups" space,
+  int:count=@ space, ";" newline,
+  <DEF_GROUPS_LIST>:groups=@,
+  "END" space, "GROUPS" newline
+}
+
+DEF_GROUPS_LIST: sequence array { repeat <DEF_GROUP_ENTRY> }
+
+DEF_GROUP_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  <DEF_GROUP_PATTERNS>:patterns=@,
+  repeat <DEF_GROUP_CLAUSE>,
+  ";" newline
+}
+
+// Zero or more compNamePattern identifiers before the first
+// `+` clause. Repeat exits when next token isn't an identifier
+// (i.e., `+` or `;`).
+DEF_GROUP_PATTERNS: sequence array {
+  repeat identifier space
+}
+
+DEF_GROUP_CLAUSE: choice {
+  <DEF_GROUP_REGION>:clauses[]=@,
+  <DEF_GROUP_SOFT>:clauses[]=@,
+  <DEF_GROUP_PROPERTY>:clauses[]=@
+}
+
+DEF_GROUP_REGION: sequence dict {
+  "+" space, "REGION":type="Region" space, identifier:region=@ space
+}
+// `+ SOFT MAXHALFPERIMETER n MAXX n MAXY n` — placement-cost
+// hints per spec. The three sub-keywords are positional.
+DEF_GROUP_SOFT: sequence dict {
+  "+" space, "SOFT":type="Soft" space,
+  repeat <DEF_GROUP_SOFT_QUAL>
+}
+DEF_GROUP_SOFT_QUAL: choice {
+  <DEF_GROUP_SOFT_MAXHALFPERIMETER>:quals[]=@,
+  <DEF_GROUP_SOFT_MAXX>:quals[]=@,
+  <DEF_GROUP_SOFT_MAXY>:quals[]=@
+}
+DEF_GROUP_SOFT_MAXHALFPERIMETER: sequence dict {
+  "MAXHALFPERIMETER":type="MaxHalfPerimeter" space,
+  <NUMBER>:value=@ space
+}
+DEF_GROUP_SOFT_MAXX: sequence dict {
+  "MAXX":type="MaxX" space, <NUMBER>:value=@ space
+}
+DEF_GROUP_SOFT_MAXY: sequence dict {
+  "MAXY":type="MaxY" space, <NUMBER>:value=@ space
+}
+DEF_GROUP_PROPERTY: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
