@@ -914,7 +914,29 @@ LAYER_BODY_ITEM: choice {
   <LAYER_MINIMUMDENSITY_CMD>,
   <LAYER_DENSITYCHECKWINDOW_CMD>:density_check_window=@,
   <LAYER_DENSITYCHECKSTEP_CMD>,
+  <LAYER_LEF58_PROPERTY>:lef58[]=@,
   <LAYER_PROPERTY>:properties[]=@
+}
+
+// PROPERTY clauses whose name starts with `LEF58_` get their own
+// typed sub-rule so downstream consumers can iterate `layer.lef58`
+// directly instead of filtering `layer.properties` by name. The
+// `lef58_name` terminal (from the lefdef parser group) rejects
+// anything that isn't `LEF58_<suffix>`, so the predictive PEG
+// falls through cleanly to the generic LAYER_PROPERTY for non-
+// LEF58 PROPERTY clauses — no closed-keyword Choice needed, the
+// prefix IS the discriminator. Round-trips identically: the
+// outer `PROPERTY` keyword plus the LEF58_ name plus the opaque
+// content string are all preserved; the inner LEF58 grammar
+// content stays as a single string (per
+// feedback_rawast_design_lef58_out_of_scope), a downstream tool
+// can subparse it with its own LEF58 grammar if it wants typed
+// sub-fields.
+LAYER_LEF58_PROPERTY: sequence dict {
+  "PROPERTY":type="Lef58Property" space,
+  lef58_name:name=@ space,
+  string:content=@ space,
+  ";" newline
 }
 
 LAYER_TYPE_CMD:                  sequence { "TYPE"                  space, identifier:layer_type=@        space, ";" newline }

@@ -35,6 +35,26 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
+// LEF58_-prefixed name parser. Same identifier shape as
+// LefdefIdentifierParser but FAILS unless the input starts with the
+// literal `LEF58_` prefix. Lets a grammar discriminate the
+// `PROPERTY LEF58_TYPE "..."` / `PROPERTY LEF58_SPACING "..."`
+// family of clauses from generic `PROPERTY name value ;` clauses
+// without a closed-keyword Choice — the prefix is the
+// discriminator. Returns the full matched name including the
+// `LEF58_` prefix (e.g. `"LEF58_TYPE"`), so save unparse just
+// emits the string back verbatim.
+//
+// Use case: a downstream consumer iterating `layer.lef58` finds
+// every LEF58_* vendor-extension property as a typed sub-object
+// rather than filtering `layer.properties` by name string.
+class LefdefLef58NameParser final : public Parser {
+public:
+    LefdefLef58NameParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Retired: `LefdefUntilEndextParser`. The "consume raw bytes until
 // a specific keyword" pattern is now a grammar-level primitive (`*`
 // followed by a Key literal); see docs/rawast-format.md §4.5a and

@@ -320,14 +320,25 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     kinds = {p["kind"] for p in li1["properties"]}
     assert {"SPACINGTABLE", "RESISTANCE", "CAPACITANCE", "ANTENNAMODEL"} <= kinds
 
-    # LEF58_TYPE PROPERTY captured (opaque inner string is fine).
+    # LEF58_TYPE PROPERTY captured as a typed Lef58Property dict
+    # via the dedicated `lef58_name` terminal parser + the
+    # LAYER_LEF58_PROPERTY rule — distinct from generic
+    # `layer.properties` (kind="PROPERTY"). Inner content
+    # remains opaque (a single string) per design.
     nwell = next(la for la in layers if la["name"] == "nwell")
     assert nwell["layer_type"] == "MASTERSLICE"
-    prop58 = next((p for p in nwell["properties"]
-                   if p["kind"] == "PROPERTY"
-                   and "LEF58_TYPE" in p["values"]), None)
-    assert prop58 is not None
-    assert "TYPE NWELL ;" in prop58["values"]
+    assert nwell["lef58"] == [
+        {"type": "Lef58Property", "name": "LEF58_TYPE",
+         "content": "TYPE NWELL ;"},
+    ]
+    # Generic `properties` should not also contain the LEF58_*
+    # entry — the LEF58 rule wins via predictive PEG before the
+    # generic fallback fires.
+    assert "properties" not in nwell or not any(
+        p.get("kind") == "PROPERTY"
+        and "LEF58_TYPE" in p.get("values", [])
+        for p in nwell.get("properties", [])
+    )
 
     # Every VIA carries its layer-group shapes.
     vias = [it for it in parsed["items"] if it.get("type") == "VIA"]
@@ -559,7 +570,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # itself, not as SPACING via prefix-match) and the routing MIN*/
     # MAX*/MINSTEP/MINIMUMCUT/WIREEXTENSION cluster.
     for kw in (
-            "RESISTANCE", "CAPACITANCE", "PROPERTY",
+            "RESISTANCE", "CAPACITANCE",
             "MINWIDTH", "MAXWIDTH", "MINENCLOSEDAREA", "MINSTEP",
             "MINIMUMCUT", "WIREEXTENSION",
             "ANTENNAAREARATIO", "ANTENNADIFFAREARATIO",
@@ -578,6 +589,18 @@ def test_lef_spec_coverage_phase1(tmp_path):
     st = next(p for p in routing_props if p["kind"] == "SPACINGTABLE")
     assert st["values"][:2] == ["PARALLELRUNLENGTH", 0]
     assert "WIDTH" in st["values"]
+    # LEF58_* PROPERTY clauses now route to a separate `lef58`
+    # list — distinct from generic `properties` (kind="PROPERTY").
+    # The dedicated lef58_name terminal parser discriminates by
+    # the LEF58_ prefix, no closed-keyword Choice needed.
+    assert layers["spec_routing"]["lef58"] == [
+        {"type": "Lef58Property", "name": "LEF58_TYPE",
+         "content": "TYPE ROUTING ;"},
+    ]
+    # `PROPERTY` should NOT appear in the generic properties list —
+    # the only PROPERTY in spec_routing was the LEF58_TYPE one,
+    # which routes elsewhere.
+    assert "PROPERTY" not in routing_kinds
 
     assert layers["spec_cut"]["layer_type"] == "CUT"
     assert layers["spec_cut"]["width"] == 0.17
@@ -586,12 +609,18 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # LEF/DEF 5.8 §"Layer (Cut)" — bare SPACING + 4 qualifier
     # variants (LAYER, ADJACENTCUTS, PARALLELOVERLAP, AREA) + 3
     # ENCLOSURE forms (bare, ABOVE, BELOW) + ARRAYSPACING +
-    # MINIMUMCUT + antenna + LEF58 property.
+    # MINIMUMCUT + antenna. The trailing LEF58_TYPE PROPERTY now
+    # routes to `layer.lef58` via the LAYER_LEF58_PROPERTY rule,
+    # so it is NOT in cut_kinds anymore.
     assert cut_kinds == [
         "SPACING", "SPACING", "SPACING", "SPACING", "SPACING",
         "ENCLOSURE", "ENCLOSURE", "ENCLOSURE",
         "ARRAYSPACING", "MINIMUMCUT",
-        "ANTENNAAREARATIO", "ANTENNAMODEL", "PROPERTY",
+        "ANTENNAAREARATIO", "ANTENNAMODEL",
+    ]
+    assert layers["spec_cut"]["lef58"] == [
+        {"type": "Lef58Property", "name": "LEF58_TYPE",
+         "content": "TYPE CUT ;"},
     ]
     # Spot-check the qualifiers landed in the values list in
     # source order — guards against future LAYER_PROPERTY
@@ -608,8 +637,14 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert enclosures[2]["values"] == ["BELOW", 0.04, 0.05]
 
     assert layers["spec_masterslice"]["layer_type"] == "MASTERSLICE"
-    assert [p["kind"] for p in layers["spec_masterslice"]["properties"]] \
-        == ["PROPERTY"]
+    # Only a single LEF58_TYPE PROPERTY → routes to `lef58`, the
+    # generic `properties` list is absent (engine list-append
+    # creates it lazily; zero matches → key absent).
+    assert "properties" not in layers["spec_masterslice"]
+    assert layers["spec_masterslice"]["lef58"] == [
+        {"type": "Lef58Property", "name": "LEF58_TYPE",
+         "content": "TYPE NWELL ;"},
+    ]
 
     assert layers["spec_overlap"]["layer_type"] == "OVERLAP"
     # No LAYER_PROPERTY matches → `properties` key absent
@@ -621,10 +656,10 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert [p["kind"] for p in layers["spec_implant"]["properties"]] \
         == ["SPACING"]
 
-    # LEF58_TYPE PROPERTY captures the embedded LEF58 string as opaque.
-    routing_prop = next(p for p in layers["spec_routing"]["properties"]
-                        if p["kind"] == "PROPERTY")
-    assert routing_prop["values"] == ["LEF58_TYPE", "TYPE ROUTING ;"]
+    # (LEF58_TYPE PROPERTY is now captured as a typed Lef58Property
+    # dict via `layer.lef58` instead of `layer.properties` — see
+    # the spec_routing/spec_cut/spec_masterslice assertions above.
+    # The embedded LEF58 content string remains opaque per design.)
 
     # Phase 3: VIA, VIARULE, NONDEFAULTRULE.
     via = next(it for it in items
