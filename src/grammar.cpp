@@ -1363,14 +1363,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
 }
 
 
-tl::expected<void, SaveError> Grammar::save(std::ostream& out, ValuePtr value,
-                                            bool pretty, NodeId start) const {
-    // Single save engine — the stack-navigation walk in
-    // src/save_stack.cpp (Phase B). Handles fixed-schema dicts,
-    // open-schema dicts, key-based Choice dispatch, wrapped sub-
-    // structures, catch-all alternatives, and the self-host case.
-    return rawast::save_v2(*this, out, value, pretty, start);
-}
+// Grammar::save is defined in src/save_stack.cpp so the save
+// engine (helpers + entry point) stays in one file. See the
+// stack-navigation walk for how the implementation handles
+// fixed/open-schema dicts, key-based Choice dispatch, wrapped
+// sub-structures, catch-all alternatives, and the self-host case.
 
 // -------------------------------------------------------------------------
 // JSON grammar — first working grammar, built in code

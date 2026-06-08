@@ -769,7 +769,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     switch (n.kind) {
     case NodeKind::Ref:
         // Already resolved.
-        return tl::unexpected(SaveError{"internal: unresolved Ref at save_v2"});
+        return tl::unexpected(SaveError{"internal: unresolved Ref at save"});
 
     case NodeKind::Value: {
         if (n.is_name) {
@@ -1107,7 +1107,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 }
             }
             return tl::unexpected(SaveError{
-                "no matching grammar alternative for value at save_v2"
+                "no matching grammar alternative for value at save"
                 + detail});
         }
         return do_consume(g, out, picked, s, depth, pretty);
@@ -1155,14 +1155,19 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
 
 } // namespace
 
+// Definition of Grammar::save lives here (rather than in
+// grammar.cpp) so the entire save engine — the helpers in this
+// file's anonymous namespace plus the entry point — stays
+// together. grammar.cpp has a one-line locator comment near
+// the rest of the Grammar member definitions.
 tl::expected<void, SaveError>
-save_v2(const Grammar& g, std::ostream& out, const ValuePtr& root,
-        bool pretty, NodeId start) {
-    if (!root) return tl::unexpected(SaveError{"save: null root value"});
+Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
+              NodeId start) const {
+    if (!value) return tl::unexpected(SaveError{"save: null root value"});
     SaveState s;
-    s.push_q({root, false, ""});
-    if (!start.valid()) start = g.top();
-    return do_consume(g, out, start, s, 0, pretty);
+    s.push_q({value, false, ""});
+    if (!start.valid()) start = top();
+    return do_consume(*this, out, start, s, 0, pretty);
 }
 
 } // namespace rawast

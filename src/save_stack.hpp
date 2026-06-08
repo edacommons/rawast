@@ -16,12 +16,10 @@
 //     a bare identifier (REF in the meta-grammar) matches when the
 //     value at the dispatch point is a string.
 //
-// The old engine survives as a fallback until B1 is green; once
-// shipped grammars round-trip through this engine, the old code is
-// deleted.
-//
-// Entry point: `save_v2(grammar, out, value, pretty)` — same signature
-// as `Grammar::save`. The Grammar's top_ drives the walk.
+// Entry point: `Grammar::save` (declared in grammar.hpp,
+// defined in save_stack.cpp). The Grammar's top_ drives the
+// walk unless an explicit `start` NodeId is passed (for
+// multi-top-rule grammars like LEF+DEF in one file).
 
 #pragma once
 
@@ -32,18 +30,7 @@
 
 #include <ostream>
 
-namespace rawast {
-
-class Grammar;
-struct SaveError;
-
-// `start` is the NodeId of the rule to dispatch from — pass an
-// invalid NodeId (the default-constructed one) to fall back to
-// `g.top()`. Lets a single grammar carry multiple top-level rules
-// (LEF vs DEF in one file) and have the host pick which to save
-// against.
-tl::expected<void, SaveError>
-save_v2(const Grammar& g, std::ostream& out, const ValuePtr& root,
-        bool pretty, NodeId start = {});
-
-} // namespace rawast
+// No public declarations needed — the save entry point is
+// `Grammar::save` (declared in include/rawast/grammar.hpp),
+// defined directly in src/save_stack.cpp. Helper functions in
+// this translation unit live in an anonymous namespace.
