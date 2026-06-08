@@ -448,7 +448,7 @@ SITE_PROPERTY_KV: sequence dict {
 
 SITE_SYMMETRY: sequence {
   "SYMMETRY" space,
-  <SYMMETRY_LIST>:symmetry=@,
+  <SYMMETRY_LIST>:symmetries=@,
   ";" newline
 }
 SYMMETRY_LIST: sequence array { repeat identifier space }
@@ -469,7 +469,7 @@ SITE_SIZE: sequence {
 
 SITE_ROWPATTERN: sequence {
   "ROWPATTERN" space,
-  <ROWPATTERN_LIST>:rowpattern=@,
+  <ROWPATTERN_LIST>:rowpatterns=@,
   ";" newline
 }
 ROWPATTERN_LIST: sequence array { repeat <ROWPATTERN_PAIR> }
@@ -653,7 +653,7 @@ PROPERTY_VALUE: choice {
 
 MACRO_CLASS: sequence {
   "CLASS" space,
-  <CLASS_LIST>:class=@,
+  <CLASS_LIST>:classes=@,
   ";" newline
 }
 // `space` postfix on the identifier — the engine auto-skips
@@ -706,7 +706,7 @@ MACRO_SIZE: sequence {
 
 MACRO_SYMMETRY: sequence {
   "SYMMETRY" space,
-  <SYMMETRY_LIST>:symmetry=@,
+  <SYMMETRY_LIST>:symmetries=@,
   ";" newline
 }
 

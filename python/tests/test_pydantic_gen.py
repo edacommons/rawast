@@ -88,7 +88,7 @@ def test_user_can_construct_site_block(tmp_path):
     site = mod.SiteBlock(
         name="core",
         end_name="core",
-        symmetry=["Y"],
+        symmetries=["Y"],
         width=0.46,
         height=2.72,
         **{"class": "CORE"},  # `class` is a Python keyword, pass via dict
@@ -98,7 +98,7 @@ def test_user_can_construct_site_block(tmp_path):
         "type": "Site",
         "name": "core",
         "class": "CORE",
-        "symmetry": ["Y"],
+        "symmetries": ["Y"],
         "width": 0.46,
         "height": 2.72,
         "end_name": "core",
@@ -184,7 +184,7 @@ def test_user_can_construct_macro_with_pins(tmp_path):
         end_name="INV_X1",
         width=1.84,
         height=2.72,
-        symmetry=["X", "Y"],
+        symmetries=["X", "Y"],
         sites=[mod.MacroSiteRef(name="core")],
         origin=mod.OriginCmd(x=0, y=0),
         foreigns=[mod.MacroForeign(cell="INV_X1", x=0, y=0)],
@@ -201,13 +201,13 @@ def test_user_can_construct_macro_with_pins(tmp_path):
                 )],
             ),
         ],
-        **{"class": ["CORE"]},  # `class` keyword alias
+        classes=["CORE"],
     )
     dumped = macro.model_dump(exclude_none=True, by_alias=True)
     # Spot-check key fields
     assert dumped["type"] == "Macro"
     assert dumped["name"] == "INV_X1"
-    assert dumped["class"] == ["CORE"]
+    assert dumped["classes"] == ["CORE"]
     assert dumped["pins"][0]["name"] == "A"
     assert dumped["pins"][0]["ports"][0]["layer_groups"][0]["shapes"][0]["type"] == "Rect"
 
@@ -270,7 +270,7 @@ def test_user_can_construct_macro_with_obs(tmp_path):
             layer="met1",
             shapes=[mod.RectShape(x1=0.0, y1=0.0, x2=1.84, y2=0.05)],
         )])],
-        **{"class": ["CORE"]},
+        classes=["CORE"],
     )
     dumped = macro.model_dump(exclude_none=True, by_alias=True)
     assert dumped["obses"][0]["type"] == "Obs"
@@ -389,8 +389,8 @@ def test_sky130_sram_macro_parses_losslessly(tmp_path):
     assert len(macros) == 1
     macro = macros[0]
     assert macro["name"] == "sky130_sram_1kbyte_1rw1r_8x1024_8"
-    assert macro["class"] == ["BLOCK"]
-    assert set(macro["symmetry"]) == {"X", "Y", "R90"}
+    assert macro["classes"] == ["BLOCK"]
+    assert set(macro["symmetries"]) == {"X", "Y", "R90"}
 
     # All 51 PINs present (8 data-in + 10 addr0 + 10 addr1 + …).
     pins = macro["pins"]
@@ -448,7 +448,7 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
     assert len(macros) == 1
     macro = macros[0]
     assert macro["name"] == "sky130_fd_io__top_xres4v2"
-    assert macro["class"] == ["PAD"]
+    assert macro["classes"] == ["PAD"]
     # SOURCE is the deprecated 5.6-era field that triggered the parse fix.
     assert macro["source"] == "USER"
 
@@ -541,11 +541,11 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # SITE with every sub-statement.
     site = next(it for it in items if it.get("type") == "Site")
     assert site["name"] == "spec_site"
-    assert site["class"] == "CORE"
-    assert site["symmetry"] == ["X", "Y", "R90"]
+    assert site["class"] == "CORE"  # SITE_CLASS is scalar — `class` stays singular
+    assert site["symmetries"] == ["X", "Y", "R90"]
     assert site["width"] == 1.0
     assert site["height"] == 2.5
-    assert site["rowpattern"] == [
+    assert site["rowpatterns"] == [
         {"site": "sub_a", "orient": "North"},
         {"site": "sub_b", "orient": "FlipNorth"},
     ]
@@ -786,7 +786,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # Phase 4: MACRO with every body sub-statement.
     macro = next(it for it in items
                  if it.get("type") == "Macro" and it.get("name") == "spec_macro")
-    assert macro["class"] == ["BLOCK"]
+    assert macro["classes"] == ["BLOCK"]
     assert macro["is_fixed_mask"] is True       # FIXEDMASK on MACRO
     assert macro["eeq"] == "spec_macro_eq"       # EEQ reference
     assert macro["source"] == "USER"             # legacy SOURCE clause
@@ -801,7 +801,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert macro["sites"] == [{"name": "spec_site"}]
     assert macro["width"] == 5.0
     assert macro["height"] == 10.0
-    assert macro["symmetry"] == ["X", "Y", "R90"]
+    assert macro["symmetries"] == ["X", "Y", "R90"]
 
     # DENSITY block captured with nested layers + per-layer rects.
     # Each rect carries `type: "DensityRect"` (not "Rect") so that
