@@ -1484,17 +1484,21 @@ NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> }
 
 // Choice ordering: USEVIARULE before USEVIA (no prefix overlap
 // but kept consistent), VIARULE before VIA, MINCUTS before any
-// other M-prefix. NDR_PROPERTY_KV is the trailing-PROPERTY form
-// per LEF/DEF 5.8 §"Non-Default Rule" — emits a `{type: "Property",
+// other M-prefix. NDR_VIA_INLINE before NDR_VIA_REF — both start
+// with `VIA viaName` but the inline form has a body + END, the
+// ref form ends with `;`; predictive PEG tries inline first
+// (longer prefix), falls through to ref when inline can't find
+// a body. NDR_PROPERTY_KV is the trailing-PROPERTY form per
+// LEF/DEF 5.8 §"Non-Default Rule" — emits a `{type: "Property",
 // prop_name, prop_value}` dict that gets appended to the same
-// `ndr.properties` array as the other body items (HardSpacing /
-// Layer / Via / ViaRule / UseVia / UseViaRule / MinCuts).
+// `ndr.properties` array as the other body items.
 NDR_PROPERTY: choice {
   <NDR_HARDSPACING>,
   <NDR_LAYER>,
   <NDR_USEVIARULE>,
   <NDR_USEVIA>,
   <NDR_VIARULE_REF>,
+  <NDR_VIA_INLINE>,
   <NDR_VIA_REF>,
   <NDR_MINCUTS>,
   <NDR_PROPERTY_KV>
@@ -1564,6 +1568,20 @@ NDR_LAYER_WIREEXT:     sequence { "WIREEXT"     space, <NUMBER>:wire_ext=@ space
 
 NDR_VIA_REF: sequence dict {
   "VIA":type="Via" space, identifier:via=@ space, ";" newline
+}
+
+// LEF/DEF 5.8 §"Non-Default Rule" also permits inline VIA
+// definitions inside the NDR body — full `VIA viaName [DEFAULT]
+// body END viaName`, structurally identical to a top-level VIA
+// block. Reuses the existing VIA_BODY Choice (VIARULE-form vs
+// geometry-form). Emits `type: "ViaInline"` to distinguish from
+// NDR_VIA_REF (`type: "Via"`); same `ndr.properties` array.
+NDR_VIA_INLINE: sequence dict {
+  "VIA":type="ViaInline" space,
+  identifier:name=@ space,
+  ?<VIA_DEFAULT_KW>,
+  <VIA_BODY>,
+  "END" space, identifier:end_name=@ newline
 }
 
 NDR_VIARULE_REF: sequence dict {
