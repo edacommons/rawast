@@ -269,4 +269,48 @@ COMPONENTS 4 ;
       + UNPLACED ;
 END COMPONENTS
 
+# ----- Phase 6: PINS -----
+
+# Per LEF/DEF 5.8 §"Pins". Each entry is `- pinName + clause+ ;`.
+# Three entries exercise the full clause vocabulary:
+#   spec_pin_clk  — DIRECTION/USE/NETEXPR + 2 ANTENNAPIN
+#                   variants + ANTENNAMODEL + LAYER + PLACED
+#   spec_pin_vdd  — SPECIAL flag + power-class + 9 antenna
+#                   keywords + MASK/SPACING/DRW qualifiers on
+#                   LAYER/POLYGON/VIA shapes + FIXED placement
+#   spec_pin_free — minimal entry + UNPLACED
+PINS 3 ;
+  - spec_pin_clk
+      + NET clk_net
+      + DIRECTION INPUT
+      + USE SIGNAL
+      + NETEXPR "(net_expr clk_net)"
+      + ANTENNAPINGATEAREA 0.5 LAYER met1
+      + ANTENNAPINPARTIALMETALAREA 0.3 LAYER met1
+      + ANTENNAMODEL OXIDE1
+      + LAYER met1 ( -250 -250 ) ( 250 250 )
+      + PLACED ( 0 5000 ) N ;
+  - spec_pin_vdd
+      + NET VDD
+      + SPECIAL
+      + DIRECTION INOUT
+      + USE POWER
+      + SUPPLYSENSITIVITY vdd_sense
+      + GROUNDSENSITIVITY vss_sense
+      + ANTENNAPINDIFFAREA 0.6 LAYER met1
+      + ANTENNAPINPARTIALMETALSIDEAREA 0.4 LAYER met1
+      + ANTENNAPINPARTIALCUTAREA 0.7 LAYER mcon
+      + ANTENNAPINMAXAREACAR 1.0 LAYER met1
+      + ANTENNAPINMAXSIDEAREACAR 0.8 LAYER met1
+      + ANTENNAPINMAXCUTCAR 1.2 LAYER mcon
+      + LAYER met2 + MASK 1 SPACING 0.05 ( 100 100 ) ( 200 200 )
+      + POLYGON met3 + MASK 2 DESIGNRULEWIDTH 0.1 ( 0 0 ) ( 100 0 ) ( 100 100 ) ( 0 100 )
+      + VIA spec_via_geom + MASK 1 ( 150 150 )
+      + FIXED ( 0 0 ) N ;
+  - spec_pin_free
+      + NET sig
+      + DIRECTION OUTPUT
+      + UNPLACED ;
+END PINS
+
 END DESIGN

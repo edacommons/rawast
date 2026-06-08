@@ -1343,6 +1343,65 @@ def test_def_spec_coverage_phase1(tmp_path):
     unplaced = comps["components"][3]
     assert unplaced["clauses"] == [{"type": "Unplaced"}]
 
+    # Phase 6: PINS. Three entries cover every clause variant.
+    pins_block = next(it for it in parsed["items"]
+                      if it.get("type") == "Pins")
+    assert pins_block["count"] == 3
+    assert len(pins_block["pins"]) == 3
+
+    clk = pins_block["pins"][0]
+    assert clk["name"] == "spec_pin_clk"
+    clk_types = [c["type"] for c in clk["clauses"]]
+    assert clk_types == [
+        "Net", "Direction", "Use", "NetExpr",
+        "AntennaPinGateArea", "AntennaPinPartialMetalArea",
+        "AntennaModel", "Layer", "Placed",
+    ]
+    # NetExpr keeps the spec's quoted-string content verbatim.
+    netexpr = next(c for c in clk["clauses"] if c["type"] == "NetExpr")
+    assert netexpr["expr"] == "(net_expr clk_net)"
+
+    vdd = pins_block["pins"][1]
+    assert vdd["name"] == "spec_pin_vdd"
+    # SPECIAL is a boolean flag — `is_special: True`.
+    special = next(c for c in vdd["clauses"] if c["type"] == "Special")
+    assert special["is_special"] is True
+    # Every typed ANTENNAPIN kind is exercised.
+    antenna_types = {c["type"] for c in vdd["clauses"]
+                     if c["type"].startswith("Antenna")}
+    assert antenna_types == {
+        "AntennaPinDiffArea",
+        "AntennaPinPartialMetalSideArea",
+        "AntennaPinPartialCutArea",
+        "AntennaPinMaxAreaCar",
+        "AntennaPinMaxSideAreaCar",
+        "AntennaPinMaxCutCar",
+    }
+    # LAYER with MASK + SPACING qualifier.
+    layer_c = next(c for c in vdd["clauses"] if c["type"] == "Layer")
+    assert layer_c["layer"] == "met2"
+    assert layer_c["mask"] == 1
+    assert layer_c["spacing"] == 0.05
+    assert (layer_c["x1"], layer_c["y1"]) == (100, 100)
+    # POLYGON with MASK + DESIGNRULEWIDTH qualifier and 4 points.
+    poly_c = next(c for c in vdd["clauses"] if c["type"] == "Polygon")
+    assert poly_c["mask"] == 2
+    assert poly_c["design_rule_width"] == 0.1
+    assert len(poly_c["points"]) == 4
+    # VIA placement with MASK.
+    via_c = next(c for c in vdd["clauses"] if c["type"] == "Via")
+    assert via_c == {"type": "Via", "via": "spec_via_geom",
+                     "mask": 1, "x": 150, "y": 150}
+    # FIXED placement at the pin level.
+    fixed_c = next(c for c in vdd["clauses"] if c["type"] == "Fixed")
+    assert fixed_c["orient"] == "N"
+
+    free = pins_block["pins"][2]
+    assert free["name"] == "spec_pin_free"
+    assert [c["type"] for c in free["clauses"]] == [
+        "Net", "Direction", "Unplaced",
+    ]
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")

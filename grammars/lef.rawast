@@ -1702,7 +1702,8 @@ DEF_ITEM: choice {
   <DEF_NDRS_BLOCK>,
   <DEF_REGIONS_BLOCK>,
   <DEF_COMPONENTMASKSHIFT_CMD>,
-  <DEF_COMPONENTS_BLOCK>
+  <DEF_COMPONENTS_BLOCK>,
+  <DEF_PINS_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -2196,5 +2197,204 @@ DEF_COMP_PROPERTY_CLAUSE: sequence dict {
   identifier:prop_name=@ space,
   <PROPERTY_VALUE>:prop_value=@ space
 }
+
+// `PINS num ; - pinName + NET netName + clause+ ; ...
+//  END PINS` per LEF/DEF 5.8 §"Pins". The design's port list,
+// one entry per external pin. Each entry carries direction +
+// usage metadata, antenna properties, geometry shapes (LAYER /
+// POLYGON / VIA), and an optional placement.
+DEF_PINS_BLOCK: sequence dict {
+  "PINS":type="Pins" space,
+  int:count=@ space, ";" newline,
+  <DEF_PINS_LIST>:pins=@,
+  "END" space, "PINS" newline
+}
+
+DEF_PINS_LIST: sequence array { repeat <DEF_PIN_ENTRY> }
+
+// `- pinName [+ clause]... ;` — the pin name is bare, then
+// `+`-prefixed clauses. NET is the only spec-required clause
+// but real DEFs vary; we accept any clause order.
+DEF_PIN_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  repeat <DEF_PIN_CLAUSE>,
+  ";" newline
+}
+
+// All `+`-prefixed PIN clauses. Per-alt `:clauses[]=@` list-
+// append routes every clause type into one `clauses` field on
+// the entry dict — same heterogeneous-typed-list pattern as
+// DEF_COMPONENT_CLAUSE.
+//
+// Choice ordering hazards (longer-prefix-first):
+//   - NETEXPR before NET (`"NET"` would otherwise prefix-match
+//     `NETEXPR` under KeyParser's no-word-boundary semantics).
+//   - ANTENNAPIN* keywords have multiple prefix-collision
+//     pairs (PARTIALMETALSIDEAREA / PARTIALMETALAREA;
+//     MAXSIDEAREACAR / MAXAREACAR). Longer-prefix-first
+//     ordering applied in DEF_PIN_ANTENNA_KIND below.
+DEF_PIN_CLAUSE: choice {
+  <DEF_PIN_NETEXPR_CLAUSE>:clauses[]=@,
+  <DEF_PIN_NET_CLAUSE>:clauses[]=@,
+  <DEF_PIN_SPECIAL_CLAUSE>:clauses[]=@,
+  <DEF_PIN_DIRECTION_CLAUSE>:clauses[]=@,
+  <DEF_PIN_SUPPLYSENS_CLAUSE>:clauses[]=@,
+  <DEF_PIN_GROUNDSENS_CLAUSE>:clauses[]=@,
+  <DEF_PIN_USE_CLAUSE>:clauses[]=@,
+  <DEF_PIN_ANTENNA_CLAUSE>:clauses[]=@,
+  <DEF_PIN_LAYER_CLAUSE>:clauses[]=@,
+  <DEF_PIN_POLYGON_CLAUSE>:clauses[]=@,
+  <DEF_PIN_VIA_CLAUSE>:clauses[]=@,
+  <DEF_PIN_FIXED_CLAUSE>:clauses[]=@,
+  <DEF_PIN_COVER_CLAUSE>:clauses[]=@,
+  <DEF_PIN_PLACED_CLAUSE>:clauses[]=@,
+  <DEF_PIN_UNPLACED_CLAUSE>:clauses[]=@
+}
+
+// Metadata clauses.
+DEF_PIN_NET_CLAUSE: sequence dict {
+  "+" space, "NET":type="Net" space, identifier:net=@ space
+}
+DEF_PIN_SPECIAL_CLAUSE: sequence dict {
+  "+" space, "SPECIAL":type="Special":is_special=true space
+}
+DEF_PIN_DIRECTION_CLAUSE: sequence dict {
+  "+" space, "DIRECTION":type="Direction" space,
+  identifier:direction=@ space
+}
+DEF_PIN_NETEXPR_CLAUSE: sequence dict {
+  "+" space, "NETEXPR":type="NetExpr" space,
+  string:expr=@ space
+}
+DEF_PIN_SUPPLYSENS_CLAUSE: sequence dict {
+  "+" space, "SUPPLYSENSITIVITY":type="SupplySensitivity" space,
+  identifier:supply_pin=@ space
+}
+DEF_PIN_GROUNDSENS_CLAUSE: sequence dict {
+  "+" space, "GROUNDSENSITIVITY":type="GroundSensitivity" space,
+  identifier:ground_pin=@ space
+}
+DEF_PIN_USE_CLAUSE: sequence dict {
+  "+" space, "USE":type="Use" space, identifier:use=@ space
+}
+
+// ANTENNA family — single Choice covering all 9 spec variants
+// (plus ANTENNAMODEL). Captured as a typed dict with the
+// antenna kind in `type` and the bare value in `value`, plus
+// optional LAYER qualifier. Same shape as LEF PIN_ANTENNA_PROP
+// — different keyword vocabulary (DEF uses `ANTENNAPIN*` infix,
+// LEF uses `ANTENNA*`).
+DEF_PIN_ANTENNA_CLAUSE: sequence dict {
+  "+" space,
+  <DEF_PIN_ANTENNA_KIND>:type=@ space,
+  <DEF_PIN_ANTENNA_VALUE>:value=@ space,
+  ?<DEF_PIN_ANTENNA_LAYER>
+}
+
+// Closed-list discriminator — longer-prefix-first within each
+// PARTIAL/MAX prefix group. ANTENNAMODEL last (no value with
+// LAYER — it's just the model name).
+DEF_PIN_ANTENNA_KIND: choice {
+  "ANTENNAPINPARTIALMETALSIDEAREA":"AntennaPinPartialMetalSideArea",
+  "ANTENNAPINPARTIALMETALAREA":"AntennaPinPartialMetalArea",
+  "ANTENNAPINPARTIALCUTAREA":"AntennaPinPartialCutArea",
+  "ANTENNAPINDIFFAREA":"AntennaPinDiffArea",
+  "ANTENNAPINGATEAREA":"AntennaPinGateArea",
+  "ANTENNAPINMAXSIDEAREACAR":"AntennaPinMaxSideAreaCar",
+  "ANTENNAPINMAXAREACAR":"AntennaPinMaxAreaCar",
+  "ANTENNAPINMAXCUTCAR":"AntennaPinMaxCutCar",
+  "ANTENNAMODEL":"AntennaModel"
+}
+DEF_PIN_ANTENNA_VALUE: choice {
+  <NUMBER>,
+  identifier
+}
+DEF_PIN_ANTENNA_LAYER: sequence {
+  "LAYER" space, identifier:layer=@ space
+}
+
+// Geometry clauses — LAYER, POLYGON, VIA. The LAYER form takes
+// a rectangle (`( pt pt )`) plus optional MASK / SPACING /
+// DESIGNRULEWIDTH qualifiers. POLYGON takes 3+ coordinate
+// pairs. VIA takes a single point.
+DEF_PIN_LAYER_CLAUSE: sequence dict {
+  "+" space, "LAYER":type="Layer" space,
+  identifier:layer=@ space,
+  ?<DEF_PIN_MASK_QUAL>,
+  ?<DEF_PIN_LAYER_QUALIFIER>,
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+
+// LAYER / POLYGON optional qualifier — SPACING or DESIGNRULEWIDTH
+// (mutually exclusive per spec). Captured as a tiny sub-choice
+// that catcher-flattens into the parent clause dict.
+DEF_PIN_LAYER_QUALIFIER: choice {
+  <DEF_PIN_LAYER_SPACING>,
+  <DEF_PIN_LAYER_DRW>
+}
+DEF_PIN_LAYER_SPACING: sequence {
+  "SPACING" space, <NUMBER>:spacing=@ space
+}
+DEF_PIN_LAYER_DRW: sequence {
+  "DESIGNRULEWIDTH" space, <NUMBER>:design_rule_width=@ space
+}
+
+DEF_PIN_POLYGON_CLAUSE: sequence dict {
+  "+" space, "POLYGON":type="Polygon" space,
+  identifier:layer=@ space,
+  ?<DEF_PIN_MASK_QUAL>,
+  ?<DEF_PIN_LAYER_QUALIFIER>,
+  <DEF_PIN_POLYGON_POINTS>:points=@
+}
+DEF_PIN_POLYGON_POINTS: sequence array {
+  repeat+ <DEF_PIN_POLYGON_POINT>
+}
+DEF_PIN_POLYGON_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+DEF_PIN_VIA_CLAUSE: sequence dict {
+  "+" space, "VIA":type="Via" space,
+  identifier:via=@ space,
+  ?<DEF_PIN_MASK_QUAL>,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+DEF_PIN_MASK_QUAL: sequence {
+  "+" space, "MASK" space, int:mask=@ space
+}
+
+// Placement clauses — same shape as COMPONENT placement
+// (FIXED / COVER / PLACED with `( x y ) orient`; UNPLACED with
+// no args). Modeled as 4 separate alts so each has its own
+// type discriminator.
+DEF_PIN_FIXED_CLAUSE: sequence dict {
+  "+" space, "FIXED":type="Fixed" space,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  identifier:orient=@ space
+}
+DEF_PIN_COVER_CLAUSE: sequence dict {
+  "+" space, "COVER":type="Cover" space,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  identifier:orient=@ space
+}
+DEF_PIN_PLACED_CLAUSE: sequence dict {
+  "+" space, "PLACED":type="Placed" space,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  identifier:orient=@ space
+}
+DEF_PIN_UNPLACED_CLAUSE: sequence dict {
+  "+" space, "UNPLACED":type="Unplaced" space
+}
+
+// (Deferred: PORT sub-block. LEF/DEF 5.8 §"Pins" allows one or
+// more `+ PORT … + LAYER/POLYGON/VIA … + PLACED ( x y ) orient`
+// physical-placement sub-blocks per pin, used when one logical
+// pin has multiple disjoint physical locations. Not modeled in
+// this initial cut — the most common case is a single set of
+// pin-level shapes, which the LAYER / POLYGON / VIA clauses
+// above cover directly. Multi-PORT pins will land in a follow-
+// up commit when a real DEF in the corpus uses the form.)
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
