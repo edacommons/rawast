@@ -1299,6 +1299,50 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert len(guide["boxes"]) == 2  # Multi-box region.
     assert guide["clauses"][0]["region_type"] == "GUIDE"
 
+    # Phase 5: COMPONENTS. Four entries exercising every spec
+    # clause variant.
+    comps = next(it for it in parsed["items"]
+                 if it.get("type") == "Components")
+    assert comps["count"] == 4
+    assert len(comps["components"]) == 4
+
+    fixed = comps["components"][0]
+    assert fixed["name"] == "spec_comp_fixed"
+    assert fixed["model"] == "cellModelA"
+    assert fixed["clauses"] == [
+        {"type": "Fixed", "x": 100, "y": 200, "orient": "N"},
+    ]
+
+    full = comps["components"][1]
+    assert full["name"] == "spec_comp_full"
+    # All 9 typed clauses in source order.
+    assert [c["type"] for c in full["clauses"]] == [
+        "EeqMaster", "Source", "Placed", "Halo", "RouteHalo",
+        "Weight", "Region", "MaskShift", "Property",
+    ]
+    # Spot-check non-trivial fields.
+    halo = next(c for c in full["clauses"] if c["type"] == "Halo")
+    assert (halo["left"], halo["bottom"], halo["right"],
+            halo["top"]) == (10, 20, 30, 40)
+    assert "is_soft" not in halo
+    rh = next(c for c in full["clauses"] if c["type"] == "RouteHalo")
+    assert rh == {"type": "RouteHalo", "halo_dist": 50,
+                  "min_layer": "met1", "max_layer": "met3"}
+    placed = next(c for c in full["clauses"] if c["type"] == "Placed")
+    assert placed["orient"] == "FS"
+
+    cover = comps["components"][2]
+    assert cover["clauses"][0] == {
+        "type": "Cover", "x": 0, "y": 0, "orient": "W",
+    }
+    # HALO SOFT — optional `is_soft` flag set.
+    cover_halo = cover["clauses"][1]
+    assert cover_halo["type"] == "Halo"
+    assert cover_halo["is_soft"] is True
+
+    unplaced = comps["components"][3]
+    assert unplaced["clauses"] == [{"type": "Unplaced"}]
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")

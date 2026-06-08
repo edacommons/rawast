@@ -241,4 +241,32 @@ REGIONS 2 ;
       + TYPE GUIDE ;
 END REGIONS
 
+# ----- Phase 5: COMPONENTS -----
+
+# Per LEF/DEF 5.8 §"Components". Four entries cover every spec-
+# permitted clause type:
+#   spec_comp_fixed   — FIXED placement only (minimal entry)
+#   spec_comp_full    — every typed clause (the kitchen sink)
+#   spec_comp_cover   — COVER placement + HALO SOFT (optional flag)
+#   spec_comp_unplaced — UNPLACED (no positional args)
+COMPONENTS 4 ;
+  - spec_comp_fixed cellModelA
+      + FIXED ( 100 200 ) N ;
+  - spec_comp_full cellModelB
+      + EEQMASTER cellModelB_eq
+      + SOURCE NETLIST
+      + PLACED ( 300 400 ) FS
+      + HALO 10 20 30 40
+      + ROUTEHALO 50 met1 met3
+      + WEIGHT 5
+      + REGION spec_region_fence
+      + MASKSHIFT 0xA5
+      + PROPERTY prop_comp_i 42 ;
+  - spec_comp_cover cellModelC
+      + COVER ( 0 0 ) W
+      + HALO SOFT 1 2 3 4 ;
+  - spec_comp_unplaced cellModelD
+      + UNPLACED ;
+END COMPONENTS
+
 END DESIGN

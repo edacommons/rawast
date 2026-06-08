@@ -1684,6 +1684,11 @@ DEF_ITEMS: sequence array { repeat <DEF_ITEM> }
 // or more-distinctive keyword prefixes go first only when needed to
 // disambiguate. UNITS / DIEAREA / ROW have non-overlapping first
 // keywords here.
+// COMPONENTMASKSHIFT must precede COMPONENTS in this Choice —
+// KeyParser doesn't word-boundary check, so the shorter prefix
+// `"COMPONENTS"` would otherwise prefix-match `COMPONENTMASKSHIFT`
+// at the leading edge of the input line. Same hazard pattern as
+// SPACING ⊂ SPACINGTABLE in LAYER_KEYWORD.
 DEF_ITEM: choice {
   <DEF_TECHNOLOGY_CMD>,
   <DEF_HISTORY_CMD>,
@@ -1696,7 +1701,8 @@ DEF_ITEM: choice {
   <DEF_VIAS_BLOCK>,
   <DEF_NDRS_BLOCK>,
   <DEF_REGIONS_BLOCK>,
-  <DEF_COMPONENTMASKSHIFT_CMD>
+  <DEF_COMPONENTMASKSHIFT_CMD>,
+  <DEF_COMPONENTS_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -2060,6 +2066,135 @@ DEF_COMPONENTMASKSHIFT_CMD: sequence dict {
 }
 DEF_COMPONENTMASKSHIFT_LAYERS: sequence array {
   repeat identifier space
+}
+
+// `COMPONENTS num ; - compName modelName + clause+ ;
+//  ... END COMPONENTS` per LEF/DEF 5.8 §"Components".
+// The largest single section of a typical DEF file (one entry
+// per design instance — modern designs have millions). Each
+// entry instantiates a LEF MACRO (`modelName`) under a unique
+// `compName`, then carries placement + metadata via `+`-clauses.
+DEF_COMPONENTS_BLOCK: sequence dict {
+  "COMPONENTS":type="Components" space,
+  int:count=@ space, ";" newline,
+  <DEF_COMPONENTS_LIST>:components=@,
+  "END" space, "COMPONENTS" newline
+}
+
+DEF_COMPONENTS_LIST: sequence array { repeat <DEF_COMPONENT_ENTRY> }
+
+// `- compName modelName [+ clause]... ;` — entry starts with the
+// instance + master name pair, then `+`-prefixed clauses for
+// placement, metadata, and properties.
+DEF_COMPONENT_ENTRY: sequence dict {
+  "-" space,
+  identifier:name=@ space,
+  identifier:model=@ space,
+  repeat <DEF_COMPONENT_CLAUSE>,
+  ";" newline
+}
+
+// 12-alt Choice covering every spec-permitted COMPONENT clause.
+// Per-alt `:clauses[]=@` list-append routes all clause types
+// into the same `clauses` list — same pattern as DEF_VIA_CLAUSE
+// and DEF_NDR_CLAUSE. Ordering longer-prefix-first where the
+// keywords might collide: ROUTEHALO is the only such case
+// (HALO is NOT a prefix of ROUTEHALO — different leading char —
+// but they share the trailing `HALO` substring, harmless under
+// PEG anchoring).
+DEF_COMPONENT_CLAUSE: choice {
+  <DEF_COMP_EEQMASTER_CLAUSE>:clauses[]=@,
+  <DEF_COMP_SOURCE_CLAUSE>:clauses[]=@,
+  <DEF_COMP_FIXED_CLAUSE>:clauses[]=@,
+  <DEF_COMP_COVER_CLAUSE>:clauses[]=@,
+  <DEF_COMP_PLACED_CLAUSE>:clauses[]=@,
+  <DEF_COMP_UNPLACED_CLAUSE>:clauses[]=@,
+  <DEF_COMP_ROUTEHALO_CLAUSE>:clauses[]=@,
+  <DEF_COMP_HALO_CLAUSE>:clauses[]=@,
+  <DEF_COMP_WEIGHT_CLAUSE>:clauses[]=@,
+  <DEF_COMP_REGION_CLAUSE>:clauses[]=@,
+  <DEF_COMP_MASKSHIFT_CLAUSE>:clauses[]=@,
+  <DEF_COMP_PROPERTY_CLAUSE>:clauses[]=@
+}
+
+DEF_COMP_EEQMASTER_CLAUSE: sequence dict {
+  "+" space, "EEQMASTER":type="EeqMaster" space,
+  identifier:macro=@ space
+}
+
+// `+ SOURCE { NETLIST | DIST | USER | TIMING }` — instance
+// origin per LEF/DEF 5.8. Captured as identifier; downstream
+// consumers can constrain via Enum.
+DEF_COMP_SOURCE_CLAUSE: sequence dict {
+  "+" space, "SOURCE":type="Source" space,
+  identifier:source_type=@ space
+}
+
+// Placement variants: four distinct clauses. FIXED / COVER /
+// PLACED share the `( x y ) orient` shape; UNPLACED takes no
+// arguments. Modeled as 4 separate alts so each has its own
+// type discriminator (downstream code branches on
+// `clause["type"]` to know the placement state).
+DEF_COMP_FIXED_CLAUSE: sequence dict {
+  "+" space, "FIXED":type="Fixed" space,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  identifier:orient=@ space
+}
+DEF_COMP_COVER_CLAUSE: sequence dict {
+  "+" space, "COVER":type="Cover" space,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  identifier:orient=@ space
+}
+DEF_COMP_PLACED_CLAUSE: sequence dict {
+  "+" space, "PLACED":type="Placed" space,
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  identifier:orient=@ space
+}
+DEF_COMP_UNPLACED_CLAUSE: sequence dict {
+  "+" space, "UNPLACED":type="Unplaced" space
+}
+
+// `+ HALO [SOFT] left bottom right top` — placement halo
+// margins (per LEF/DEF 5.8). Optional SOFT flag captured as a
+// boolean field. The 4 numbers are bare, no parentheses.
+DEF_COMP_HALO_CLAUSE: sequence dict {
+  "+" space, "HALO":type="Halo" space,
+  ?<DEF_COMP_HALO_SOFT>,
+  <NUMBER>:left=@ space, <NUMBER>:bottom=@ space,
+  <NUMBER>:right=@ space, <NUMBER>:top=@ space
+}
+DEF_COMP_HALO_SOFT: sequence { "SOFT":is_soft=true space }
+
+DEF_COMP_ROUTEHALO_CLAUSE: sequence dict {
+  "+" space, "ROUTEHALO":type="RouteHalo" space,
+  <NUMBER>:halo_dist=@ space,
+  identifier:min_layer=@ space,
+  identifier:max_layer=@ space
+}
+
+DEF_COMP_WEIGHT_CLAUSE: sequence dict {
+  "+" space, "WEIGHT":type="Weight" space,
+  <NUMBER>:weight=@ space
+}
+
+DEF_COMP_REGION_CLAUSE: sequence dict {
+  "+" space, "REGION":type="Region" space,
+  identifier:region=@ space
+}
+
+// `+ MASKSHIFT shiftLayerMasks` — opaque mask-shift value per
+// spec (typically a hex string). Captured as a single
+// identifier; downstream tools that care about the
+// per-bit-layer interpretation can subparse.
+DEF_COMP_MASKSHIFT_CLAUSE: sequence dict {
+  "+" space, "MASKSHIFT":type="MaskShift" space,
+  identifier:layer_masks=@ space
+}
+
+DEF_COMP_PROPERTY_CLAUSE: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
