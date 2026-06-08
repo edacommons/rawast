@@ -1177,41 +1177,50 @@ def test_def_spec_coverage_phase1(tmp_path):
     units = next(it for it in parsed["items"] if it.get("type") == "Units")
     assert units["database_microns"] == 2000
 
-    # DIEAREA — N-point form per LEF/DEF 5.8 §"DieArea". Two
-    # points define a rectangle; more points define a die
-    # polygon outline. The fixture uses the 2-point form.
+    # DIEAREA — N-point form per LEF/DEF 5.8 §"DieArea". The
+    # fixture uses a 3-point polygon-die outline so both the
+    # common 2-point rectangle path AND the polygon path
+    # exercise the same rule.
     die = next(it for it in parsed["items"] if it.get("type") == "DieArea")
     assert die["points"] == [
         {"x": -100, "y": -100},
         {"x": 100100, "y": 100100},
+        {"x": 100100, "y": -100},
     ]
 
     # ROW — eight spec orientations (N S E W FN FS FE FW), one per
-    # ROW in the fixture. Verify every captured field per ROW.
+    # ROW in the fixture. Plus two extra rows that exercise the
+    # post-Phase-10 grammar additions: single-instance (no DO/BY/
+    # STEP) and trailing `+ PROPERTY` clauses.
     rows = [it for it in parsed["items"] if it.get("type") == "Row"]
-    assert len(rows) == 8
-    orients = [r["orient"] for r in rows]
+    assert len(rows) == 10
+    orients = [r["orient"] for r in rows[:8]]
     assert orients == ["N", "S", "E", "W", "FN", "FS", "FE", "FW"]
-    # Every row references the same site
     assert all(r["site"] == "spec_site" for r in rows)
-    # Numeric fields are real numbers, not strings
-    for r in rows:
+    for r in rows[:8]:
         assert isinstance(r["x"], (int, float))
         assert isinstance(r["y"], (int, float))
         assert isinstance(r["num_x"], int)
         assert isinstance(r["num_y"], int)
         assert isinstance(r["step_x"], int)
         assert isinstance(r["step_y"], int)
-    # Row 0: N orient, 10×1 grid stepping in x
     assert (rows[0]["num_x"], rows[0]["num_y"]) == (10, 1)
     assert (rows[0]["step_x"], rows[0]["step_y"]) == (2540, 0)
-    # Row 2: E orient, 1×8 grid stepping in y (vertical column)
     assert (rows[2]["num_x"], rows[2]["num_y"]) == (1, 8)
     assert (rows[2]["step_x"], rows[2]["step_y"]) == (0, 1900)
+    # Single-instance row — no DO/BY/STEP fields.
+    single = rows[8]
+    assert single["name"] == "ROW_SINGLE"
+    assert "num_x" not in single
+    # Row with trailing `+ PROPERTY` clauses.
+    props_row = rows[9]
+    assert props_row["name"] == "ROW_PROPS"
+    assert len(props_row["properties"]) == 2
+    assert props_row["properties"][0]["prop_value"] == 42
 
     # Phase 3: TRACKS + GCELLGRID + VIAS.
     tracks = [it for it in parsed["items"] if it.get("type") == "Tracks"]
-    assert len(tracks) == 3
+    assert len(tracks) == 4
     assert tracks[0]["direction"] == "X"
     assert tracks[0]["layers"] == ["met1"]
     # MASK qualifier — captured as optional field. SAMEMASK is a
@@ -1221,6 +1230,10 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert "same_mask" not in tracks[1]
     assert tracks[2]["mask"] == 3
     assert tracks[2]["same_mask"] is True
+    # TRACKS without trailing LAYER per LEF/DEF 5.8 — `layers`
+    # field absent.
+    assert "layers" not in tracks[3]
+    assert tracks[3]["direction"] == "Y"
 
     gcellgrids = [it for it in parsed["items"]
                   if it.get("type") == "GCellGrid"]
@@ -1229,12 +1242,12 @@ def test_def_spec_coverage_phase1(tmp_path):
                              "start": 0, "num_gcells": 11, "step": 1000}
     assert gcellgrids[1]["direction"] == "Y"
 
-    # VIAS block — 3 entries exercising geometry-form, VIARULE-
-    # form, and POLYGON geometry. Each entry's `clauses` list
-    # holds typed dicts in source order.
+    # VIAS block — 4 entries: geometry-form, VIARULE-form, POLYGON
+    # geometry, and a vendor `+ PATTERNNAME` variant. Each entry's
+    # `clauses` list holds typed dicts in source order.
     vias = next(it for it in parsed["items"] if it.get("type") == "Vias")
-    assert vias["count"] == 3
-    assert len(vias["vias"]) == 3
+    assert vias["count"] == 4
+    assert len(vias["vias"]) == 4
     geom = vias["vias"][0]
     assert geom["name"] == "spec_via_geom"
     assert len(geom["clauses"]) == 2
@@ -1258,6 +1271,11 @@ def test_def_spec_coverage_phase1(tmp_path):
         {"x": 100, "y": 100}, {"x": 0,   "y": 100},
     ]
     assert poly["clauses"][1]["mask"] == 1
+    # PATTERNNAME variant — distinct type discriminator.
+    pn = vias["vias"][3]
+    assert pn["name"] == "spec_via_gen"
+    assert pn["clauses"][0]["type"] == "PatternName"
+    assert pn["clauses"][0]["name"] == "spec_via_gen_pattern"
 
     # Phase 4: NONDEFAULTRULES + REGIONS + COMPONENTMASKSHIFT.
     cms = next(it for it in parsed["items"]
@@ -1303,12 +1321,12 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert len(guide["boxes"]) == 2  # Multi-box region.
     assert guide["clauses"][0]["region_type"] == "GUIDE"
 
-    # Phase 5: COMPONENTS. Four entries exercising every spec
-    # clause variant.
+    # Phase 5: COMPONENTS. Five entries — Fixed/Full/Cover/Unplaced
+    # plus a vendor `+ UNPLACED ( x y ) orient` variant.
     comps = next(it for it in parsed["items"]
                  if it.get("type") == "Components")
-    assert comps["count"] == 4
-    assert len(comps["components"]) == 4
+    assert comps["count"] == 5
+    assert len(comps["components"]) == 5
 
     fixed = comps["components"][0]
     assert fixed["name"] == "spec_comp_fixed"
@@ -1346,12 +1364,30 @@ def test_def_spec_coverage_phase1(tmp_path):
 
     unplaced = comps["components"][3]
     assert unplaced["clauses"] == [{"type": "Unplaced"}]
+    # 5th: UNPLACED with optional coord+orient (vendor variant).
+    unplaced_coords = comps["components"][4]
+    unplaced_clause = unplaced_coords["clauses"][0]
+    assert unplaced_clause["type"] == "Unplaced"
+    assert unplaced_clause["x"] == 500
+    assert unplaced_clause["y"] == 600
+    assert unplaced_clause["orient"] == "E"
 
-    # Phase 6: PINS. Three entries cover every clause variant.
+    # COMPONENT `+ PROPERTY` accepts multiple name+value pairs in
+    # one clause per LEF/DEF 5.8. Captured as `pairs[]`.
+    full_property = next(c for c in full["clauses"]
+                         if c["type"] == "Property")
+    assert len(full_property["pairs"]) == 2
+    assert full_property["pairs"][0]["prop_name"] == "prop_comp_r"
+    assert full_property["pairs"][0]["prop_value"] == 1.5
+    assert full_property["pairs"][1]["prop_value"] == 2.5
+
+    # Phase 6: PINS. Four entries: clk/vdd/free + a multi-PORT
+    # pin that uses the `+ PORT + LAYER bare-MASK + PLACED`
+    # OpenROAD-style emission.
     pins_block = next(it for it in parsed["items"]
                       if it.get("type") == "Pins")
-    assert pins_block["count"] == 3
-    assert len(pins_block["pins"]) == 3
+    assert pins_block["count"] == 4
+    assert len(pins_block["pins"]) == 4
 
     clk = pins_block["pins"][0]
     assert clk["name"] == "spec_pin_clk"
@@ -1406,13 +1442,30 @@ def test_def_spec_coverage_phase1(tmp_path):
         "Net", "Direction", "Unplaced",
     ]
 
+    # 4th pin: multi-PORT sub-block (the modern-router emission
+    # pattern). Inside the Port, a LAYER with bare `MASK n` (no `+`)
+    # qualifier and a PLACED sub-clause.
+    port_pin = pins_block["pins"][3]
+    assert port_pin["name"] == "spec_pin_port"
+    port_clause = next(c for c in port_pin["clauses"]
+                      if c["type"] == "Port")
+    inner_types = [c["type"] for c in port_clause["clauses"]]
+    assert inner_types == ["Layer", "Placed"]
+    inner_layer = port_clause["clauses"][0]
+    assert inner_layer["layer"] == "met3"
+    assert inner_layer["mask"] == 1
+
     # Phase 7: PINPROPERTIES + BLOCKAGES + SLOTS.
     pps = next(it for it in parsed["items"]
                if it.get("type") == "PinProperties")
-    assert pps["count"] == 3
+    assert pps["count"] == 4
     assert [e["type"] for e in pps["entries"]] == [
-        "ComponentPin", "Pin", "ComponentPin",
+        "ComponentPin", "Pin", "ComponentPin", "BareComponentPin",
     ]
+    # Bare entry: no COMPONENT keyword, comp+pin straight.
+    bare = pps["entries"][3]
+    assert bare["component"] == "spec_comp_full"
+    assert bare["pin"] == "in_bare"
     # First entry: COMPONENT scope with 2 trailing PROPERTYs.
     first = pps["entries"][0]
     assert first["component"] == "spec_comp_full"
@@ -1508,7 +1561,7 @@ def test_def_spec_coverage_phase1(tmp_path):
     # Phase 9: SPECIALNETS + NETS. The two connectivity sections.
     sn = next(it for it in parsed["items"]
               if it.get("type") == "SpecialNets")
-    assert sn["count"] == 2
+    assert sn["count"] == 4
     vdd = sn["nets"][0]
     assert vdd["name"] == "VDD"
     # Three connection forms: PIN, *, comp-pin.
@@ -1539,9 +1592,43 @@ def test_def_spec_coverage_phase1(tmp_path):
         "Use", "FixedBump", "FixedRoute", "CoverRoute",
     ]
 
+    # VPP: SPECIALNETS ROUTED body exercises every element kind.
+    # `+ RECT` / `+ POLYGON` / `+ VIA` get classified as routing
+    # body elements (DEF_SPECIALNET_ROUTE_ELEMENT alts) when
+    # they follow a ROUTED clause — that's the spec semantics,
+    # and the entry-level alts are only reached when no ROUTED
+    # clause precedes them.
+    vpp = sn["nets"][2]
+    assert vpp["name"] == "VPP"
+    vpp_clause_types = [c["type"] for c in vpp["clauses"]]
+    assert vpp_clause_types == ["Use", "Routed"]
+    vpp_routed = next(c for c in vpp["clauses"] if c["type"] == "Routed")
+    body_types = [b["type"] for b in vpp_routed["body"]]
+    # Routing body covers: Shape qualifier, Style qualifier,
+    # NEW continuation, mid-path MASK, BareVia, Rect, Polygon,
+    # ViaPlacement, plus the Points.
+    assert "Shape" in body_types
+    assert "Style" in body_types
+    assert "PathMask" in body_types
+    assert "New" in body_types
+    assert "BareVia" in body_types
+    assert "Rect" in body_types
+    assert "Polygon" in body_types
+    assert "ViaPlacement" in body_types
+    # ViaPlacement carries optional orient.
+    via_pl = next(b for b in vpp_routed["body"]
+                  if b["type"] == "ViaPlacement")
+    assert via_pl["orient"] == "N"
+
+    # VBB: empty-body `+ FIXED ;` marker (no routing geometry).
+    vbb = sn["nets"][3]
+    assert vbb["name"] == "VBB"
+    vbb_types = [c["type"] for c in vbb["clauses"]]
+    assert vbb_types == ["Use", "FixedRoute"]
+
     nets = next(it for it in parsed["items"]
                 if it.get("type") == "Nets")
-    assert nets["count"] == 3
+    assert nets["count"] == 4
     # sig_data: every NETS-specific clause.
     sig_data = nets["nets"][0]
     sig_data_types = [c["type"] for c in sig_data["clauses"]]
@@ -1571,6 +1658,33 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert [c["type"] for c in sig_test["clauses"]] == [
         "Use", "FixedRoute", "CoverRoute",
     ]
+
+    # sig_extra: `*` wildcard coords, bare via, NEW segment,
+    # VIRTUAL path element, single-parens RECT.
+    sig_extra = nets["nets"][3]
+    extra_routed = next(c for c in sig_extra["clauses"]
+                       if c["type"] == "Routed")
+    extra_path_types = [p["type"] for p in extra_routed["path"]]
+    # Mix of Point (with wildcards), BareVia (the `spec_via_geom`
+    # identifier), New (continuation), Virtual, PathRect.
+    assert "New" in extra_path_types
+    assert "Virtual" in extra_path_types
+    assert "PathRect" in extra_path_types
+    # Point with `*` x coordinate captured as the string "*".
+    point_with_wildcard_x = next(
+        p for p in extra_routed["path"]
+        if p["type"] == "Point" and p.get("x") == "*"
+    )
+    assert point_with_wildcard_x is not None
+
+    # STYLES — numbered polygon-shape declarations.
+    styles = next(it for it in parsed["items"]
+                  if it.get("type") == "Styles")
+    assert styles["count"] == 2
+    assert styles["styles"][0]["style_num"] == 1
+    assert len(styles["styles"][0]["points"]) == 8
+    assert styles["styles"][1]["style_num"] == 2
+    assert len(styles["styles"][1]["points"]) == 4
 
     # Phase 10: SCANCHAINS + GROUPS + BEGINEXT.
     chains = next(it for it in parsed["items"]

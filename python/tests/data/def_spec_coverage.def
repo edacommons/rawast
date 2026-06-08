@@ -143,6 +143,7 @@ PROPERTYDEFINITIONS
   DESIGN         prop_design_s  STRING ;
   NET            prop_net_r     REAL ;
   SPECIALNET     prop_sn_i      INTEGER ;
+  COMPONENT      prop_comp_r    REAL ;
   COMPONENTPIN   prop_cp_s      STRING ;
   REGION         prop_reg_s     STRING ;
   ROW            prop_row_i     INTEGER ;
@@ -154,7 +155,10 @@ END PROPERTYDEFINITIONS
 
 UNITS DISTANCE MICRONS 2000 ;
 
-DIEAREA ( -100 -100 ) ( 100100 100100 ) ;
+# N-point polygon-die form (>= 2 points; spec allows arbitrary
+# outline). Three-point degenerate-triangle here exercises the
+# polygon path; common case is still the 2-point rectangle.
+DIEAREA ( -100 -100 ) ( 100100 100100 ) ( 100100 -100 ) ;
 
 # All eight spec-defined orientations (N S E W FN FS FE FW), one
 # ROW per orientation, with non-trivial DO/BY/STEP so the parsed
@@ -167,6 +171,12 @@ ROW ROW_FN spec_site 0     5000  FN DO 10 BY 1 STEP 2540 0    ;
 ROW ROW_FS spec_site 1000  5000  FS DO 10 BY 1 STEP 2540 0    ;
 ROW ROW_FE spec_site 2000  5000  FE DO  1 BY 8 STEP 0    1900 ;
 ROW ROW_FW spec_site 3000  5000  FW DO  1 BY 8 STEP 0    1900 ;
+# Single-instance ROW (no DO/BY/STEP) per LEF/DEF 5.8 §"Row".
+ROW ROW_SINGLE spec_site 9000 9000 N ;
+# ROW with trailing `+ PROPERTY` clauses per spec.
+ROW ROW_PROPS spec_site 4000 9000 N DO 5 BY 1 STEP 1000 0
+  + PROPERTY prop_row_i 42
+  + PROPERTY prop_row_i 99 ;
 
 # ----- Phase 3: TRACKS + GCELLGRID + VIAS -----
 
@@ -176,6 +186,9 @@ ROW ROW_FW spec_site 3000  5000  FW DO  1 BY 8 STEP 0    1900 ;
 TRACKS X    100   DO 50  STEP 200   LAYER met1 ;
 TRACKS Y    100   DO 50  STEP 200   MASK 2 LAYER met2 met3 ;
 TRACKS X    100   DO 50  STEP 200   MASK 3 SAMEMASK LAYER met4 ;
+# TRACKS without trailing LAYER per LEF/DEF 5.8 (some abstracted
+# DEFs omit it; spec requires but tools emit both).
+TRACKS Y    50    DO 25  STEP 100 ;
 
 # `GCELLGRID dir start DO num STEP space ;`.
 GCELLGRID X 0     DO 11  STEP 1000 ;
@@ -187,7 +200,7 @@ GCELLGRID Y 0     DO  6  STEP 2000 ;
 # LAYERS / CUTSPACING / ENCLOSURE / ROWCOL / ORIGIN / OFFSET /
 # PATTERN). Plus a POLYGON-shape entry covering the geometry
 # form's polygon variant.
-VIAS 3 ;
+VIAS 4 ;
   - spec_via_geom
       + RECT met1 ( -100 -100 ) ( 100 100 )
       + RECT met2 + MASK 2 ( -50 -50 ) ( 50 50 ) ;
@@ -204,6 +217,11 @@ VIAS 3 ;
   - spec_via_polygon
       + POLYGON met3 ( 0 0 ) ( 100 0 ) ( 100 100 ) ( 0 100 )
       + POLYGON met4 + MASK 1 ( 200 200 ) ( 300 200 ) ( 300 300 ) ;
+  # Vendor `+ PATTERNNAME` form (alternative to `+ PATTERN`) per
+  # OpenROAD-emitted DEFs. Distinct type=PatternName discriminator.
+  - spec_via_gen
+      + PATTERNNAME spec_via_gen_pattern
+      + RECT met1 ( -200 -200 ) ( 200 200 ) ;
 END VIAS
 
 # ----- Phase 4: NONDEFAULTRULES + REGIONS + COMPONENTMASKSHIFT -----
@@ -249,7 +267,7 @@ END REGIONS
 #   spec_comp_full    — every typed clause (the kitchen sink)
 #   spec_comp_cover   — COVER placement + HALO SOFT (optional flag)
 #   spec_comp_unplaced — UNPLACED (no positional args)
-COMPONENTS 4 ;
+COMPONENTS 5 ;
   - spec_comp_fixed cellModelA
       + FIXED ( 100 200 ) N ;
   - spec_comp_full cellModelB
@@ -261,12 +279,18 @@ COMPONENTS 4 ;
       + WEIGHT 5
       + REGION spec_region_fence
       + MASKSHIFT 0xA5
-      + PROPERTY prop_comp_i 42 ;
+      # COMPONENT PROPERTY multi-pair form per LEF/DEF 5.8 §"Components".
+      # One `+ PROPERTY` keyword may carry multiple name+value pairs.
+      + PROPERTY prop_comp_r 1.5 prop_comp_r 2.5 ;
   - spec_comp_cover cellModelC
       + COVER ( 0 0 ) W
       + HALO SOFT 1 2 3 4 ;
   - spec_comp_unplaced cellModelD
       + UNPLACED ;
+  # UNPLACED with optional coord+orient — some tools emit this
+  # variant rather than the bare `+ UNPLACED`.
+  - spec_comp_unplaced_coords cellModelE
+      + UNPLACED ( 500 600 ) E ;
 END COMPONENTS
 
 # ----- Phase 6: PINS -----
@@ -279,7 +303,7 @@ END COMPONENTS
 #                   keywords + MASK/SPACING/DRW qualifiers on
 #                   LAYER/POLYGON/VIA shapes + FIXED placement
 #   spec_pin_free — minimal entry + UNPLACED
-PINS 3 ;
+PINS 4 ;
   - spec_pin_clk
       + NET clk_net
       + DIRECTION INPUT
@@ -311,6 +335,17 @@ PINS 3 ;
       + NET sig
       + DIRECTION OUTPUT
       + UNPLACED ;
+  # PIN multi-PORT sub-block per LEF/DEF 5.8 §"Pins". Modern
+  # routers (OpenROAD, etc.) wrap pin shapes in `+ PORT` even
+  # for single-port pins. PIN LAYER's `MASK n` form here omits
+  # the `+` per the same flow.
+  - spec_pin_port
+      + NET sig_port
+      + DIRECTION INPUT
+      + USE SIGNAL
+      + PORT
+        + LAYER met3 MASK 1 ( -400 -150 ) ( 400 150 )
+        + PLACED ( 400 251940 ) N ;
 END PINS
 
 # ----- Phase 7: PINPROPERTIES + BLOCKAGES + SLOTS -----
@@ -318,7 +353,7 @@ END PINS
 # Per LEF/DEF 5.8 §"Pin Properties". Two entry forms: COMPONENT
 # (component instance + pin name) and PIN (pin name only). Each
 # entry carries `+ PROPERTY` trailers; bound as `properties[]`.
-PINPROPERTIES 3 ;
+PINPROPERTIES 4 ;
   - COMPONENT spec_comp_full in1
       + PROPERTY prop_d_def_i 100
       + PROPERTY prop_n_def_s "comp-pin-attr" ;
@@ -326,6 +361,10 @@ PINPROPERTIES 3 ;
       + PROPERTY prop_design_i 7 ;
   - COMPONENT spec_comp_full out1
       + PROPERTY prop_design_s "another-attr" ;
+  # Bare comp+pin form (no COMPONENT keyword) per OpenROAD-
+  # emitted DEFs. Distinct `type="BareComponentPin"`.
+  - spec_comp_full in_bare
+      + PROPERTY prop_design_i 1 ;
 END PINPROPERTIES
 
 # Per LEF/DEF 5.8 §"Blockages". Two entry types: LAYER blockages
@@ -338,7 +377,9 @@ BLOCKAGES 3 ;
       + PUSHDOWN
       + COMPONENT spec_comp_full
       RECT ( 0 0 ) ( 100 100 )
-      POLYGON ( 0 0 ) ( 100 0 ) ( 100 100 ) ( 0 100 ) ;
+      # BLOCKAGE POLYGON with `*` wildcard coords — per LEF/DEF 5.8
+      # the coord-compaction rule applies inside power-flow blockages.
+      POLYGON ( 0 0 ) ( 100 0 ) ( * 100 ) ( 0 * ) ;
   - LAYER met2
       + FILLS
       + EXCEPTPGNET
@@ -363,6 +404,14 @@ SLOTS 2 ;
   - LAYER met2
       POLYGON ( 0 0 ) ( 50 0 ) ( 50 50 ) ( 0 50 ) ;
 END SLOTS
+
+# Per LEF/DEF 5.8 §"Styles". Numbered polygon-shape definitions
+# referenced by other sections via `+ STYLE n`.
+STYLES 2 ;
+  - STYLE 1 ( 30 10 ) ( 10 30 ) ( -10 30 ) ( -30 10 )
+            ( -30 -10 ) ( -10 -30 ) ( 10 -30 ) ( 30 -10 ) ;
+  - STYLE 2 ( 0 0 ) ( 100 0 ) ( 100 100 ) ( 0 100 ) ;
+END STYLES
 
 # ----- Phase 8: FILLS -----
 
@@ -391,7 +440,7 @@ END FILLS
 # and SHIELD wires. Three entries cover every typed clause and
 # every connection-list form (compName pinName / PIN pinName /
 # * pinName).
-SPECIALNETS 2 ;
+SPECIALNETS 4 ;
   - VDD ( PIN VDD ) ( * VDD ) ( spec_comp_full VDD )
       + USE POWER
       + SYNTHESIZED
@@ -411,13 +460,28 @@ SPECIALNETS 2 ;
       + FIXEDBUMP
       + FIXED met1 100 ( 0 200 ) ( 1000 200 )
       + COVER met2 50 ( 0 300 ) ( 1000 300 ) ;
+  # Routing-body variants: NEW continuation segment with width,
+  # bare via name (no `VIA` keyword), inline `+ STYLE n`
+  # reference, mid-path `MASK n` (no `+`), entry-level
+  # `+ RECT layer ( pt pt )` and `+ POLYGON`, entry-level
+  # `+ VIA name [orient] ( pt )` placement.
+  - VPP ( PIN VPP )
+      + USE POWER
+      + ROUTED met1 100 + SHAPE STRIPE + STYLE 1
+        ( 0 0 ) MASK 1 ( 1000 0 ) spec_via_geom
+        NEW met2 100 + SHAPE STRIPE ( 1000 0 ) ( 1000 1000 )
+      + RECT met1 ( 0 0 ) ( 100 100 )
+      + POLYGON met1 ( 200 200 ) ( 300 200 ) ( 300 300 )
+      + VIA spec_via_geom N ( 500 500 ) ;
+  # Empty-body `+ FIXED ;` marker (ICEWall octilinear pattern).
+  - VBB ( PIN VBB ) + USE GROUND + FIXED ;
 END SPECIALNETS
 
 # Per LEF/DEF 5.8 §"Nets". Signal nets with looser routing
 # semantics. Three entries cover the NETS-specific clauses
 # (FREQUENCY / NONDEFAULTRULE / SHIELDNET / SUBNET / XTALK /
 # NOSHIELD) plus the shared ones.
-NETS 3 ;
+NETS 4 ;
   - sig_data ( spec_comp_full A ) ( spec_comp_full B )
       + USE SIGNAL
       + SOURCE TIMING
@@ -442,6 +506,17 @@ NETS 3 ;
       + USE SIGNAL
       + FIXED met2 ( 0 200 ) ( 100 200 )
       + COVER met3 ( 0 300 ) ( 100 300 ) ;
+  # NETS path with `*` wildcard coordinates (coord-compaction
+  # form), bare via (no `VIA` keyword), NEW continuation
+  # segment without width, VIRTUAL pin-touch marker, and
+  # single-parens RECT shape per LEF/DEF 5.8 §"Nets".
+  - sig_extra ( spec_comp_full extra )
+      + USE SIGNAL
+      + ROUTED met1 ( 100 100 ) ( 200 * ) ( * 300 ) ( 300 300 300 )
+        spec_via_geom
+        NEW met2 ( 300 300 ) ( 400 400 )
+        VIRTUAL ( 500 500 )
+        RECT ( -10 -10 10 10 ) ;
 END NETS
 
 # ----- Phase 10: SCANCHAINS + GROUPS + BEGINEXT -----

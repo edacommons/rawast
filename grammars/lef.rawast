@@ -2970,6 +2970,7 @@ DEF_NET_PATH_NEW_WIDTH_INT: sequence { int:width=@ space }
 // don't put orient on it; bare-via-WITH-orient is an
 // undocumented combination.
 DEF_NET_PATH_BARE_VIA: sequence dict {
+  "":type="BareVia",
   identifier:via=@ space
 }
 DEF_NET_PATH_POINT: sequence dict {
