@@ -6,7 +6,7 @@ project(rawast
     LANGUAGES CXX
 )
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -64,7 +64,7 @@ target_include_directories(rawast
 
 target_link_libraries(rawast PUBLIC tl::expected)
 
-target_compile_features(rawast PUBLIC cxx_std_20)
+target_compile_features(rawast PUBLIC cxx_std_17)
 
 if(RAWAST_WARNINGS_AS_ERRORS)
     if(MSVC)
@@ -102,7 +102,7 @@ if(SKBUILD)
 
     nanobind_add_module(_native NB_STATIC python/src/native.cc)
     target_link_libraries(_native PRIVATE rawast::rawast)
-    target_compile_features(_native PRIVATE cxx_std_20)
+    target_compile_features(_native PRIVATE cxx_std_17)
 
     install(TARGETS _native LIBRARY DESTINATION rawast)
 

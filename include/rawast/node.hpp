@@ -49,7 +49,18 @@ public:
         return idx_ != std::numeric_limits<std::size_t>::max();
     }
 
-    constexpr auto operator<=>(const NodeId&) const noexcept = default;
+    // Six relational operators expressed explicitly (C++17). Previously
+    // a single `operator<=>(...) = default` (C++20) generated them. The
+    // engine doesn't need C++20 for anything else, so this keeps the
+    // build-toolchain bar low: C++17 = GCC 7+ / Clang 5+ / MSVC 2017+ /
+    // manylinux2014. Easy backport if we ever pick C++20 for other
+    // reasons; in the meantime, the explicit form is just as fast.
+    constexpr bool operator==(const NodeId& o) const noexcept { return idx_ == o.idx_; }
+    constexpr bool operator!=(const NodeId& o) const noexcept { return idx_ != o.idx_; }
+    constexpr bool operator< (const NodeId& o) const noexcept { return idx_ <  o.idx_; }
+    constexpr bool operator<=(const NodeId& o) const noexcept { return idx_ <= o.idx_; }
+    constexpr bool operator> (const NodeId& o) const noexcept { return idx_ >  o.idx_; }
+    constexpr bool operator>=(const NodeId& o) const noexcept { return idx_ >= o.idx_; }
 };
 
 // One node in the grammar tree. All fields default-construct to a safe
