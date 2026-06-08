@@ -672,10 +672,17 @@ def test_lef_spec_coverage_phase1(tmp_path):
     via = next(it for it in items
                if it.get("type") == "VIA" and it.get("name") == "spec_via_geom")
     assert via["is_default"] is True
-    # First property is RESISTANCE, then three LAYER groups.
+    # LEF/DEF 5.8 §"Via" geometry-form body: RESISTANCE (once),
+    # 3 LAYER groups, then a trailing PROPERTY clause — all slot
+    # into the same `properties` array in source order, each with
+    # its own discriminator type (Resistance / no-type LAYER / Property).
     assert via["properties"][0]["type"] == "Resistance"
     assert via["properties"][0]["value"] == 50
-    assert [p.get("layer") for p in via["properties"][1:]] == ["li1", "mcon", "met1"]
+    assert [p.get("layer") for p in via["properties"][1:4]] == \
+        ["li1", "mcon", "met1"]
+    assert via["properties"][4] == {"type": "Property",
+                                    "prop_name": "prop_via_i",
+                                    "prop_value": 42}
 
     # VIARULE-based VIA form — all sub-clauses become typed fields
     # on the VIA dict (no `properties` list).
@@ -769,7 +776,12 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert macro["is_fixed_mask"] is True       # FIXEDMASK on MACRO
     assert macro["eeq"] == "spec_macro_eq"       # EEQ reference
     assert macro["source"] == "USER"             # legacy SOURCE clause
-    assert macro["foreigns"] == [{"cell": "spec_macro", "x": 0, "y": 0}]
+    # LEF/DEF 5.8 §"Macro" FOREIGN allows both `cell xy` and
+    # `cell xy orient` forms; orient is captured as optional field.
+    assert macro["foreigns"] == [
+        {"cell": "spec_macro", "x": 0, "y": 0},
+        {"cell": "spec_macro_mirrored", "x": 0, "y": 0, "orient": "FN"},
+    ]
     assert macro["origin"] == {"x": 0, "y": 0}
     # spec-canonical: SITE clauses now land in a list
     assert macro["sites"] == [{"name": "spec_site"}]

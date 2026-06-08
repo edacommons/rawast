@@ -579,8 +579,18 @@ MACRO_FOREIGN: sequence dict {
   ?<MACRO_FOREIGN_XY>,
   ";" newline
 }
+// LEF/DEF 5.8 §"Macro" FOREIGN syntax:
+//   FOREIGN cellName [( x y ) [orient]] [STRUCTURE] ;
+// The xy pair is bare numbers (not parenthesised); orient is one
+// of N / S / E / W / FN / FS / FE / FW. STRUCTURE is a rarely-
+// used legacy keyword pending real-corpus exposure. Captured as
+// optional `orient` field — absent when not present.
 MACRO_FOREIGN_XY: sequence {
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  ?<MACRO_FOREIGN_ORIENT>
+}
+MACRO_FOREIGN_ORIENT: sequence {
+  identifier:orient=@ space
 }
 
 MACRO_SIZE: sequence {
@@ -1244,9 +1254,27 @@ VIA_DEFAULT_LITERAL: choice {
   "Default":@
 }
 
+// LEF/DEF 5.8 §"Via" — geometry-form VIA body items. RESISTANCE
+// once (optional), LAYER groups (one or more), plus per-spec
+// PROPERTY clauses that round-trip into the same `properties`
+// array alongside the layer groups. Order preserved by the
+// parent VIA_PROPERTIES sequence array.
+//
+// Save dispatch: discriminator-keyed alts (Resistance / Property)
+// listed BEFORE the LayerGroup alt so save_v2's value-shape
+// matching tries the typed forms first and falls through to the
+// LayerGroup catch-all only when neither discriminator matches.
 VIA_PROPERTY: choice {
   <VIA_RESISTANCE>,
+  <VIA_PROPERTY_KV>,
   <VIA_LAYER_GROUP>
+}
+
+VIA_PROPERTY_KV: sequence dict {
+  "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space,
+  ";" newline
 }
 
 VIA_RESISTANCE: sequence dict {

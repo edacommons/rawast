@@ -221,6 +221,10 @@ VIA spec_via_geom DEFAULT
      RECT -0.085 -0.085 0.085 0.085 ;
    LAYER met1 ;
      RECT -0.145 -0.115 0.145 0.115 ;
+   # LEF/DEF 5.8 §"Via" allows trailing PROPERTY clauses inside
+   # the geometry-form VIA body — same shape as MACRO/PIN/NDR
+   # PROPERTY trailers.
+   PROPERTY prop_via_i 42 ;
 END spec_via_geom
 
 VIA spec_via_viarule_form VIARULE spec_viarule_gen ;
@@ -283,7 +287,12 @@ END spec_ndr
 MACRO spec_macro
   CLASS BLOCK ;
   FIXEDMASK ;
+  # Two FOREIGN clauses — `cell xy` and `cell xy orient` forms
+  # per LEF/DEF 5.8 §"Macro"; the spec also defines `cell` alone
+  # but real PDKs always emit xy. List captured via the engine's
+  # `[]` list-append binding so all variants round-trip in order.
   FOREIGN spec_macro 0 0 ;
+  FOREIGN spec_macro_mirrored 0 0 FN ;
   EEQ spec_macro_eq ;
   ORIGIN 0 0 ;
   SOURCE USER ;
