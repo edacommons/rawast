@@ -312,9 +312,13 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     assert li1["thickness"] == 0.1
     # Less-common clauses (SPACINGTABLE / RESISTANCE w/qualifier /
     # CAPACITANCE w/qualifier / ANTENNA*) still come through the
-    # generic `properties` pass-through.
+    # generic `properties` pass-through. Sky130 uses the
+    # SPACINGTABLE form (`SPACING TABLE PARALLELRUNLENGTH …`),
+    # which now correctly classifies as the SPACINGTABLE keyword
+    # (previously misclassified as SPACING via prefix-match — the
+    # audit-driven LAYER_KEYWORD reorder fixed that).
     kinds = {p["kind"] for p in li1["properties"]}
-    assert {"SPACING", "RESISTANCE", "CAPACITANCE", "ANTENNAMODEL"} <= kinds
+    assert {"SPACINGTABLE", "RESISTANCE", "CAPACITANCE", "ANTENNAMODEL"} <= kinds
 
     # LEF58_TYPE PROPERTY captured (opaque inner string is fine).
     nwell = next(la for la in layers if la["name"] == "nwell")
@@ -548,10 +552,32 @@ def test_lef_spec_coverage_phase1(tmp_path):
     routing_props = layers["spec_routing"]["properties"]
     routing_kinds = [p["kind"] for p in routing_props]
     # Less-common spec_routing keywords fall through to `properties`.
-    for kw in ("RESISTANCE", "CAPACITANCE", "ANTENNAAREARATIO",
-               "ANTENNADIFFAREARATIO", "ANTENNACUMAREARATIO",
-               "ANTENNAMODEL", "SPACING", "PROPERTY"):
+    # Includes the spec-completeness antenna keywords added by the
+    # audit (ANTENNACUMSIDEAREARATIO, ANTENNACUMDIFFSIDEAREARATIO,
+    # ANTENNACUMROUTINGPLUSCUT, ANTENNAAREAMINUSDIFF,
+    # ANTENNAAREADIFFREDUCEPWL) plus SPACINGTABLE (must classify as
+    # itself, not as SPACING via prefix-match) and the routing MIN*/
+    # MAX*/MINSTEP/MINIMUMCUT/WIREEXTENSION cluster.
+    for kw in (
+            "RESISTANCE", "CAPACITANCE", "PROPERTY",
+            "MINWIDTH", "MAXWIDTH", "MINENCLOSEDAREA", "MINSTEP",
+            "MINIMUMCUT", "WIREEXTENSION",
+            "ANTENNAAREARATIO", "ANTENNADIFFAREARATIO",
+            "ANTENNACUMAREARATIO", "ANTENNACUMDIFFAREARATIO",
+            "ANTENNASIDEAREARATIO", "ANTENNADIFFSIDEAREARATIO",
+            "ANTENNACUMSIDEAREARATIO", "ANTENNACUMDIFFSIDEAREARATIO",
+            "ANTENNAAREAFACTOR", "ANTENNASIDEAREAFACTOR",
+            "ANTENNAGATEPLUSDIFF", "ANTENNAAREAMINUSDIFF",
+            "ANTENNACUMROUTINGPLUSCUT", "ANTENNAAREADIFFREDUCEPWL",
+            "ANTENNAMODEL",
+            "SPACING", "SPACINGTABLE"):
         assert kw in routing_kinds, f"spec_routing missing {kw}"
+    # SPACINGTABLE MUST classify as itself, not as SPACING via
+    # prefix-match — guards against accidental reordering of
+    # LAYER_KEYWORD that would re-introduce the prefix hazard.
+    st = next(p for p in routing_props if p["kind"] == "SPACINGTABLE")
+    assert st["values"][:2] == ["PARALLELRUNLENGTH", 0]
+    assert "WIDTH" in st["values"]
 
     assert layers["spec_cut"]["layer_type"] == "CUT"
     assert layers["spec_cut"]["width"] == 0.17

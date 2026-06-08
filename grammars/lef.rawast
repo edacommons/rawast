@@ -1013,8 +1013,26 @@ LAYER_PAREN_GROUP: sequence array {
 // come first; LEF58 extension keywords (CUTCLASS, EOLKEEPOUT,
 // etc.) come last. Re-profile (rawast parse --profile) when
 // real-corpus measurements change the distribution.
+// IMPORTANT: order matters under predictive PEG. `KeyParser` does
+// NOT enforce word boundaries — it accepts any input whose first
+// N bytes match the literal, even if byte N+1 is identifier-
+// continuation. So a SHORTER keyword that's a strict prefix of a
+// LONGER one (e.g. `SPACING` ⊂ `SPACINGTABLE`,
+// `ANTENNACUMSIDEAREARATIO` ⊂ `ANTENNACUMDIFFSIDEAREARATIO` —
+// they share `ANTENNACUM`, then a 3rd-char difference, but the
+// rule applies for ANY pair where one is a strict prefix) MUST
+// appear AFTER its longer form, otherwise the shorter alt commits
+// first and the rest gets swept into the generic `values` list
+// with the wrong `kind`. Current modelled prefix pairs:
+//
+//   SPACINGTABLE before SPACING
+//
+// New keywords must be audited against the rest of this list for
+// the same hazard. (Word-boundary checking inside KeyParser would
+// remove this footgun — pending engine change.)
 LAYER_KEYWORD: choice {
   // High-frequency (every routing LAYER hits these on Sky130 / NanGate).
+  "SPACINGTABLE":@,       // MUST precede SPACING — prefix hazard
   "SPACING":@,
   "RESISTANCE":@,
   "CAPACITANCE":@,
@@ -1027,7 +1045,6 @@ LAYER_KEYWORD: choice {
   "MINENCLOSEDAREA":@,
   "ANTENNACUMAREARATIO":@,
   "ANTENNAAREARATIO":@,
-  "SPACINGTABLE":@,
   "PROPERTY":@,
   // Medium-frequency.
   "MINWIDTH":@,
@@ -1036,6 +1053,14 @@ LAYER_KEYWORD: choice {
   "MINCUTS":@,
   "MASK":@,
   "ANTENNACUMDIFFAREARATIO":@,
+  // Spec-completeness antenna keywords — surfaced by the
+  // spec_coverage audit; not seen in the local PDK corpus but
+  // defined in LEF/DEF 5.8 §"Layer (Routing)".
+  "ANTENNACUMDIFFSIDEAREARATIO":@,
+  "ANTENNACUMSIDEAREARATIO":@,
+  "ANTENNACUMROUTINGPLUSCUT":@,
+  "ANTENNAAREAMINUSDIFF":@,
+  "ANTENNAAREADIFFREDUCEPWL":@,
   "ANTENNAAREAFACTOR":@,
   "ANTENNAGATEPLUSDIFF":@,
   "ANTENNASIDEAREARATIO":@,
