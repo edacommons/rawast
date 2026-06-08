@@ -2409,8 +2409,20 @@ DEF_PIN_VIA_CLAUSE: sequence dict {
   "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
 }
 
-DEF_PIN_MASK_QUAL: sequence {
+// Spec form is `+ MASK n` but real DEFs (klayout testdata
+// masks-1, others) emit `MASK n` without the `+` prefix.
+// Choice over both forms — both bind `:mask=@`. Predictive PEG
+// dispatches by first byte (`+` vs `M`). On save the WITH_PLUS
+// form wins (listed first); reparse handles either input.
+DEF_PIN_MASK_QUAL: choice {
+  <DEF_PIN_MASK_QUAL_WITH_PLUS>,
+  <DEF_PIN_MASK_QUAL_BARE>
+}
+DEF_PIN_MASK_QUAL_WITH_PLUS: sequence {
   "+" space, "MASK" space, int:mask=@ space
+}
+DEF_PIN_MASK_QUAL_BARE: sequence {
+  "MASK" space, int:mask=@ space
 }
 
 // Placement clauses — same shape as COMPONENT placement
@@ -2899,7 +2911,10 @@ DEF_SPECIALNET_CONNECTIONS: sequence array {
 
 // All `+`-prefixed SPECIALNET clauses. Ordered longer-prefix-
 // first within each prefix group; `SOURCE` / `SUBNET` /
-// `SYNTHESIZED` distinct first chars (no overlap).
+// `SYNTHESIZED` distinct first chars (no overlap). RECT and
+// POLYGON appear at entry level (outside a ROUTED clause) in
+// some vendor-emitted DEFs; reuse DEF_SPECIALNET_BODY_RECT /
+// DEF_SPECIALNET_BODY_POLYGON since the shape is identical.
 DEF_SPECIALNET_CLAUSE: choice {
   <DEF_SPECIALNET_SYNTHESIZED>:clauses[]=@,
   <DEF_SPECIALNET_VOLTAGE>:clauses[]=@,
@@ -2912,8 +2927,24 @@ DEF_SPECIALNET_CLAUSE: choice {
   <DEF_SPECIALNET_ESTCAP>:clauses[]=@,
   <DEF_SPECIALNET_WEIGHT>:clauses[]=@,
   <DEF_SPECIALNET_PROPERTY>:clauses[]=@,
-  <DEF_SPECIALNET_ROUTED>:clauses[]=@
+  <DEF_SPECIALNET_ROUTED>:clauses[]=@,
+  <DEF_SPECIALNET_BODY_RECT>:clauses[]=@,
+  <DEF_SPECIALNET_BODY_POLYGON>:clauses[]=@,
+  <DEF_SPECIALNET_BODY_VIA_PLACEMENT>:clauses[]=@
 }
+
+// `+ VIA viaName ( pt )` — entry-level VIA placement (or as a
+// SPECIALNET ROUTED body element). Some vendor DEFs use this
+// form instead of placing the VIA inside a ROUTED clause's
+// path. Distinct from DEF_NET_PATH_VIA (which is the VIA path
+// element inside a routing clause, no `+` prefix).
+DEF_SPECIALNET_BODY_VIA_PLACEMENT: sequence dict {
+  "+" space, "VIA":type="ViaPlacement" space,
+  identifier:via=@ space,
+  ?<DEF_SPECIALNET_BODY_VIA_ORIENT>,
+  "(" space, <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space, ")" space
+}
+DEF_SPECIALNET_BODY_VIA_ORIENT: sequence { identifier:orient=@ space }
 
 DEF_SPECIALNET_SYNTHESIZED: sequence dict {
   "+" space, "SYNTHESIZED":type="Synthesized":is_synthesized=true space
@@ -2984,12 +3015,30 @@ DEF_SPECIALNET_ROUTE_ELEMENT: choice {
   <DEF_NET_QUAL_SHAPE>:body[]=@,
   <DEF_NET_QUAL_MASK>:body[]=@,
   <DEF_NET_QUAL_NDR>:body[]=@,
+  <DEF_NET_QUAL_STYLE>:body[]=@,
   <DEF_SPECIALNET_BODY_RECT>:body[]=@,
   <DEF_SPECIALNET_BODY_POLYGON>:body[]=@,
+  <DEF_SPECIALNET_BODY_VIA_PLACEMENT>:body[]=@,
   <DEF_NET_PATH_POINT>:body[]=@,
+  <DEF_NET_PATH_MID_MASK>:body[]=@,
   <DEF_NET_PATH_VIA>:body[]=@,
   <DEF_NET_PATH_NEW_WIDTH>:body[]=@,
   <DEF_NET_PATH_BARE_VIA>:body[]=@
+}
+
+// `+ STYLE n` — references a STYLES entry by number for the
+// routing-path shape (per LEF/DEF 5.8). Captured as a typed
+// dict on the routing body.
+DEF_NET_QUAL_STYLE: sequence dict {
+  "+" space, "STYLE":type="Style" space, int:style=@ space
+}
+
+// `MASK n` mid-path — appears INSIDE a routing path (no `+`
+// prefix). Switches the mask layer for subsequent points/vias
+// in the same path. Listed BEFORE bare via so `MASK` (an
+// identifier) doesn't fall into the bare-via catch-all.
+DEF_NET_PATH_MID_MASK: sequence dict {
+  "MASK":type="PathMask" space, int:mask=@ space
 }
 
 // `+ RECT layer ( pt pt )` shape element inside ROUTED.
