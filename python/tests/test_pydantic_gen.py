@@ -521,11 +521,17 @@ def test_lef_spec_coverage_phase1(tmp_path):
     ums = [it for it in items if it.get("type") == "UseMinSpacing"]
     assert {(u["object"], u["value"]) for u in ums} == {("OBS", "ON"), ("PIN", "OFF")}
 
-    # PROPERTYDEFINITIONS — every object × type × RANGE combination.
+    # PROPERTYDEFINITIONS — every spec object × type × RANGE
+    # combination. All 14 LEF/DEF 5.8 §"Property Definitions"
+    # scopes (the 7 LEF-canonical ones plus the 7 DEF-context
+    # ones since the toolchain shares property declarations
+    # across LEF/DEF for round-trip symmetry).
     pd = by_type["PropertyDefinitions"]
     objects = {d["object"] for d in pd["definitions"]}
     assert objects == {"LAYER", "LIBRARY", "MACRO", "VIA", "VIARULE",
-                       "NONDEFAULTRULE", "PIN"}
+                       "NONDEFAULTRULE", "PIN", "COMPONENTPIN",
+                       "REGION", "DESIGN", "NET", "SPECIALNET",
+                       "ROW", "GROUP"}
     types = {d["data_type"] for d in pd["definitions"]}
     assert types == {"INTEGER", "REAL", "STRING"}
     ranged = next(d for d in pd["definitions"] if d["prop_name"] == "prop_ranged")
@@ -711,12 +717,24 @@ def test_lef_spec_coverage_phase1(tmp_path):
                                    "x2": 0.085,  "y2": 0.085},
          "spacing": {"x": 0.36, "y": 0.36}},
     ]
+    # LEF/DEF 5.8 §"Via Rule" non-GENERATE form allows trailing
+    # `VIA viaName ;` lines naming the VIAs the rule produces.
+    # The GENERATE form (spec_viarule_gen) doesn't use these.
+    assert viarules["spec_viarule_pair"]["vias"] == [
+        {"type": "Via", "name": "spec_via_geom"},
+        {"type": "Via", "name": "spec_via_viarule_form"},
+    ]
+    assert "vias" not in viarules["spec_viarule_gen"]
 
     ndr = next(it for it in items if it.get("type") == "NonDefaultRule")
     assert ndr["name"] == "spec_ndr"
+    # LEF/DEF 5.8 §"Non-Default Rule" body items in source order:
+    # HardSpacing + 2 Layers + Via + ViaRule + UseVia + UseViaRule
+    # + MinCuts + 3 trailing Property clauses.
     prop_types = [p.get("type") for p in ndr["properties"]]
     assert prop_types == ["HardSpacing", "Layer", "Layer", "Via",
-                          "ViaRule", "MinCuts"]
+                          "ViaRule", "UseVia", "UseViaRule", "MinCuts",
+                          "Property", "Property", "Property"]
     # HARDSPACING marker.
     assert ndr["properties"][0]["is_hard_spacing"] is True
     # Per-LAYER properties catcher-flatten into the LAYER sub-block dict.
@@ -726,12 +744,23 @@ def test_lef_spec_coverage_phase1(tmp_path):
     met1_layer = ndr["properties"][2]
     assert met1_layer["diag_spacing"] == 0.5
     assert met1_layer["wire_ext"] == 0.05
-    # VIA / VIARULE references and MINCUTS.
+    # VIA / VIARULE references, USEVIA / USEVIARULE, MINCUTS, then
+    # trailing Property clauses with INTEGER / REAL / STRING values.
     assert ndr["properties"][3] == {"type": "Via", "via": "spec_via_geom"}
     assert ndr["properties"][4] == {"type": "ViaRule",
                                     "viarule": "spec_viarule_gen"}
-    assert ndr["properties"][5] == {"type": "MinCuts",
+    assert ndr["properties"][5] == {"type": "UseVia",
+                                    "via": "spec_via_geom"}
+    assert ndr["properties"][6] == {"type": "UseViaRule",
+                                    "viarule": "spec_viarule_gen"}
+    assert ndr["properties"][7] == {"type": "MinCuts",
                                     "cut_layer": "mcon", "num_cuts": 2}
+    # Trailing PROPERTY clauses — INTEGER / REAL / STRING values.
+    assert ndr["properties"][8] == {"type": "Property",
+                                    "prop_name": "prop_ndr_i",
+                                    "prop_value": 7}
+    assert ndr["properties"][9]["prop_value"] == 1.5
+    assert ndr["properties"][10]["prop_value"] == "ndr-string-value"
 
     # Phase 4: MACRO with every body sub-statement.
     macro = next(it for it in items

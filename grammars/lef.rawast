@@ -237,6 +237,20 @@ PROPDEF_DEFAULT: choice {
 // VIARULE must come before VIA — predictive PEG matches the first
 // successful prefix, so "VIA" would greedily consume the "VIA" of
 // "VIARULE" and the subsequent token-boundary check would fail.
+// LEF/DEF 5.8 §"Property Definitions" scopes. The LEF reference
+// covers LAYER / LIBRARY / MACRO / VIARULE / VIA / NONDEFAULTRULE
+// / PIN; the DEF reference adds COMPONENTPIN / REGION / DESIGN /
+// NET / SPECIALNET / ROW / GROUP. Real tool-emitted LEFs and
+// DEFs use either set interchangeably for round-trip purposes
+// (a LEF library shared with a DEF design block declares the
+// DEF scopes here so the toolchain can validate properties end-
+// to-end), so we accept the union.
+//
+// Order: longer-prefix-first to avoid Key prefix-matching
+// hazards — NONDEFAULTRULE before NET (no overlap, just being
+// careful); SPECIALNET before NET (clear prefix); COMPONENTPIN
+// before COMPONENT (in case future scope is added); VIARULE
+// before VIA (existing requirement).
 PROPDEF_OBJECT: choice {
   "LAYER":@,
   "LIBRARY":@,
@@ -244,7 +258,14 @@ PROPDEF_OBJECT: choice {
   "VIARULE":@,
   "VIA":@,
   "NONDEFAULTRULE":@,
-  "PIN":@
+  "SPECIALNET":@,
+  "NET":@,
+  "COMPONENTPIN":@,
+  "PIN":@,
+  "REGION":@,
+  "DESIGN":@,
+  "ROW":@,
+  "GROUP":@
 }
 
 MANUFACTURINGGRID_CMD: sequence dict {
@@ -1261,13 +1282,26 @@ VIA_SHAPE: choice {
 // keyword-value clauses (reuses LAYER_PROPERTY structure since the
 // allowed keywords overlap heavily) + closer.
 
+// LEF/DEF 5.8 §"Via Rule" — non-GENERATE form allows a list of
+// trailing `VIA viaName ;` references after the LAYER sections,
+// naming the specific VIAs the rule produces (which the placer/
+// router selects from). Captured as `vias[]` via the engine's
+// list-append binding. GENERATE form doesn't use this — it
+// generates VIAs by construction from the LAYER sections.
 VIARULE_BLOCK: sequence dict {
   <VIARULE_KW>:type=@ space,
   identifier:name=@ space,
   ?<VIARULE_GENERATE_KW>,
   ?<VIA_DEFAULT_KW>,
   <VIARULE_LAYER_SECTIONS>:layers=@,
+  repeat <VIARULE_VIA_REF>:vias[]=@,
   "END" space, identifier:end_name=@ newline
+}
+
+// Trailing `VIA viaName ;` line inside a non-GENERATE VIARULE.
+// Bound by the parent VIARULE_BLOCK's repeat as `vias[]`.
+VIARULE_VIA_REF: sequence dict {
+  "VIA":type="Via" space, identifier:name=@ space, ";" newline
 }
 
 VIARULE_LAYER_SECTIONS: sequence array { repeat <VIARULE_LAYER_SECTION> }
@@ -1365,13 +1399,22 @@ NONDEFAULTRULE_BLOCK: sequence dict {
 
 NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> }
 
-// Choice ordering: VIARULE before VIA, MINCUTS before any other M-prefix.
+// Choice ordering: USEVIARULE before USEVIA (no prefix overlap
+// but kept consistent), VIARULE before VIA, MINCUTS before any
+// other M-prefix. NDR_PROPERTY_KV is the trailing-PROPERTY form
+// per LEF/DEF 5.8 §"Non-Default Rule" — emits a `{type: "Property",
+// prop_name, prop_value}` dict that gets appended to the same
+// `ndr.properties` array as the other body items (HardSpacing /
+// Layer / Via / ViaRule / UseVia / UseViaRule / MinCuts).
 NDR_PROPERTY: choice {
   <NDR_HARDSPACING>,
   <NDR_LAYER>,
+  <NDR_USEVIARULE>,
+  <NDR_USEVIA>,
   <NDR_VIARULE_REF>,
   <NDR_VIA_REF>,
-  <NDR_MINCUTS>
+  <NDR_MINCUTS>,
+  <NDR_PROPERTY_KV>
 }
 
 NDR_HARDSPACING: sequence dict {
@@ -1448,6 +1491,34 @@ NDR_MINCUTS: sequence dict {
   "MINCUTS":type="MinCuts" space,
   identifier:cut_layer=@ space,
   int:num_cuts=@ space, ";" newline
+}
+
+// LEF/DEF 5.8 §"Non-Default Rule" allows USEVIA / USEVIARULE
+// inside the NDR body — they reference VIAs / VIARULEs defined
+// elsewhere in the LEF or in a companion DEF, used to constrain
+// which existing entries the rule may emit. Distinct from
+// NDR_VIA_REF / NDR_VIARULE_REF (`VIA name ;`) which list the
+// VIAs the rule itself defines or selects from a pool.
+NDR_USEVIA: sequence dict {
+  "USEVIA":type="UseVia" space, identifier:via=@ space, ";" newline
+}
+
+NDR_USEVIARULE: sequence dict {
+  "USEVIARULE":type="UseViaRule" space, identifier:viarule=@ space, ";" newline
+}
+
+// Trailing PROPERTY clauses inside NDR — same shape as
+// MACRO_PROPERTY_KV / PIN_PROPERTY_KV but emitting `type:
+// "Property"` so it slots into `ndr.properties` as a discriminated
+// dict alongside the other NDR body items (Layer / Via / ViaRule /
+// UseVia / UseViaRule / MinCuts / HardSpacing). LEF/DEF 5.8 §"Non-
+// Default Rule" permits PROPERTY clauses anywhere in the body;
+// source order is preserved by the parent NDR_PROPERTIES array.
+NDR_PROPERTY_KV: sequence dict {
+  "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space,
+  ";" newline
 }
 
 // ===========================================================================

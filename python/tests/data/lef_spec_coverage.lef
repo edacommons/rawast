@@ -89,6 +89,18 @@ PROPERTYDEFINITIONS
   PIN            prop_pin_i    INTEGER ;
   PIN            prop_pin_r    REAL ;
   PIN            prop_pin_s    STRING ;
+  # LEF/DEF 5.8 §"Property Definitions" — DEF-context scopes
+  # (COMPONENTPIN / REGION / DESIGN / NET / SPECIALNET / ROW /
+  # GROUP) accepted in PROPERTYDEFINITIONS too. LEF and DEF share
+  # the PROPERTYDEFINITIONS shape and toolchains routinely declare
+  # all spec scopes here for symmetry with the companion DEF.
+  COMPONENTPIN   prop_cp_s     STRING ;
+  REGION         prop_reg_s    STRING ;
+  DESIGN         prop_des_i    INTEGER ;
+  NET            prop_net_s    STRING ;
+  SPECIALNET     prop_sn_r     REAL ;
+  ROW            prop_row_s    STRING ;
+  GROUP          prop_grp_i    INTEGER ;
   LAYER          prop_ranged   REAL RANGE 0.0 1.0 ;
 END PROPERTYDEFINITIONS
 
@@ -230,6 +242,11 @@ VIARULE spec_viarule_pair
    LAYER mcon ;
    RECT -0.085 -0.085 0.085 0.085 ;
    SPACING 0.36 BY 0.36 ;
+   # Trailing `VIA viaName ;` references per LEF/DEF 5.8 §"Via
+   # Rule" non-GENERATE form — list the specific VIAs the rule
+   # produces.
+   VIA spec_via_geom ;
+   VIA spec_via_viarule_form ;
 END spec_viarule_pair
 
 VIARULE spec_viarule_gen GENERATE
@@ -247,7 +264,18 @@ NONDEFAULTRULE spec_ndr
    LAYER met1 WIDTH 0.28 SPACING 0.28 DIAGSPACING 0.5 WIREEXT 0.05 ;
    VIA spec_via_geom ;
    VIARULE spec_viarule_gen ;
+   # LEF/DEF 5.8 §"Non-Default Rule" — USEVIA / USEVIARULE
+   # reference VIAs / VIARULEs defined elsewhere that the rule
+   # may use; distinct from `VIA name ;` which names the VIAs
+   # the rule itself selects from.
+   USEVIA spec_via_geom ;
+   USEVIARULE spec_viarule_gen ;
    MINCUTS mcon 2 ;
+   # Trailing PROPERTY clauses inside NDR — same shape as MACRO/
+   # PIN trailing properties.
+   PROPERTY prop_ndr_i 7 ;
+   PROPERTY prop_ndr_r 1.5 ;
+   PROPERTY prop_ndr_s "ndr-string-value" ;
 END spec_ndr
 
 # === Phase 4: MACRO with every body sub-statement ===
