@@ -921,20 +921,26 @@ LAYER_BODY_ITEM: choice {
 // PROPERTY clauses whose name starts with `LEF58_` get their own
 // typed sub-rule so downstream consumers can iterate `layer.lef58`
 // directly instead of filtering `layer.properties` by name. The
-// `lef58_name` terminal (from the lefdef parser group) rejects
-// anything that isn't `LEF58_<suffix>`, so the predictive PEG
-// falls through cleanly to the generic LAYER_PROPERTY for non-
-// LEF58 PROPERTY clauses — no closed-keyword Choice needed, the
-// prefix IS the discriminator. Round-trips identically: the
-// outer `PROPERTY` keyword plus the LEF58_ name plus the opaque
-// content string are all preserved; the inner LEF58 grammar
-// content stays as a single string (per
-// feedback_rawast_design_lef58_out_of_scope), a downstream tool
-// can subparse it with its own LEF58 grammar if it wants typed
-// sub-fields.
+// `LEF58_` Key literal IS the discriminator — predictive PEG
+// tries this alt first; if the input PROPERTY name doesn't start
+// with `LEF58_`, the Key fails and the engine falls through to
+// the generic LAYER_PROPERTY rule with no input lost (Choice alt
+// mark/rewind).
+//
+// Shape choice: `name` is the LEF58 sub-property (e.g. `TYPE`,
+// `SPACING`, `VOLTAGEMODE`), NOT the full `LEF58_TYPE` string —
+// the `LEF58_` prefix is implicit in the `type="Lef58Property"`
+// discriminator (set by the `:type="..."` binding on the Key) so
+// duplicating it in `name` would just be redundant. Downstream
+// reconstructs the full original token as `f"LEF58_{name}"` if
+// needed.
+//
+// The inner content string remains opaque per the existing scope
+// decision ([[feedback-rawast-design-lef58-out-of-scope]]).
 LAYER_LEF58_PROPERTY: sequence dict {
-  "PROPERTY":type="Lef58Property" space,
-  lef58_name:name=@ space,
+  "PROPERTY" space,
+  "LEF58_":type="Lef58Property",
+  identifier:name=@ space,
   string:content=@ space,
   ";" newline
 }

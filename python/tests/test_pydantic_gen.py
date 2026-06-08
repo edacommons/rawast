@@ -321,14 +321,15 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     assert {"SPACINGTABLE", "RESISTANCE", "CAPACITANCE", "ANTENNAMODEL"} <= kinds
 
     # LEF58_TYPE PROPERTY captured as a typed Lef58Property dict
-    # via the dedicated `lef58_name` terminal parser + the
-    # LAYER_LEF58_PROPERTY rule — distinct from generic
-    # `layer.properties` (kind="PROPERTY"). Inner content
-    # remains opaque (a single string) per design.
+    # via the LAYER_LEF58_PROPERTY rule — distinct from generic
+    # `layer.properties` (kind="PROPERTY"). The `name` field
+    # holds the LEF58 sub-property (e.g. "TYPE", "SPACING") —
+    # the `LEF58_` prefix is implicit in the type discriminator,
+    # not duplicated. Inner content stays opaque.
     nwell = next(la for la in layers if la["name"] == "nwell")
     assert nwell["layer_type"] == "MASTERSLICE"
     assert nwell["lef58"] == [
-        {"type": "Lef58Property", "name": "LEF58_TYPE",
+        {"type": "Lef58Property", "name": "TYPE",
          "content": "TYPE NWELL ;"},
     ]
     # Generic `properties` should not also contain the LEF58_*
@@ -594,7 +595,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # The dedicated lef58_name terminal parser discriminates by
     # the LEF58_ prefix, no closed-keyword Choice needed.
     assert layers["spec_routing"]["lef58"] == [
-        {"type": "Lef58Property", "name": "LEF58_TYPE",
+        {"type": "Lef58Property", "name": "TYPE",
          "content": "TYPE ROUTING ;"},
     ]
     # `PROPERTY` should NOT appear in the generic properties list —
@@ -619,7 +620,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
         "ANTENNAAREARATIO", "ANTENNAMODEL",
     ]
     assert layers["spec_cut"]["lef58"] == [
-        {"type": "Lef58Property", "name": "LEF58_TYPE",
+        {"type": "Lef58Property", "name": "TYPE",
          "content": "TYPE CUT ;"},
     ]
     # Spot-check the qualifiers landed in the values list in
@@ -642,7 +643,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # creates it lazily; zero matches → key absent).
     assert "properties" not in layers["spec_masterslice"]
     assert layers["spec_masterslice"]["lef58"] == [
-        {"type": "Lef58Property", "name": "LEF58_TYPE",
+        {"type": "Lef58Property", "name": "TYPE",
          "content": "TYPE NWELL ;"},
     ]
 

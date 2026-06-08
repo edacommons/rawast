@@ -98,63 +98,10 @@ ParseResult LefdefLineCommentParser::parse(StreamReader& sr) {
 // after 2048494). Grammars that need "consume raw bytes until X"
 // behaviour now write `*:body=@, "X" newline` in the body itself.
 
-// --- LefdefLef58NameParser ----------------------------------------------
-//
-// Discriminator for LEF58_* vendor-extension property names.
-// Parses like LefdefIdentifierParser but requires the literal
-// prefix `LEF58_`; any other identifier rejects immediately so
-// the parent Choice falls through to the generic PROPERTY rule.
-
-LefdefLef58NameParser::LefdefLef58NameParser() : Parser("lef58_name") {}
-
-ParseResult LefdefLef58NameParser::parse(StreamReader& sr) {
-    sr.mark();
-    const Position start = sr.position();
-
-    static const std::string prefix = "LEF58_";
-    for (char expected : prefix) {
-        auto c = sr.get();
-        if (!c || *c != expected) {
-            sr.reject();
-            return tl::unexpected(ParseError{
-                start, "expected LEF58_-prefixed name"});
-        }
-    }
-    // Continue consuming identifier chars after the prefix. At
-    // least one char required so `LEF58_` alone (empty suffix)
-    // is rejected — those names are not valid LEF58 identifiers.
-    std::string suffix;
-    while (true) {
-        auto c = sr.peek();
-        if (!c || is_identifier_stop(*c)) break;
-        suffix.push_back(*c);
-        sr.get();
-    }
-    if (suffix.empty()) {
-        sr.reject();
-        return tl::unexpected(ParseError{
-            start, "LEF58_ prefix must be followed by a name suffix"});
-    }
-    sr.accept();
-    return make_string(prefix + suffix);
-}
-
-SaveResult LefdefLef58NameParser::unparse(const Value& value) const {
-    auto sv = dynamic_cast<const StringValue*>(&value);
-    if (!sv) {
-        return tl::unexpected(SaveError{
-            "LefdefLef58NameParser::unparse expects StringValue"});
-    }
-    const std::string& s = sv->data();
-    static const std::string prefix = "LEF58_";
-    if (s.size() < prefix.size() + 1
-        || s.compare(0, prefix.size(), prefix) != 0) {
-        return tl::unexpected(SaveError{
-            "LefdefLef58NameParser::unparse: value '" + s
-            + "' does not start with 'LEF58_'"});
-    }
-    return s;
-}
+// Retired: `LefdefLef58NameParser`. Grammar now discriminates
+// LEF58_-prefixed names via a Key literal + identifier — see
+// LAYER_LEF58_PROPERTY in grammars/lef.rawast and the explanatory
+// comment in parsers_lefdef.hpp.
 
 ParserGroup make_lefdef_group() {
     ParserGroup g;
@@ -165,9 +112,6 @@ ParserGroup make_lefdef_group() {
         }},
         ParserSpec{"line_comment", []() {
             return std::make_unique<LefdefLineCommentParser>();
-        }},
-        ParserSpec{"lef58_name",   []() {
-            return std::make_unique<LefdefLef58NameParser>();
         }},
     };
     return g;
