@@ -383,12 +383,55 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
 
 
 def _dedupe(fields: list[_Field]) -> list[_Field]:
-    """Last-write-wins by field name. Matches the engine's dict-merge:
-    when a name appears multiple times during parse, the later write
-    overwrites the earlier."""
+    """Merge same-name field entries.
+
+    Two scenarios where one name appears multiple times:
+
+      1. Different Choice branches of a catcher-flatten rule all
+         bind the same name (e.g. PROPDEF_DEFAULT in lef.rawast
+         is `choice { string:default_value=@, <NUMBER>:default_value=@ }`).
+         Each branch contributes a _Field with the same name but a
+         different type. The runtime dict ends up holding whichever
+         branch fired, so the Python field type must be the UNION
+         of every branch's contribution.
+
+      2. Sequential same-name writes inside one rule body. The
+         engine's dict-merge does last-write-wins, so the latest
+         entry's type/default/optional flag wins. (Rare — only
+         shows up in hand-crafted grammars; the spec-aligned
+         rules avoid it.)
+
+    Distinguishing the two via static analysis is tricky, so we
+    merge structurally: if the types match, last-write-wins; if
+    they differ, union (preserving `None` from the optional flag).
+    Either behaviour is correct for the engine; the union case
+    just yields a slightly broader Python type."""
     by_name: dict[str, _Field] = {}
     for f in fields:
-        by_name[f[0]] = f
+        fname, ftype, optional, default = f
+        if fname not in by_name:
+            by_name[fname] = f
+            continue
+        prev_name, prev_type, prev_optional, prev_default = by_name[fname]
+        if prev_type == ftype:
+            # Same type — last-write-wins, OR-ing optional so any
+            # branch that's optional makes the field optional.
+            by_name[fname] = (
+                fname, ftype, prev_optional or optional, default)
+        else:
+            # Different types from sibling Choice branches — emit
+            # the union. Split-and-rejoin so re-merging an already-
+            # unioned type stays flat (`A | B | C` rather than
+            # nested). Sort for stable output across runs.
+            parts: set[str] = set()
+            for t in (prev_type, ftype):
+                for piece in t.split(" | "):
+                    piece = piece.strip()
+                    if piece:
+                        parts.add(piece)
+            merged = " | ".join(sorted(parts))
+            by_name[fname] = (
+                fname, merged, prev_optional or optional, prev_default)
     return list(by_name.values())
 
 

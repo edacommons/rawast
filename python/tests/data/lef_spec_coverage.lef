@@ -104,12 +104,13 @@ PROPERTYDEFINITIONS
   LAYER          prop_ranged   REAL RANGE 0.0 1.0 ;
   # PROPERTYDEFINITIONS with explicit default value per spec —
   # the optional trailing value after the data-type keyword.
-  # STRING defaults are also spec-permitted but currently the
-  # Pydantic generator types `default_value` as `Number | None`
-  # only; revisit when the generator supports union-typed catcher
-  # bindings (PROPDEF_DEFAULT is a `choice { string, NUMBER }`).
+  # STRING / INTEGER / REAL defaults all supported; the Pydantic
+  # generator now emits `default_value: Number | str | None` for
+  # PROPDEF_DEFAULT's `choice { string, NUMBER }` body so all
+  # three forms validate.
   LAYER          prop_def_i    INTEGER 42 ;
-  PIN            prop_def_r    REAL 3.14 ;
+  MACRO          prop_def_s    STRING  "default-val" ;
+  PIN            prop_def_r    REAL    3.14 ;
 END PROPERTYDEFINITIONS
 
 SITE spec_site
