@@ -1711,6 +1711,7 @@ DEF_ITEM: choice {
   <DEF_BLOCKAGES_BLOCK>,
   <DEF_SLOTS_BLOCK>,
   <DEF_FILLS_BLOCK>,
+  <DEF_STYLES_BLOCK>,
   <DEF_SPECIALNETS_BLOCK>,
   <DEF_NETS_BLOCK>,
   <DEF_SCANCHAINS_BLOCK>,
@@ -2256,6 +2257,7 @@ DEF_PIN_CLAUSE: choice {
   <DEF_PIN_GROUNDSENS_CLAUSE>:clauses[]=@,
   <DEF_PIN_USE_CLAUSE>:clauses[]=@,
   <DEF_PIN_ANTENNA_CLAUSE>:clauses[]=@,
+  <DEF_PIN_PORT_CLAUSE>:clauses[]=@,
   <DEF_PIN_LAYER_CLAUSE>:clauses[]=@,
   <DEF_PIN_POLYGON_CLAUSE>:clauses[]=@,
   <DEF_PIN_VIA_CLAUSE>:clauses[]=@,
@@ -2263,6 +2265,33 @@ DEF_PIN_CLAUSE: choice {
   <DEF_PIN_COVER_CLAUSE>:clauses[]=@,
   <DEF_PIN_PLACED_CLAUSE>:clauses[]=@,
   <DEF_PIN_UNPLACED_CLAUSE>:clauses[]=@
+}
+
+// `+ PORT [+ LAYER|POLYGON|VIA|placement]+` — multi-port pin
+// sub-block per LEF/DEF 5.8 §"Pins". Each PORT carries its own
+// physical-placement shapes + an optional PLACED/FIXED/COVER
+// clause. Modern routers emit one PIN per pin-label with a
+// single `+ PORT` carrying the shapes — even when the pin has
+// only one physical placement, the PORT wrapper is still
+// present. Real DEFs in the corpus (Sky130 / NanGate45) use
+// this form universally.
+DEF_PIN_PORT_CLAUSE: sequence dict {
+  "+" space, "PORT":type="Port" space,
+  repeat <DEF_PIN_PORT_INNER>
+}
+
+// Inner-port clause Choice — the same shape and placement
+// clauses as the pin-level forms (DEF_PIN_LAYER_CLAUSE etc.),
+// but landing in this PORT's `clauses[]` rather than the
+// outer PIN's. PORT is intentionally NOT listed here — a PORT
+// inside a PORT isn't a real pattern.
+DEF_PIN_PORT_INNER: choice {
+  <DEF_PIN_LAYER_CLAUSE>:clauses[]=@,
+  <DEF_PIN_POLYGON_CLAUSE>:clauses[]=@,
+  <DEF_PIN_VIA_CLAUSE>:clauses[]=@,
+  <DEF_PIN_FIXED_CLAUSE>:clauses[]=@,
+  <DEF_PIN_COVER_CLAUSE>:clauses[]=@,
+  <DEF_PIN_PLACED_CLAUSE>:clauses[]=@
 }
 
 // Metadata clauses.
@@ -2747,28 +2776,72 @@ DEF_NET_COMP_CONN: sequence dict {
   identifier:component=@ space, identifier:pin=@ space, ")" space
 }
 
-// Wire-path elements inside a routing clause. Two element
-// kinds; each starts with a recognisable prefix (`(` or `VIA`)
-// so the Choice dispatch is unambiguous.
+// Wire-path elements inside a routing clause. Per LEF/DEF 5.8
+// these can be: a Point `( x y [extValue] )`, an explicit
+// `VIA viaName` reference (keyword + name), a BARE via name
+// (just the identifier after a point — OpenROAD-style emission
+// that the spec also permits), or a NEW continuation segment
+// that starts a new wire with its own layer + width.
 //
-// (Deferred: `NEW layerName [width] [qualifiers] path` segments
-// that continue a wire across multiple connected sub-paths.
-// SPECIALNETS NEW carries an explicit width; NETS NEW carries
-// optional TAPER / TAPERRULE — different syntactic shapes that
-// need parallel rules. The single-segment form below covers
-// every modern-router-emitted DEF we've seen; NEW continuation
-// segments land when a corpus DEF uses them.)
+// Choice ordering note: Bare via must come AFTER VIA and NEW
+// since the `identifier` parser would match those keywords as
+// regular identifiers. Predictive PEG with KeyParser is case-
+// sensitive, so a lowercase via name like `via4_1600x1600`
+// can't match the uppercase `VIA` or `NEW` Keys — the bare-via
+// alt correctly catches it on fallthrough.
 DEF_NET_PATH_ELEM: choice {
   <DEF_NET_PATH_POINT>:path[]=@,
-  <DEF_NET_PATH_VIA>:path[]=@
+  <DEF_NET_PATH_VIA>:path[]=@,
+  <DEF_NET_PATH_NEW_WIDTH>:path[]=@,
+  <DEF_NET_PATH_BARE_VIA>:path[]=@
+}
+
+// `NEW layerName width [+ SHAPE | + MASK | + NONDEFAULTRULE]`
+// — continuation segment with explicit width (SPECIALNETS form).
+// Followed by more path elements (Points / Vias / bare Vias)
+// that share this segment's layer/width. Modeled as a single
+// path element here; downstream consumers reconstruct segments
+// by walking the path list and grouping on NEW boundaries.
+DEF_NET_PATH_NEW_WIDTH: sequence dict {
+  "NEW":type="New" space,
+  identifier:layer=@ space, int:width=@ space,
+  repeat <DEF_NET_ROUTE_QUAL>
+}
+
+// Bare via reference (just an identifier, no `VIA` keyword).
+// Per LEF/DEF 5.8 the routing path allows this shorthand;
+// OpenROAD and several other tools emit it.
+//
+// Intentionally NO optional orient field — the optional orient
+// identifier on a bare via would greedily consume the NEXT
+// keyword (NEW, or a following bare via name) and break path
+// element boundaries. Real DEFs that use the bare-via shorthand
+// don't put orient on it; bare-via-WITH-orient is an
+// undocumented combination.
+DEF_NET_PATH_BARE_VIA: sequence dict {
+  identifier:via=@ space
 }
 DEF_NET_PATH_POINT: sequence dict {
   "(":type="Point" space,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space,
   ?<DEF_NET_PATH_POINT_EXT>,
   ")" space
 }
-DEF_NET_PATH_POINT_EXT: sequence { <NUMBER>:ext=@ space }
+DEF_NET_PATH_POINT_EXT: sequence { <DEF_NET_COORD>:ext=@ space }
+
+// Coordinate value — per LEF/DEF 5.8 a routing-path
+// coordinate may be a literal number OR the wildcard `*`
+// (meaning "use the previous x or y value"). Real DEFs from
+// OpenROAD compact paths heavily using the wildcard form, e.g.
+// `( 1670 830 ) ( * 2000 ) ( 4950 * 300 )`. The NUMBER alt
+// matches first; if the input is `*`, the identifier parser
+// catches it as the single-char string "*". Downstream
+// consumers branch on `isinstance(x, str)` to detect the
+// wildcard.
+DEF_NET_COORD: choice {
+  <NUMBER>,
+  identifier
+}
 DEF_NET_PATH_VIA: sequence dict {
   "VIA":type="Via" space, identifier:via=@ space,
   ?<DEF_NET_PATH_VIA_ORIENT>
@@ -2879,13 +2952,59 @@ DEF_SPECIALNET_PROPERTY: sequence dict {
 }
 
 // SPECIALNET routing clause — `+ {ROUTED|FIXED|COVER|SHIELD
-// shieldNet} layer width [+ qualifiers] (path elements)+`.
+// shieldNet} [layer width] [+ qualifier] (element)+`. The
+// layer/width pair is OPTIONAL: real DEFs emit ROUTED clauses
+// that carry only RECT / POLYGON / VIA shape elements with no
+// initial layer (each shape supplies its own layer). The
+// routing body is a unified list of elements via per-alt
+// `:body[]=@` list-append — qualifiers, path points/vias,
+// shape elements all land in `body[]` in source order.
 DEF_SPECIALNET_ROUTED: sequence dict {
   "+" space,
   <DEF_SPECIALNET_ROUTE_KW>,
-  identifier:layer=@ space, int:width=@ space,
-  repeat <DEF_NET_ROUTE_QUAL>,
-  repeat+ <DEF_NET_PATH_ELEM>
+  ?<DEF_SPECIALNET_ROUTE_LAYER_WIDTH>,
+  repeat+ <DEF_SPECIALNET_ROUTE_ELEMENT>
+}
+
+// Optional `layer width` pair after the route keyword.
+DEF_SPECIALNET_ROUTE_LAYER_WIDTH: sequence {
+  identifier:layer=@ space, int:width=@ space
+}
+
+// Routing body element — qualifiers, path elements (Point /
+// Via / BareVia / NewWidth), shape elements (Rect / Polygon).
+// All emit typed dicts that share the same `body[]` list on
+// the parent routing-clause dict.
+DEF_SPECIALNET_ROUTE_ELEMENT: choice {
+  <DEF_NET_QUAL_SHAPE>:body[]=@,
+  <DEF_NET_QUAL_MASK>:body[]=@,
+  <DEF_NET_QUAL_NDR>:body[]=@,
+  <DEF_SPECIALNET_BODY_RECT>:body[]=@,
+  <DEF_SPECIALNET_BODY_POLYGON>:body[]=@,
+  <DEF_NET_PATH_POINT>:body[]=@,
+  <DEF_NET_PATH_VIA>:body[]=@,
+  <DEF_NET_PATH_NEW_WIDTH>:body[]=@,
+  <DEF_NET_PATH_BARE_VIA>:body[]=@
+}
+
+// `+ RECT layer ( pt pt )` shape element inside ROUTED.
+// Distinct from BLOCKAGES/FILLS/SLOTS RECT because it has
+// the `+` separator and emits as a body element.
+DEF_SPECIALNET_BODY_RECT: sequence dict {
+  "+" space, "RECT":type="Rect" space, identifier:layer=@ space,
+  "(" space, <DEF_NET_COORD>:x1=@ space, <DEF_NET_COORD>:y1=@ space, ")" space,
+  "(" space, <DEF_NET_COORD>:x2=@ space, <DEF_NET_COORD>:y2=@ space, ")" space
+}
+
+DEF_SPECIALNET_BODY_POLYGON: sequence dict {
+  "+" space, "POLYGON":type="Polygon" space, identifier:layer=@ space,
+  <DEF_SPECIALNET_BODY_POLYGON_POINTS>:points=@
+}
+DEF_SPECIALNET_BODY_POLYGON_POINTS: sequence array {
+  repeat+ <DEF_SPECIALNET_BODY_POLYGON_POINT>
+}
+DEF_SPECIALNET_BODY_POLYGON_POINT: sequence dict {
+  "(" space, <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space, ")" space
 }
 // SHIELD takes an extra `shieldNet` name; ROUTED / FIXED / COVER
 // don't. Modelled as a Choice over four typed sub-rules.
@@ -3191,6 +3310,30 @@ DEF_GROUP_SOFT_MAXY: sequence dict {
 DEF_GROUP_PROPERTY: sequence dict {
   "+" space, "PROPERTY":type="Property" space,
   identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
+}
+
+// `STYLES num ; - STYLE n ( pt pt )+ ; ... END STYLES` per
+// LEF/DEF 5.8 §"Styles". Numbered polygon-shape definitions
+// referenced by other sections (rarely used; some Cadence
+// flows emit them).
+DEF_STYLES_BLOCK: sequence dict {
+  "STYLES":type="Styles" space,
+  int:count=@ space, ";" newline,
+  <DEF_STYLES_LIST>:styles=@,
+  "END" space, "STYLES" newline
+}
+DEF_STYLES_LIST: sequence array { repeat <DEF_STYLE_ENTRY> }
+DEF_STYLE_ENTRY: sequence dict {
+  "-" space, "STYLE":type="Style" space,
+  int:style_num=@ space,
+  <DEF_STYLE_POINTS>:points=@,
+  ";" newline
+}
+DEF_STYLE_POINTS: sequence array {
+  repeat+ <DEF_STYLE_POINT>
+}
+DEF_STYLE_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
