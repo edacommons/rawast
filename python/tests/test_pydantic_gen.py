@@ -549,6 +549,14 @@ def test_lef_spec_coverage_phase1(tmp_path):
         {"site": "sub_a", "orient": "North"},
         {"site": "sub_b", "orient": "FlipNorth"},
     ]
+    # LEF/DEF 5.8 §"Site" trailing PROPERTY clauses — typed
+    # Property dicts in `site.properties` list, source order.
+    assert site["properties"] == [
+        {"type": "Property", "prop_name": "prop_site_i",
+         "prop_value": 3},
+        {"type": "Property", "prop_name": "prop_site_s",
+         "prop_value": "site-string"},
+    ]
 
     # Phase 2: LAYER blocks of every TYPE — `layer_type` is the
     # spec discriminator; common keywords are typed fields; the

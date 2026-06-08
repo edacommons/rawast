@@ -109,6 +109,10 @@ SITE spec_site
   SYMMETRY X Y R90 ;
   ROWPATTERN sub_a N sub_b FN ;
   SIZE 1.0 BY 2.5 ;
+  # LEF/DEF 5.8 §"Site" permits trailing PROPERTY clauses; landed
+  # in `properties[]` via the engine's list-append binding.
+  PROPERTY prop_site_i 3 ;
+  PROPERTY prop_site_s "site-string" ;
 END spec_site
 
 # === Phase 2: LAYER blocks — one per TYPE the spec discriminates. ===

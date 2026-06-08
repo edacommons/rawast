@@ -359,11 +359,24 @@ SITE_BLOCK: sequence dict {
   "END" space, identifier:end_name=@ newline
 }
 
+// LEF/DEF 5.8 §"Site" body sub-statements. SITE_PROPERTY_KV
+// captures the trailing `PROPERTY name value ;` clauses the spec
+// permits — emitted as a discriminated dict that catcher-flattens
+// into the parent SITE dict via list-append, alongside the typed
+// fields CLASS / SYMMETRY / SIZE / ROWPATTERN.
 SITE_PROPERTY: choice {
   <SITE_SYMMETRY>,
   <SITE_CLASS>,
   <SITE_SIZE>,
-  <SITE_ROWPATTERN>
+  <SITE_ROWPATTERN>,
+  <SITE_PROPERTY_KV>:properties[]=@
+}
+
+SITE_PROPERTY_KV: sequence dict {
+  "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space,
+  ";" newline
 }
 
 SITE_SYMMETRY: sequence {
