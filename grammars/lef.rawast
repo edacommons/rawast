@@ -2874,22 +2874,32 @@ DEF_FILL_VIA_POINT: sequence dict {
 // --- Shared sub-rules -----------------------------------------------------
 
 // `( compName pinName )` / `( PIN pinName )` / `( * pinName )` —
-// one entry connection. PIN before identifier (Choice tries
-// keyword form first); `*` (global) is its own alt.
-DEF_NET_CONNECTION: choice {
-  <DEF_NET_PIN_CONN>,
-  <DEF_NET_GLOBAL_CONN>,
-  <DEF_NET_COMP_CONN>
+// one entry connection. The three forms share the same `(...)`
+// wrapper; only the body differs. Factored so the parens live
+// once on the parent dict rule and the inner Choice picks the
+// form. PIN keyword and `*` glob have distinct first bytes so
+// predictive PEG dispatches cleanly; the bare comp-pin form is
+// the catch-all (empty Key + type discriminator + identifier
+// identifier).
+DEF_NET_CONNECTION: sequence dict {
+  "(" space,
+  <DEF_NET_CONN_BODY>,
+  ")" space
 }
-DEF_NET_PIN_CONN: sequence dict {
-  "(" space, "PIN":type="Pin" space, identifier:pin=@ space, ")" space
+DEF_NET_CONN_BODY: choice {
+  <DEF_NET_CONN_PIN_BODY>,
+  <DEF_NET_CONN_GLOBAL_BODY>,
+  <DEF_NET_CONN_COMP_BODY>
 }
-DEF_NET_GLOBAL_CONN: sequence dict {
-  "(" space, "*":type="Global" space, identifier:pin=@ space, ")" space
+DEF_NET_CONN_PIN_BODY: sequence {
+  "PIN":type="Pin" space, identifier:pin=@ space
 }
-DEF_NET_COMP_CONN: sequence dict {
-  "(" space, "":type="CompPin",
-  identifier:component=@ space, identifier:pin=@ space, ")" space
+DEF_NET_CONN_GLOBAL_BODY: sequence {
+  "*":type="Global" space, identifier:pin=@ space
+}
+DEF_NET_CONN_COMP_BODY: sequence {
+  "":type="CompPin",
+  identifier:component=@ space, identifier:pin=@ space
 }
 
 // Wire-path elements inside a routing clause. Per LEF/DEF 5.8
