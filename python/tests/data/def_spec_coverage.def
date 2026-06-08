@@ -121,6 +121,37 @@ BUSBITCHARS "[]" ;
 
 DESIGN spec_design ;
 
+# ----- Phase 2: TECHNOLOGY + HISTORY + PROPERTYDEFINITIONS -----
+
+# Optional reference to a companion LEF library.
+TECHNOLOGY my_tech ;
+
+# Free-form historical-comment lines per LEF/DEF 5.8 §"DEF File".
+# Repeatable; each lands in `items[]` as a typed `History` dict in
+# source order. The `*` raw-consume primitive captures everything
+# up to the trailing `;` verbatim, including embedded spaces.
+HISTORY Created on 2026-06-08 by toolchain v1.0 ;
+HISTORY Modified by router pass 1 ;
+HISTORY Final placement verified ;
+
+# PROPERTYDEFINITIONS shape is shared with LEF — same rule reused.
+# DEF-context scopes (DESIGN / NET / SPECIALNET / COMPONENT /
+# COMPONENTPIN / REGION / ROW / GROUP / NONDEFAULTRULE) plus
+# RANGE and explicit default values per spec.
+PROPERTYDEFINITIONS
+  DESIGN         prop_design_i  INTEGER ;
+  DESIGN         prop_design_s  STRING ;
+  NET            prop_net_r     REAL ;
+  SPECIALNET     prop_sn_i      INTEGER ;
+  COMPONENTPIN   prop_cp_s      STRING ;
+  REGION         prop_reg_s     STRING ;
+  ROW            prop_row_i     INTEGER ;
+  GROUP          prop_grp_s     STRING ;
+  NONDEFAULTRULE prop_ndr_r     REAL RANGE 0.0 10.0 ;
+  DESIGN         prop_d_def_i   INTEGER 7 ;
+  NET            prop_n_def_s   STRING "default-net-attr" ;
+END PROPERTYDEFINITIONS
+
 UNITS DISTANCE MICRONS 2000 ;
 
 DIEAREA ( -100 -100 ) ( 100100 100100 ) ;

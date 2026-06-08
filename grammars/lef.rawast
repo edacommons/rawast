@@ -1685,9 +1685,40 @@ DEF_ITEMS: sequence array { repeat <DEF_ITEM> }
 // disambiguate. UNITS / DIEAREA / ROW have non-overlapping first
 // keywords here.
 DEF_ITEM: choice {
+  <DEF_TECHNOLOGY_CMD>,
+  <DEF_HISTORY_CMD>,
+  <PROPERTYDEFINITIONS_BLOCK>,
   <DEF_UNITS_CMD>,
   <DEF_DIEAREA_CMD>,
   <DEF_ROW_CMD>
+}
+
+// `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
+// optional reference to a companion LEF library identified by
+// `techName`. Single line, dict-emitted so downstream consumers
+// see `{type: "Technology", name: "techName"}`.
+DEF_TECHNOLOGY_CMD: sequence dict {
+  "TECHNOLOGY":type="Technology" space,
+  identifier:name=@ space, ";" newline
+}
+
+// `HISTORY anyText ;` — per LEF/DEF 5.8 §"DEF File", a free-form
+// historical-comment line that the design can carry forward.
+// `anyText` is anything except `;`, so captured via the `*`
+// raw-consume primitive scanning bytes until the literal `;`.
+// Repeatable in DEF; each HISTORY lands in `items[]` as a typed
+// `History` dict in source order, mirroring how every other DEF
+// body section (UNITS / DIEAREA / ROW / COMPONENTS) is captured.
+// No `space` postfix on the HISTORY keyword: the `*` raw-consume
+// bypasses ignore-set whitespace skipping and captures the byte
+// immediately after `HISTORY`, including the leading space. On
+// save the captured text starts with that space, so a postfix
+// would emit a doubled space. The trailing `;` consumes the
+// terminator; everything between lands in `text` verbatim.
+DEF_HISTORY_CMD: sequence dict {
+  "HISTORY":type="History",
+  *:text=@,
+  ";" newline
 }
 
 // `UNITS DISTANCE MICRONS n ;` — DEF's UNITS is a single one-line

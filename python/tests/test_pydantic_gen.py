@@ -1138,6 +1138,38 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert parsed["design"]["type"] == "Design"
     assert parsed["design"]["name"] == "spec_design"
 
+    # Phase 2: TECHNOLOGY + HISTORY + PROPERTYDEFINITIONS.
+    tech = next(it for it in parsed["items"]
+                if it.get("type") == "Technology")
+    assert tech["name"] == "my_tech"
+
+    histories = [it for it in parsed["items"]
+                 if it.get("type") == "History"]
+    assert len(histories) == 3
+    # `*` raw-consume captures everything between the keyword and
+    # the terminating `;`, preserving embedded spaces verbatim.
+    assert histories[0]["text"] == " Created on 2026-06-08 by toolchain v1.0 "
+    assert histories[2]["text"] == " Final placement verified "
+
+    pd = next(it for it in parsed["items"]
+              if it.get("type") == "PropertyDefinitions")
+    pd_objects = {d["object"] for d in pd["definitions"]}
+    # DEF-context scopes per LEF/DEF 5.8 §"Property Definitions"
+    # — DEF can declare properties for every spec scope including
+    # the LEF-only ones (a DEF often references a LEF library).
+    assert {"DESIGN", "NET", "SPECIALNET", "COMPONENTPIN",
+            "REGION", "ROW", "GROUP", "NONDEFAULTRULE"} <= pd_objects
+    # RANGE and explicit default values both captured.
+    ranged = next(d for d in pd["definitions"]
+                  if d["prop_name"] == "prop_ndr_r")
+    assert ranged["range_min"] == 0.0 and ranged["range_max"] == 10.0
+    int_def = next(d for d in pd["definitions"]
+                   if d["prop_name"] == "prop_d_def_i")
+    assert int_def["default_value"] == 7
+    str_def = next(d for d in pd["definitions"]
+                   if d["prop_name"] == "prop_n_def_s")
+    assert str_def["default_value"] == "default-net-attr"
+
     # UNITS DISTANCE MICRONS — DEF's UNITS is the single-line form,
     # distinct from LEF's UNITS_BLOCK.
     units = next(it for it in parsed["items"] if it.get("type") == "Units")
