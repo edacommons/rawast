@@ -920,3 +920,84 @@ def test_def_prelude_parses_and_saves_round_trip(tmp_path):
     saved = g.save(ast, start="DEF").decode("utf-8")
     ast2 = g.parse_string(saved, start="DEF")
     assert ast == ast2
+
+
+def test_def_spec_coverage_phase1(tmp_path):
+    """`python/tests/data/def_spec_coverage.def` — synthetic DEF
+    fixture exercising every Phase-1 clause (header + DESIGN + UNITS
+    + DIEAREA + ROW with all 8 spec orientations + END DESIGN).
+    Grows commit-by-commit as more DEF grammar lands; the file's
+    header comment lists the planned phases.
+
+    Asserts:
+      * every field of every captured clause has the spec'd type
+        and value;
+      * parse → save → reparse on the same fixture is
+        structurally equivalent (save's new `start="DEF"` parameter);
+      * the generated Pydantic `Def` class validates the parsed
+        dict and round-trips through `model_dump()`.
+    """
+    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    p = REPO_ROOT / "python/tests/data/def_spec_coverage.def"
+    parsed = g.parse_file(str(p), start="DEF")
+
+    # Header — VERSION as <NUMBER>, DIVIDERCHAR + BUSBITCHARS as
+    # string-quoted single chars or pairs.
+    hdr = parsed["hdr"]
+    assert hdr["version"] == 5.8
+    assert hdr["divider"] == "/"
+    assert hdr["bus_bit_chars"] == "[]"
+
+    # DESIGN
+    assert parsed["design"]["type"] == "Design"
+    assert parsed["design"]["name"] == "spec_design"
+
+    # UNITS DISTANCE MICRONS — DEF's UNITS is the single-line form,
+    # distinct from LEF's UNITS_BLOCK.
+    units = next(it for it in parsed["items"] if it.get("type") == "Units")
+    assert units["database_microns"] == 2000
+
+    # DIEAREA — two-point rectangular form covers most layouts; the
+    # spec's polygon-die N-point form lands when a polygon-die DEF
+    # appears in the corpus.
+    die = next(it for it in parsed["items"] if it.get("type") == "DieArea")
+    assert (die["x1"], die["y1"]) == (-100, -100)
+    assert (die["x2"], die["y2"]) == (100100, 100100)
+
+    # ROW — eight spec orientations (N S E W FN FS FE FW), one per
+    # ROW in the fixture. Verify every captured field per ROW.
+    rows = [it for it in parsed["items"] if it.get("type") == "Row"]
+    assert len(rows) == 8
+    orients = [r["orient"] for r in rows]
+    assert orients == ["N", "S", "E", "W", "FN", "FS", "FE", "FW"]
+    # Every row references the same site
+    assert all(r["site"] == "spec_site" for r in rows)
+    # Numeric fields are real numbers, not strings
+    for r in rows:
+        assert isinstance(r["x"], (int, float))
+        assert isinstance(r["y"], (int, float))
+        assert isinstance(r["num_x"], int)
+        assert isinstance(r["num_y"], int)
+        assert isinstance(r["step_x"], int)
+        assert isinstance(r["step_y"], int)
+    # Row 0: N orient, 10×1 grid stepping in x
+    assert (rows[0]["num_x"], rows[0]["num_y"]) == (10, 1)
+    assert (rows[0]["step_x"], rows[0]["step_y"]) == (2540, 0)
+    # Row 2: E orient, 1×8 grid stepping in y (vertical column)
+    assert (rows[2]["num_x"], rows[2]["num_y"]) == (1, 8)
+    assert (rows[2]["step_x"], rows[2]["step_y"]) == (0, 1900)
+
+    # Parse → save → reparse round-trip via the new start="DEF"
+    # parameter on save (mirrors parse's start=).
+    saved = g.save(parsed, start="DEF").decode("utf-8")
+    reparsed = g.parse_string(saved, start="DEF")
+    assert reparsed == parsed
+
+    # Generated Pydantic model accepts the parsed dict and round-trips
+    # through model_dump. `Def` is the class for the DEF top rule.
+    pytest.importorskip("pydantic")
+    mod = _generate_lef_models(tmp_path)
+    assert hasattr(mod, "Def")
+    model = mod.Def.model_validate(parsed)
+    dumped = model.model_dump(exclude_none=True, by_alias=True)
+    assert dumped == parsed

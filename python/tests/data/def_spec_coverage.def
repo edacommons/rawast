@@ -1,0 +1,140 @@
+# Synthetic LEF/DEF 5.8 DEF spec-coverage fixture.
+#
+# Purpose: exercise every clause documented in the LEF/DEF 5.8 Language
+# Reference for the DEF file format, not just whatever a particular
+# place-and-route tool happens to emit. Mirrors the role that
+# `lef_spec_coverage.lef` plays for LEF — real production DEFs catch
+# regressions in common patterns; this file is the spec-completeness
+# counterpart.
+#
+# DEF coverage in lef.rawast grows commit by commit. The fixture is
+# *the spec we are implementing to*; each new section landing in
+# grammars/lef.rawast appends the corresponding spec clauses here and
+# extends the test accordingly. Order matches LEF/DEF 5.8 §"DEF File".
+#
+# Phase coverage (each phase = one commit, test extended pass by pass):
+#
+#   1. Header (VERSION / DIVIDERCHAR / BUSBITCHARS / optional
+#      NAMESCASESENSITIVE) + DESIGN name ;
+#      UNITS DISTANCE MICRONS dbu ;
+#      DIEAREA ( x y ) ( x y ) ; (rectangular form)
+#      ROW with DO/BY/STEP for every spec orientation
+#      (N / S / E / W / FN / FS / FE / FW).
+#      END DESIGN.
+#
+# Pending (each in its own commit):
+#
+#   2. TECHNOLOGY ;
+#      HISTORY anyText ; (repeatable)
+#      PROPERTYDEFINITIONS ... END PROPERTYDEFINITIONS — same shape
+#      as the LEF preamble, scoped to DESIGN / COMPONENT / NET /
+#      SPECIALNET / GROUP / REGION / NONDEFAULTRULE / ROW.
+#   3. TRACKS X|Y origin DO numTracks STEP space [MASK n [SAMEMASK]]
+#      LAYER layerName ... ;
+#      GCELLGRID X|Y origin DO numGCells+1 STEP space ;
+#      VIAS num ; - viaName ... + RECT layer ( pt pt ) + POLYGON
+#      ... ; END VIAS — geometry + VIARULE forms.
+#   4. NONDEFAULTRULES num ;
+#        - ruleName + HARDSPACING + LAYER lyr WIDTH x [DIAGWIDTH y]
+#          [SPACING z] [WIREEXT w] + VIA via + VIARULE vr +
+#          MINCUTS lyr n + PROPERTY name value ; END NONDEFAULTRULES
+#      REGIONS num ; - regionName ( x y ) ( x y ) + TYPE FENCE|GUIDE
+#        + PROPERTY ; END REGIONS
+#      COMPONENTMASKSHIFT layer-list ;
+#   5. COMPONENTS num ; (the big one)
+#        - compName modelName
+#          [+ EEQMASTER macroName]
+#          [+ SOURCE NETLIST|DIST|USER|TIMING]
+#          [+ FIXED|COVER|PLACED|UNPLACED ( x y ) orient]
+#          [+ HALO [SOFT] left bottom right top]
+#          [+ ROUTEHALO haloDist layer1 layer2]
+#          [+ WEIGHT weight]
+#          [+ REGION regionName]
+#          [+ MASKSHIFT shift1 ...]
+#          [+ PROPERTY name value ...] ;
+#        END COMPONENTS
+#   6. PINS num ;
+#        - pinName + NET netName
+#          [+ SPECIAL]
+#          [+ DIRECTION INPUT|OUTPUT|INOUT|FEEDTHRU]
+#          [+ USE SIGNAL|POWER|GROUND|CLOCK|TIEOFF|ANALOG|SCAN|RESET]
+#          [+ NETEXPR "expr"]
+#          [+ SUPPLYSENSITIVITY | GROUNDSENSITIVITY pinName]
+#          [+ ANTENNAPINPARTIALMETALAREA ...] (every ANTENNA*)
+#          [+ LAYER layerName [MASK n] [SPACING x | DESIGNRULEWIDTH x]
+#               ( pt pt ) [+ ITERATE …]] (repeatable)
+#          [+ POLYGON layerName ... ( pt pt )+] (repeatable)
+#          [+ VIA viaName [MASK n] ( pt )] (repeatable)
+#          [+ PORT … (multiple physical placements per pin)]
+#          [+ PLACED|FIXED|COVER ( x y ) orient] ;
+#        END PINS
+#   7. PINPROPERTIES num ; - {COMPONENT name | PIN name} + PROPERTY
+#        name value ... ; END PINPROPERTIES
+#      BLOCKAGES num ;
+#        - LAYER layerName [+ SLOTS | + FILLS | + PUSHDOWN |
+#            + EXCEPTPGNET | + COMPONENT compName | + SPACING x |
+#            + DESIGNRULEWIDTH x | + MASK n] ( pt pt )+ ;
+#        - PLACEMENT [+ SOFT | + PARTIAL maxDensity | + PUSHDOWN |
+#            + COMPONENT compName] ( pt pt ) ;
+#        END BLOCKAGES
+#      SLOTS num ; ... END SLOTS
+#   8. FILLS num ;
+#        - LAYER layerName [+ MASK n] [+ OPC] ( pt pt )+ ;
+#        - VIA viaName [+ MASK shifts] [+ OPC] ( pt )+ ;
+#        END FILLS
+#   9. SPECIALNETS num ;
+#        - netName ( {compName pinName | PIN pinName} [+ SYNTHESIZED])+
+#          [+ VOLTAGE voltage]
+#          [+ SPACING layerName x [RANGE min max]]
+#          [+ SOURCE NETLIST|DIST|USER|TIMING]
+#          [+ FIXEDBUMP]
+#          [+ ORIGINAL netName]
+#          [+ USE SIGNAL|POWER|GROUND|CLOCK|TIEOFF|ANALOG|SCAN|RESET]
+#          [+ PATTERN BALANCED|STEINER|TRUNK|WIREDLOGIC]
+#          [+ ESTCAP cap]
+#          [+ WEIGHT weight]
+#          [+ PROPERTY name value]
+#          [+ ROUTED|FIXED|COVER|SHIELD layerName routeWidth
+#            [+ SHAPE STRIPE|FOLLOWPIN|IOWIRE|COREWIRE|BLOCKWIRE|
+#                FILLWIRE|FILLWIREOPC|DRCFILL]
+#            [+ MASK ...] ( x y [extValue] ) | VIA via [orient]
+#            [DO ITERATE …]] ; END SPECIALNETS
+#      NETS num ; (similar shape, distinct sub-grammar — see spec
+#        §"Nets"; covers PINS / FIXEDBUMP / FREQUENCY / SOURCE /
+#        ORIGINAL / TYPE / PATTERN / ESTCAP / WEIGHT / SHIELDNET /
+#        SUBNET / XTALK / NONDEFAULTRULE / PROPERTY plus the
+#        ROUTED/FIXED/COVER physical paths). END NETS
+#  10. SCANCHAINS num ; - chainName + START / + STOP / + COMMONSCANPINS
+#        + PARTITION / + FLOATING / + ORDERED ; END SCANCHAINS
+#      GROUPS num ; - groupName compNamePatterns + REGION rgn
+#        + SOFT MAXHALFPERIMETER / + PROPERTY ; END GROUPS
+#      BEGINEXT "extension-text" ... ENDEXT (free-form vendor
+#        extension; same `*` raw-consume mechanism as LEF's
+#        BEGINEXT — pending the engine work that wires DEF's
+#        BEGINEXT into the existing `*` primitive).
+
+# ----- Phase 1: header + DESIGN + UNITS + DIEAREA + ROW + END -----
+
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+
+DESIGN spec_design ;
+
+UNITS DISTANCE MICRONS 2000 ;
+
+DIEAREA ( -100 -100 ) ( 100100 100100 ) ;
+
+# All eight spec-defined orientations (N S E W FN FS FE FW), one
+# ROW per orientation, with non-trivial DO/BY/STEP so the parsed
+# integer fields don't all collapse to zero or one.
+ROW ROW_N  spec_site 0     0     N  DO 10 BY 1 STEP 2540 0    ;
+ROW ROW_S  spec_site 1000  0     S  DO 10 BY 1 STEP 2540 0    ;
+ROW ROW_E  spec_site 2000  0     E  DO  1 BY 8 STEP 0    1900 ;
+ROW ROW_W  spec_site 3000  0     W  DO  1 BY 8 STEP 0    1900 ;
+ROW ROW_FN spec_site 0     5000  FN DO 10 BY 1 STEP 2540 0    ;
+ROW ROW_FS spec_site 1000  5000  FS DO 10 BY 1 STEP 2540 0    ;
+ROW ROW_FE spec_site 2000  5000  FE DO  1 BY 8 STEP 0    1900 ;
+ROW ROW_FW spec_site 3000  5000  FW DO  1 BY 8 STEP 0    1900 ;
+
+END DESIGN
