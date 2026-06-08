@@ -21,7 +21,7 @@ Quick usage:
     from rawast.schema import to_markdown
 
     meta = rawast.Grammar("rawast")
-    g = meta.parse_file(rawast.grammar_path("lef.rawast"))
+    g = meta.parse_file(rawast.grammar_path("lefdef.rawast"))
     print(to_markdown(g, title="LEF"))
 """
 

@@ -18,7 +18,7 @@ fragment plus the rawast command. -->
 # command(s) that triggered the issue
 ```
 
-**Grammar** (or filename of a bundled grammar, e.g. `lef.rawast`):
+**Grammar** (or filename of a bundled grammar, e.g. `lefdef.rawast`):
 
 ```
 # grammar excerpt, or attach the file

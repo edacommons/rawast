@@ -447,7 +447,7 @@ def _dedupe(fields: list[_Field]) -> list[_Field]:
     Two scenarios where one name appears multiple times:
 
       1. Different Choice branches of a catcher-flatten rule all
-         bind the same name (e.g. PROPDEF_DEFAULT in lef.rawast
+         bind the same name (e.g. PROPDEF_DEFAULT in lefdef.rawast
          is `choice { string:default_value=@, <NUMBER>:default_value=@ }`).
          Each branch contributes a _Field with the same name but a
          different type. The runtime dict ends up holding whichever

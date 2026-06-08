@@ -50,7 +50,7 @@ def _generate_lef_models(tmp_path):
     """Generate `lef_models.py` under tmp_path and import it as a module."""
     from rawast.pydantic_gen import to_pydantic
     meta = rawast.Grammar("rawast")
-    grammar = meta.parse_file(str(GRAMMARS / "lef.rawast"))
+    grammar = meta.parse_file(str(GRAMMARS / "lefdef.rawast"))
     src = to_pydantic(grammar)
     module_path = tmp_path / "lef_models.py"
     module_path.write_text(src)
@@ -65,7 +65,7 @@ def test_round_trip_min_lef(tmp_path):
     pytest.importorskip("pydantic")
     lef_path = tmp_path / "min.lef"
     lef_path.write_text(MIN_LEF)
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(lef_path))
 
     mod = _generate_lef_models(tmp_path)
@@ -165,7 +165,7 @@ def test_round_trip_macro_lef(tmp_path):
     pytest.importorskip("pydantic")
     lef_path = tmp_path / "macro.lef"
     lef_path.write_text(MACRO_LEF)
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(lef_path))
 
     mod = _generate_lef_models(tmp_path)
@@ -241,12 +241,12 @@ END LIBRARY
 
 
 def test_round_trip_macro_with_obs(tmp_path):
-    """OBS section round-trip: `?<MACRO_OBS>:obs=@` in lef.rawast captures
+    """OBS section round-trip: `?<MACRO_OBS>:obs=@` in lefdef.rawast captures
     OBS as a sub-dict; MacroBlock has `obs: MacroObs | None = None`."""
     pytest.importorskip("pydantic")
     lef_path = tmp_path / "obs.lef"
     lef_path.write_text(OBS_LEF)
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(lef_path))
 
     mod = _generate_lef_models(tmp_path)
@@ -289,7 +289,7 @@ def test_sky130_techlef_parses_losslessly(tmp_path):
     """
     pytest.importorskip("pydantic")
     sky_path = REPO_ROOT / "python" / "tests" / "data" / "sky130hd.tlef"
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(sky_path))
 
     # Header sub-statements (Sky130 opens with TIME, not DATABASE —
@@ -382,7 +382,7 @@ def test_sky130_sram_macro_parses_losslessly(tmp_path):
     """
     pytest.importorskip("pydantic")
     sram_path = REPO_ROOT / "python" / "tests" / "data" / "sky130_sram_1kbyte.lef"
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(sram_path))
 
     macros = [it for it in parsed["items"] if it.get("type") == "Macro"]
@@ -441,7 +441,7 @@ def test_sky130_io_pad_parses_losslessly(tmp_path):
     """
     pytest.importorskip("pydantic")
     io_path = REPO_ROOT / "python" / "tests" / "data" / "sky130_fd_io_top_xres4v2.lef"
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(io_path))
 
     macros = [it for it in parsed["items"] if it.get("type") == "Macro"]
@@ -490,7 +490,7 @@ def test_lef_spec_coverage_phase1(tmp_path):
     """
     pytest.importorskip("pydantic")
     spec_path = REPO_ROOT / "python" / "tests" / "data" / "lef_spec_coverage.lef"
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(spec_path))
 
     # Header — every sub-statement captured.
@@ -1001,7 +1001,7 @@ def test_lef_spec_coverage_save_round_trip(tmp_path):
     or engine edit that breaks save symmetry.
     """
     spec_path = REPO_ROOT / "python" / "tests" / "data" / "lef_spec_coverage.lef"
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
 
     parsed_a = g.parse_file(str(spec_path))
     saved = g.save(parsed_a)
@@ -1026,7 +1026,7 @@ def test_sky130_multi_antenna_cell_round_trips(tmp_path):
     pytest.importorskip("pydantic")
     cell_path = REPO_ROOT / "python" / "tests" / "data" \
         / "sky130_fd_sc_hd_dlymetal6s2s_1.lef"
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     parsed = g.parse_file(str(cell_path))
 
     macro = next(it for it in parsed["items"]
@@ -1054,7 +1054,7 @@ def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
     no standalone class — their fields appear in the parent."""
     pytest.importorskip("pydantic")
     mod = _generate_lef_models(tmp_path)
-    # These are container-less sequence rules in lef.rawast.
+    # These are container-less sequence rules in lefdef.rawast.
     assert not hasattr(mod, "SiteSize")
     assert not hasattr(mod, "SiteClass")
     assert not hasattr(mod, "VersionCmd")
@@ -1063,14 +1063,14 @@ def test_container_less_rules_are_not_emitted_as_classes(tmp_path):
 
 
 def test_def_prelude_parses_and_saves_round_trip(tmp_path):
-    """The lef.rawast grammar carries a second top rule `DEF` reachable
+    """The lefdef.rawast grammar carries a second top rule `DEF` reachable
     via `start="DEF"` on parse and save. Initial coverage: the file
     prelude (VERSION / BUSBITCHARS / DIVIDERCHAR), DESIGN, UNITS
     DISTANCE MICRONS, DIEAREA, ROW (with DO/BY/STEP), and END
     DESIGN. Exercises the save-side `start=` parameter added so a
     single grammar with multiple top rules can save against any of
     them."""
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     src = (
         "VERSION 5.8 ;\n"
         'BUSBITCHARS "[]" ;\n'
@@ -1125,7 +1125,7 @@ def test_def_spec_coverage_phase1(tmp_path):
       * the generated Pydantic `Def` class validates the parsed
         dict and round-trips through `model_dump()`.
     """
-    g = rawast.Grammar.load(str(GRAMMARS / "lef.rawast"))
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
     p = REPO_ROOT / "python/tests/data/def_spec_coverage.def"
     parsed = g.parse_file(str(p), start="DEF")
 

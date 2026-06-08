@@ -109,27 +109,44 @@ are documented in `docs/` and in the prototype's history.
     byte-equivalent** through `parse → save → reparse`; synthetic
     round-trip tests additionally cover byte-identical output
     (including the 2,048-byte alignment padding).
-  - `grammars/lef.rawast` — LEF base-spec (5.8) coverage, less
-    LEF58_* (deferred to a consumer-supplied sub-grammar). LAYER
-    blocks expose per-TYPE typed fields (`layer_type`, `direction`,
-    `pitch`, `width`, …); VIA blocks model both the geometry and
-    VIARULE-based forms; VIARULE blocks model the LAYER-pair and
-    GENERATE forms with typed sub-clauses (`enclosure`, `rect`,
-    `spacing`); PIN/MACRO bodies cover every spec sub-statement
-    including DENSITY, MUSTJOIN, EEQ, FIXEDMASK, and the full
-    ANTENNA*-family list capture. Parses 507 / 507 real LEFs across
-    seven PDK / open-platform sources; on a 263-file local PDK
-    subset (Sky130 / asap7 / gf130bcd / ihp-sg13g2 / NanGate /
-    gf180 / 74hc_pcb) `parse → save → reparse` is **263 / 263
-    structurally equivalent**, in addition to the synthetic full-
-    spec fixture round-trip and named-cell tests against the Sky130
-    tech LEF, the OpenRAM SRAM, the `top_xres4v2` IO pad, and a
-    multi-ANTENNA HD cell.
-  - `grammars/def.rawast` — DEF placement-and-route file format
-    (PINS / BLOCKAGES / VIAS / COMPONENTS / NONDEFAULTRULES /
-    SPECIALNETS / NETS / FILLS / GCELLGRID / PROPERTYDEFINITIONS).
-    Parses 14 / 14 production DEFs including four 4.1–4.8M-line
-    placement-and-route outputs.
+  - `grammars/lefdef.rawast` — unified LEF + DEF 5.8 grammar.
+    One file, two top rules (`LEF` and `DEF`); the host passes
+    `start=` to `parse_*` and `save` to pick which language to
+    process, letting a single grammar carry both formats with
+    shared sub-rules (`PROPERTYDEFINITIONS`, `XY_PAIR`,
+    `PAREN_POINT`, `RECT_COORDS`, `POINT_DICT`, `BEGINEXT_BLOCK`).
+
+    **LEF side** — base-spec (5.8) coverage, less LEF58_*
+    (deferred to a consumer-supplied sub-grammar). LAYER blocks
+    expose per-TYPE typed fields (`layer_type`, `direction`,
+    `pitch`, `width`, …); VIA blocks model both the geometry
+    and VIARULE-based forms; VIARULE blocks model the LAYER-
+    pair and GENERATE forms with typed sub-clauses
+    (`enclosure`, `rect`, `spacing`); PIN/MACRO bodies cover
+    every spec sub-statement including DENSITY, MUSTJOIN, EEQ,
+    FIXEDMASK, and the full ANTENNA*-family list capture (incl.
+    LEF 5.4-era deprecated antenna forms). Parses 507 / 507
+    real LEFs across seven PDK / open-platform sources; on a
+    263-file local PDK subset (Sky130 / asap7 / gf130bcd /
+    ihp-sg13g2 / NanGate / gf180 / 74hc_pcb) `parse → save →
+    reparse` is **263 / 263 structurally equivalent**, in
+    addition to a synthetic spec-coverage fixture
+    (`lef_spec_coverage.lef`) that exercises every spec clause.
+
+    **DEF side** — every documented LEF/DEF 5.8 §"DEF File"
+    section (TECHNOLOGY / HISTORY / PROPERTYDEFINITIONS / UNITS
+    / DIEAREA / ROW / TRACKS / GCELLGRID / VIAS / NDRS /
+    REGIONS / COMPONENTMASKSHIFT / COMPONENTS / PINS /
+    PINPROPERTIES / BLOCKAGES / SLOTS / FILLS / STYLES /
+    SPECIALNETS / NETS / SCANCHAINS / GROUPS / BEGINEXT) plus
+    every real-world variant surfaced by a local 436-DEF
+    corpus chase. `parse → save → reparse` is **435 / 435**
+    structurally equivalent on the same corpus (the one
+    remaining file is a 100MB+ ChipFlow output that parses
+    and round-trips cleanly but is skipped from the automated
+    runner for speed). Both a synthetic spec-coverage fixture
+    (`def_spec_coverage.def`) and the corpus exercise the
+    grammar.
   - `grammars/tcl.rawast` — Tcl Tier-1 structural parser
     (commands → words; word flavours split out; substitution
     segments isolated). Uses the new subparse + rule-local-ignore
@@ -219,11 +236,11 @@ pip install -e .
 rawast --help
 rawast lint     grammars/gdsii.rawast
 rawast parse    grammars/json.json file.json
-rawast parse    grammars/lef.rawast file.lef --profile --profile-top=20    # top-20 rules by inclusive parse time
-rawast profile  grammars/lef.rawast --from-file lef_list.txt --by time     # corpus-wide profile aggregation
+rawast parse    grammars/lefdef.rawast file.lef --profile --profile-top=20    # top-20 rules by inclusive parse time
+rawast profile  grammars/lefdef.rawast --from-file lef_list.txt --by time     # corpus-wide profile aggregation
 rawast docs     grammars/gdsii.rawast      # EBNF-flavoured Markdown reference (grammar input syntax)
 rawast schema   grammars/gdsii.rawast      # value-tree-shape Markdown reference (dict / array / choice — what a producer tool builds before save())
-rawast pydantic grammars/lef.rawast        # generate Pydantic v2 models matching the grammar's parse/save dict shape exactly
+rawast pydantic grammars/lefdef.rawast        # generate Pydantic v2 models matching the grammar's parse/save dict shape exactly
 ```
 
 The generated Pydantic module is round-trip-faithful: a parsed

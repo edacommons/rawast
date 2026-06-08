@@ -153,8 +153,7 @@ def test_schema_generator_emits_markdown_for_every_bundled_grammar():
         ("json.json",   json_meta),
         ("rawast.rawast", meta),
         ("gdsii.rawast", meta),
-        ("lef.rawast",   meta),
-        ("def.rawast",   meta),
+        ("lefdef.rawast",   meta),
         ("tcl.rawast",   meta),
     ]
     for name, loader in cases:

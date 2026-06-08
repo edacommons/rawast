@@ -46,7 +46,7 @@ ParseResult KeyParser::parse(StreamReader& sr) {
 // Until there's an opt-in flag on the Key node (`set_word_bounded`
 // mutator), closed-keyword Choices that need longer-prefix-first
 // matching (`SPACING` ⊂ `SPACINGTABLE`) must be hand-ordered in
-// the grammar; see LAYER_KEYWORD in lef.rawast.
+// the grammar; see LAYER_KEYWORD in lefdef.rawast.
 
 SaveResult KeyParser::unparse(const Value& /*value*/) const {
     // Literal is fixed; the input value (if any) is ignored.
