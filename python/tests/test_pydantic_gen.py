@@ -1463,6 +1463,44 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert s2["shapes"][0]["type"] == "Polygon"
     assert len(s2["shapes"][0]["points"]) == 4
 
+    # Phase 8: FILLS. Two LAYER entries (one with full qualifier
+    # set, one minimal) plus one VIA entry exercising the
+    # shift-bitmask MASK form and point placements.
+    fills = next(it for it in parsed["items"] if it.get("type") == "Fills")
+    assert fills["count"] == 3
+    layer_fills = [f for f in fills["fills"]
+                   if f["type"] == "LayerFill"]
+    via_fills = [f for f in fills["fills"]
+                 if f["type"] == "ViaFill"]
+    assert len(layer_fills) == 2 and len(via_fills) == 1
+
+    # First LAYER fill: MASK + OPC + RECT + POLYGON.
+    lf1 = layer_fills[0]
+    assert lf1["layer"] == "met1"
+    lf1_types = [c["type"] for c in lf1["clauses"]]
+    assert lf1_types == ["Mask", "OpcFlag", "Rect", "Polygon"]
+    mask_c = next(c for c in lf1["clauses"] if c["type"] == "Mask")
+    assert mask_c["mask"] == 2
+    opc_c = next(c for c in lf1["clauses"] if c["type"] == "OpcFlag")
+    assert opc_c["is_opc"] is True
+
+    # Minimal LAYER fill — just one RECT, no qualifiers.
+    lf2 = layer_fills[1]
+    assert lf2["layer"] == "met2"
+    assert [c["type"] for c in lf2["clauses"]] == ["Rect"]
+
+    # VIA fill: shift-bitmask MASK (string, not int) + OPC + 3 Points.
+    vf = via_fills[0]
+    assert vf["via"] == "spec_via_geom"
+    vf_types = [c["type"] for c in vf["clauses"]]
+    assert vf_types == ["MaskShift", "OpcFlag", "Point", "Point", "Point"]
+    mask_shift = next(c for c in vf["clauses"]
+                      if c["type"] == "MaskShift")
+    assert mask_shift["mask_shift"] == "0xA5"
+    points = [c for c in vf["clauses"] if c["type"] == "Point"]
+    assert points[0] == {"type": "Point", "x": 100, "y": 100}
+    assert points[2] == {"type": "Point", "x": 300, "y": 300}
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")

@@ -1709,7 +1709,8 @@ DEF_ITEM: choice {
   <DEF_PINPROPERTIES_BLOCK>,
   <DEF_PINS_BLOCK>,
   <DEF_BLOCKAGES_BLOCK>,
-  <DEF_SLOTS_BLOCK>
+  <DEF_SLOTS_BLOCK>,
+  <DEF_FILLS_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -2603,6 +2604,99 @@ DEF_SLOT_POLYGON_POINTS: sequence array {
 }
 DEF_SLOT_POLYGON_POINT: sequence dict {
   "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+// ===========================================================================
+// === DEF Phase 8 — FILLS ===================================================
+// ===========================================================================
+
+// `FILLS num ; - {LAYER name | VIA name} [+ MASK n] [+ OPC]
+//  shape+ ; ... END FILLS` per LEF/DEF 5.8 §"Fills". Two entry
+// forms: LAYER fills (RECT/POLYGON shapes for metal-density
+// filler), VIA fills (point placements for via-array fills).
+DEF_FILLS_BLOCK: sequence dict {
+  "FILLS":type="Fills" space,
+  int:count=@ space, ";" newline,
+  <DEF_FILLS_LIST>:fills=@,
+  "END" space, "FILLS" newline
+}
+
+DEF_FILLS_LIST: sequence array { repeat <DEF_FILL_ENTRY> }
+
+DEF_FILL_ENTRY: choice {
+  <DEF_FILL_LAYER_ENTRY>,
+  <DEF_FILL_VIA_ENTRY>
+}
+
+// `- LAYER name [+ MASK n] [+ OPC] { RECT | POLYGON shape }+ ;`
+// — qualifier clauses and shape clauses unified into one
+// `clauses[]` list with per-alt type discriminators, same
+// pattern as DEF_BLOCKAGE_LAYER_CLAUSE.
+DEF_FILL_LAYER_ENTRY: sequence dict {
+  "-" space, "LAYER":type="LayerFill" space,
+  identifier:layer=@ space,
+  repeat <DEF_FILL_LAYER_CLAUSE>,
+  ";" newline
+}
+
+DEF_FILL_LAYER_CLAUSE: choice {
+  <DEF_FILL_MASK>:clauses[]=@,
+  <DEF_FILL_OPC_FLAG>:clauses[]=@,
+  <DEF_FILL_RECT>:clauses[]=@,
+  <DEF_FILL_POLYGON>:clauses[]=@
+}
+
+// `- VIA name [+ MASK shiftLayerMasks] [+ OPC] (pt) (pt) ... ;`
+// — VIA fill is a list of point placements (one VIA shape per
+// point). MASK here is the shift-layer-masks string (different
+// from LAYER fills' integer MASK).
+DEF_FILL_VIA_ENTRY: sequence dict {
+  "-" space, "VIA":type="ViaFill" space,
+  identifier:via=@ space,
+  repeat <DEF_FILL_VIA_CLAUSE>,
+  ";" newline
+}
+
+DEF_FILL_VIA_CLAUSE: choice {
+  <DEF_FILL_VIA_MASK>:clauses[]=@,
+  <DEF_FILL_OPC_FLAG>:clauses[]=@,
+  <DEF_FILL_VIA_POINT>:clauses[]=@
+}
+
+DEF_FILL_MASK: sequence dict {
+  "+" space, "MASK":type="Mask" space, int:mask=@ space
+}
+// VIA's MASK is a shiftLayerMasks string (per spec), not an
+// integer — opaque identifier captured verbatim.
+DEF_FILL_VIA_MASK: sequence dict {
+  "+" space, "MASK":type="MaskShift" space,
+  identifier:mask_shift=@ space
+}
+DEF_FILL_OPC_FLAG: sequence dict {
+  "+" space, "OPC":type="OpcFlag":is_opc=true space
+}
+
+DEF_FILL_RECT: sequence dict {
+  "RECT":type="Rect" space,
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+
+DEF_FILL_POLYGON: sequence dict {
+  "POLYGON":type="Polygon" space,
+  <DEF_FILL_POLYGON_POINTS>:points=@
+}
+DEF_FILL_POLYGON_POINTS: sequence array {
+  repeat+ <DEF_FILL_POLYGON_POINT>
+}
+DEF_FILL_POLYGON_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+// One via-fill placement point: `( x y )`.
+DEF_FILL_VIA_POINT: sequence dict {
+  "(":type="Point" space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
