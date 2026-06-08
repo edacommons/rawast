@@ -745,11 +745,17 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert ndr["name"] == "spec_ndr"
     # LEF/DEF 5.8 §"Non-Default Rule" body items in source order:
     # HardSpacing + 2 Layers + Via + ViaRule + UseVia + UseViaRule
-    # + MinCuts + 3 trailing Property clauses.
+    # + MinCuts + 3 trailing Property + 1 trailing ViaInline.
     prop_types = [p.get("type") for p in ndr["properties"]]
     assert prop_types == ["HardSpacing", "Layer", "Layer", "Via",
                           "ViaRule", "UseVia", "UseViaRule", "MinCuts",
-                          "Property", "Property", "Property"]
+                          "Property", "Property", "Property", "ViaInline"]
+    # Inline VIA def (NDR_VIA_INLINE rule) — full VIA block with
+    # name + LAYER groups + END name, distinct from NDR_VIA_REF.
+    inline_via = ndr["properties"][11]
+    assert inline_via["name"] == "spec_ndr_inline_via"
+    assert inline_via["end_name"] == "spec_ndr_inline_via"
+    assert len(inline_via["properties"]) == 2  # 2 LAYER groups
     # HARDSPACING marker.
     assert ndr["properties"][0]["is_hard_spacing"] is True
     # Per-LAYER properties catcher-flatten into the LAYER sub-block dict.
@@ -809,11 +815,18 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert density["layers"][0]["rects"][0]["type"] == "DensityRect"
     assert density["layers"][0]["rects"][0]["density"] == 0.4
 
-    # Phase 5: PINs exercising every sub-statement.
-    assert len(macro["pins"]) == 2
+    # Phase 5: PINs exercising every sub-statement. VDD + SIG_IN
+    # + MULTI_PORT_PIN (the latter exercises the spec's "two or
+    # more PORTs per pin" form).
+    assert len(macro["pins"]) == 3
     vdd = next(p for p in macro["pins"] if p["name"] == "VDD")
     assert vdd["use"] == "POWER"
     assert vdd["shape"] == "ABUTMENT"
+
+    multi = next(p for p in macro["pins"] if p["name"] == "MULTI_PORT_PIN")
+    assert len(multi["ports"]) == 2
+    assert multi["ports"][0]["port_class"] == "CORE"
+    assert multi["ports"][1]["port_class"] == "BUMP"
 
     sig_in = next(p for p in macro["pins"] if p["name"] == "SIG_IN")
     assert sig_in["direction"] == "OUTPUT"
@@ -859,6 +872,13 @@ def test_lef_spec_coverage_phase1(tmp_path):
         {"kind": "MaxSideAreaCar", "layer": "met1", "value": 0.08},
         {"kind": "MaxCutCar", "layer": "mcon", "value": 0.12},
         {"kind": "AnyDiffArea", "layer": "met1", "value": 0.03},
+        # Deprecated LEF 5.4-era PIN ANTENNA forms — distinct
+        # InputGateAreaLegacy / InputDiffAreaLegacy / etc. kinds
+        # so downstream consumers can flag them as deprecated.
+        {"kind": "InputGateAreaLegacy", "value": 0.05},
+        {"kind": "InputDiffAreaLegacy", "layer": "met1", "value": 0.06},
+        {"kind": "OutputDiffAreaLegacy", "layer": "met1", "value": 0.07},
+        {"kind": "InOutDiffAreaLegacy", "layer": "met1", "value": 0.08},
         {"kind": "Model", "value": "OXIDE1"},
     ]
 

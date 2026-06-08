@@ -102,6 +102,14 @@ PROPERTYDEFINITIONS
   ROW            prop_row_s    STRING ;
   GROUP          prop_grp_i    INTEGER ;
   LAYER          prop_ranged   REAL RANGE 0.0 1.0 ;
+  # PROPERTYDEFINITIONS with explicit default value per spec —
+  # the optional trailing value after the data-type keyword.
+  # STRING defaults are also spec-permitted but currently the
+  # Pydantic generator types `default_value` as `Number | None`
+  # only; revisit when the generator supports union-typed catcher
+  # bindings (PROPDEF_DEFAULT is a `choice { string, NUMBER }`).
+  LAYER          prop_def_i    INTEGER 42 ;
+  PIN            prop_def_r    REAL 3.14 ;
 END PROPERTYDEFINITIONS
 
 SITE spec_site
@@ -165,12 +173,35 @@ LAYER spec_routing
   # The audit surfaced a prefix collision: KeyParser doesn't
   # word-boundary-check, so SPACINGTABLE must come before SPACING
   # in LAYER_KEYWORD for the longer keyword to win.
+  # SPACING — bare plus the advanced qualifier forms per LEF/DEF
+  # 5.8 §"Layer (Routing)". Each lands in `properties` with the
+  # qualifier preserved in `values`.
   SPACING 0.1 ;
+  SPACING 0.15 RANGE 0.5 2.0 ;
+  SPACING 0.08 ENDOFLINE 0.18 WITHIN 0.05 ;
+  SPACING 0.12 SAMENET ;
+  SPACING 0.08 NOTCHLENGTH 0.5 ;
+  # SPACINGTABLE — PARALLELRUNLENGTH (the common one), TWOWIDTHS
+  # variant (newer-process), and INFLUENCE (parallel-run override).
   SPACINGTABLE
     PARALLELRUNLENGTH 0    1    10
     WIDTH 0    0.10 0.10 0.20
     WIDTH 0.5  0.10 0.15 0.20
     WIDTH 1.0  0.10 0.15 0.25 ;
+  SPACINGTABLE
+    TWOWIDTHS 0    0.10
+    TWOWIDTHS 0.5  0.15 ;
+  SPACINGTABLE
+    INFLUENCE WIDTH 1.0 WITHIN 2.0 SPACING 0.3 ;
+  # MINIMUMCUT — bare + full LEF/DEF 5.8 advanced forms.
+  MINIMUMCUT 2 WIDTH 0.5 WITHIN 1.0 ;
+  MINIMUMCUT 2 WIDTH 0.5 FROMABOVE ;
+  MINIMUMCUT 2 WIDTH 0.5 LENGTH 1.0 WITHIN 0.3 ;
+  # DCCURRENTDENSITY / ACCURRENTDENSITY — basic AVERAGE/PEAK
+  # forms and the table form with FREQUENCY axis (used for
+  # IR-drop / electromigration analysis in modern PDKs).
+  DCCURRENTDENSITY AVERAGE 0.36 ;
+  ACCURRENTDENSITY PEAK FREQUENCY 1 100 1000 TABLEENTRIES 0.1 0.2 0.3 ;
   PROPERTY LEF58_TYPE "TYPE ROUTING ;" ;
 END spec_routing
 
@@ -242,6 +273,15 @@ VIA spec_via_viarule_form VIARULE spec_viarule_gen ;
    PATTERN myCutPattern ;
 END spec_via_viarule_form
 
+# Geometry-form VIA with POLYGON shape — LEF/DEF 5.8 allows
+# POLYGON shapes alongside RECT in the VIA body.
+VIA spec_via_polygon
+  LAYER met1 ;
+    POLYGON 0 0 0.2 0 0.2 0.2 0 0.2 ;
+  LAYER met2 ;
+    RECT -0.1 -0.1 0.1 0.1 ;
+END spec_via_polygon
+
 VIARULE spec_viarule_pair
    LAYER li1 ;
    ENCLOSURE 0 0 ;
@@ -284,6 +324,16 @@ NONDEFAULTRULE spec_ndr
    PROPERTY prop_ndr_i 7 ;
    PROPERTY prop_ndr_r 1.5 ;
    PROPERTY prop_ndr_s "ndr-string-value" ;
+   # Inline VIA definition inside NDR — LEF/DEF 5.8 §"Non-Default
+   # Rule" permits full `VIA viaName body END viaName` blocks
+   # inside the NDR (distinct from the `VIA name ;` reference
+   # form). Captured as type="ViaInline" via NDR_VIA_INLINE.
+   VIA spec_ndr_inline_via
+     LAYER met1 ;
+       RECT -0.12 -0.12 0.12 0.12 ;
+     LAYER met2 ;
+       RECT -0.12 -0.12 0.12 0.12 ;
+   END spec_ndr_inline_via
 END spec_ndr
 
 # === Phase 4: MACRO with every body sub-statement ===
@@ -343,6 +393,17 @@ MACRO spec_macro
     ANTENNAMAXSIDEAREACAR        0.08 LAYER met1 ;
     ANTENNAMAXCUTCAR             0.12 LAYER mcon ;
     ANTENNAANYDIFFAREA           0.03 LAYER met1 ;
+    # Deprecated LEF 5.4-era PIN ANTENNA forms (per LEF/DEF 5.8
+    # §"Pin" — listed as DEPRECATED, replaced by ANTENNAGATEAREA
+    # / ANTENNADIFFAREA, but still appear in older PDK LEFs that
+    # were never re-emitted by a modern tool). Distinct
+    # InputGateAreaLegacy / InputDiffAreaLegacy /
+    # OutputDiffAreaLegacy / InOutDiffAreaLegacy discriminators
+    # so downstream consumers can distinguish from current forms.
+    ANTENNAINPUTGATEAREA         0.05 ;
+    ANTENNAINPUTDIFFAREA         0.06 LAYER met1 ;
+    ANTENNAOUTPUTDIFFAREA        0.07 LAYER met1 ;
+    ANTENNAINOUTDIFFAREA         0.08 LAYER met1 ;
     ANTENNAMODEL                 OXIDE1 ;
     PORT
       CLASS CORE ;
@@ -362,6 +423,24 @@ MACRO spec_macro
         RECT 10 0 11 1 ;
     END
   END SIG_IN
+  # PIN with multiple PORT clauses — LEF/DEF 5.8 §"Pin" allows
+  # one or more PORTs per pin (each is a physical placement). The
+  # engine's `[]` list-append on `:ports[]=@` captures them in
+  # source order.
+  PIN MULTI_PORT_PIN
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      CLASS CORE ;
+      LAYER met1 ;
+        RECT 0 0 0.1 0.1 ;
+    END
+    PORT
+      CLASS BUMP ;
+      LAYER met2 ;
+        RECT 0.2 0 0.3 0.1 ;
+    END
+  END MULTI_PORT_PIN
   OBS
     LAYER met2 ;
       RECT 0 0 5 0.05 ;
@@ -382,6 +461,37 @@ MACRO spec_macro
   PROPERTY LEF58_PWRPLUS "VDD" ;
   PROPERTY LEF58_LIBRARYTYPE "STDCELL" ;
 END spec_macro
+
+# === Phase 4b: MACRO CLASS variants ===
+#
+# LEF/DEF 5.8 §"Macro" defines CLASS with rich sub-type vocabulary:
+#   COVER [BUMP]
+#   RING
+#   BLOCK [BLACKBOX | SOFT]
+#   PAD [INPUT | OUTPUT | INOUT | POWER | SPACER | AREAIO]
+#   CORE [FEEDTHRU | TIEHIGH | TIELOW | SPACER | ANTENNACELL | WELLTAP]
+#   ENDCAP [PRE | POST | TOPLEFT | TOPRIGHT | BOTTOMLEFT | BOTTOMRIGHT]
+# Each subtype is a separate identifier token in the CLASS list,
+# captured via CLASS_LIST's `repeat identifier space`. One tiny
+# MACRO per variant — minimal body so the asserts focus on
+# `class` only.
+
+MACRO spec_class_pad_input    CLASS PAD INPUT ;     SIZE 1 BY 1 ; END spec_class_pad_input
+MACRO spec_class_pad_power    CLASS PAD POWER ;     SIZE 1 BY 1 ; END spec_class_pad_power
+MACRO spec_class_pad_spacer   CLASS PAD SPACER ;    SIZE 1 BY 1 ; END spec_class_pad_spacer
+MACRO spec_class_pad_areaio   CLASS PAD AREAIO ;    SIZE 1 BY 1 ; END spec_class_pad_areaio
+MACRO spec_class_core_feed    CLASS CORE FEEDTHRU ; SIZE 1 BY 1 ; END spec_class_core_feed
+MACRO spec_class_core_th      CLASS CORE TIEHIGH ;  SIZE 1 BY 1 ; END spec_class_core_th
+MACRO spec_class_core_tl      CLASS CORE TIELOW ;   SIZE 1 BY 1 ; END spec_class_core_tl
+MACRO spec_class_core_ac      CLASS CORE ANTENNACELL ; SIZE 1 BY 1 ; END spec_class_core_ac
+MACRO spec_class_core_wt      CLASS CORE WELLTAP ;  SIZE 1 BY 1 ; END spec_class_core_wt
+MACRO spec_class_endcap_pre   CLASS ENDCAP PRE ;    SIZE 1 BY 1 ; END spec_class_endcap_pre
+MACRO spec_class_endcap_tl    CLASS ENDCAP TOPLEFT ;  SIZE 1 BY 1 ; END spec_class_endcap_tl
+MACRO spec_class_block_bb     CLASS BLOCK BLACKBOX ; SIZE 1 BY 1 ; END spec_class_block_bb
+MACRO spec_class_block_soft   CLASS BLOCK SOFT ;    SIZE 1 BY 1 ; END spec_class_block_soft
+MACRO spec_class_cover        CLASS COVER ;         SIZE 1 BY 1 ; END spec_class_cover
+MACRO spec_class_cover_bump   CLASS COVER BUMP ;    SIZE 1 BY 1 ; END spec_class_cover_bump
+MACRO spec_class_ring         CLASS RING ;          SIZE 1 BY 1 ; END spec_class_ring
 
 # === Phase 7: vendor-extension wrapper ===
 #
