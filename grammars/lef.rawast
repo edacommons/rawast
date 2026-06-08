@@ -282,6 +282,56 @@ MANUFACTURINGGRID_CMD: sequence dict {
 // numeric literals.
 NUMBER: choice { float, int }
 
+// --- Coordinate-pair sub-rules (shared across LEF + DEF) ---
+//
+// Container-less catcher sequences — the `x` / `y` (and
+// `x1`/`y1`/`x2`/`y2`) bindings flow into whatever dict-
+// container parent invokes them, exactly as if the rule
+// body was inlined. Lets a parent like `ORIGIN_CMD`,
+// `VIA_CUTSIZE`, `DEF_REGION_BOX`, or `DEF_STYLE_POINT`
+// reference one shared rule instead of repeating the
+// `<NUMBER>:x=@ space, <NUMBER>:y=@ space` boilerplate
+// across ~47 sites in the file.
+
+// Bare `x y` pair — `<NUMBER>:x=@ space, <NUMBER>:y=@ space`.
+// Used after a keyword (e.g. `ORIGIN 0 0`, `CUTSIZE 0.17 0.17`,
+// `STEP 100 0` — though STEP uses step_x/step_y so factor
+// case-by-case). Emits {x, y} into the surrounding parent dict.
+XY_PAIR: sequence {
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+}
+
+// Parenthesised single point — `( x y )`. Used by every
+// coordinate-pair-in-parens occurrence: POLYGON_POINTs,
+// DEF_STYLE_POINTs, DEF_REGION_BOX corners, ORIGIN_CMD when
+// it's used inside VIA_VIARULE_BODY, etc. Emits {x, y} into
+// the surrounding parent dict via the XY_PAIR catcher.
+PAREN_POINT: sequence {
+  "(" space, <XY_PAIR>, ")" space
+}
+
+// Two-corner rectangle — `( x1 y1 ) ( x2 y2 )`. Used by every
+// RECT_SHAPE-like rule (LEF RECT, DEF VIA RECT, DEF BLOCKAGE
+// RECT, DEF FILL RECT, DEF SLOT RECT, DEF REGION boxes, ...).
+// Emits {x1, y1, x2, y2} into the surrounding parent dict.
+RECT_COORDS: sequence {
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+
+// Shared dict-container point rule — wraps `<PAREN_POINT>` so
+// the catcher's x/y bindings land in a dedicated dict (one
+// element of a sequence array). Replaces 8 functionally
+// identical rules (DEF_DIEAREA_POINT / DEF_VIA_POLYGON_POINT /
+// DEF_PIN_POLYGON_POINT / DEF_BLOCKAGE_POLYGON_POINT /
+// DEF_SLOT_POLYGON_POINT / DEF_FILL_POLYGON_POINT /
+// DEF_STYLE_POINT / DEF_SPECIALNET_BODY_POLYGON_POINT) that
+// had the same body — each polygon/path-point array now
+// references this one rule.
+POINT_DICT: sequence dict {
+  <PAREN_POINT>
+}
+
 // === UNITS block ==========================================================
 //
 //   UNITS
@@ -601,7 +651,7 @@ CLASS_LIST: sequence array { repeat identifier space }
 // VIA-VIARULE-form ORIGIN — the spec body is identical.
 ORIGIN_CMD: sequence dict {
   "ORIGIN" space,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  <XY_PAIR>,
   ";" newline
 }
 
@@ -622,7 +672,7 @@ MACRO_FOREIGN: sequence dict {
 // used legacy keyword pending real-corpus exposure. Captured as
 // optional `orient` field — absent when not present.
 MACRO_FOREIGN_XY: sequence {
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  <XY_PAIR>,
   ?<MACRO_FOREIGN_ORIENT>
 }
 MACRO_FOREIGN_ORIENT: sequence {
@@ -949,7 +999,7 @@ VIA_PLACEMENT: sequence dict {
   "VIA":type="ViaPlacement" space,
   ?<MASK_MOD>,
   ?<ITERATE_PREFIX>,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  <XY_PAIR>,
   identifier:via_name=@ space,
   ?<STEP_PATTERN>:step_pattern=@,
   ";" newline
@@ -1768,12 +1818,8 @@ DEF_DIEAREA_CMD: sequence dict {
   ";" newline
 }
 DEF_DIEAREA_POINTS: sequence array {
-  repeat+ <DEF_DIEAREA_POINT>
+  repeat+ <POINT_DICT>
 }
-DEF_DIEAREA_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 // `ROW rowName siteName x y orient DO numX BY numY STEP stepX stepY ;`
 // — the LEF/DEF 5.8 §"Row" canonical form. `orient` is one of
 // `N | S | E | W | FN | FS | FE | FW`; captured as an identifier
@@ -1782,7 +1828,7 @@ DEF_DIEAREA_POINT: sequence dict {
 DEF_ROW_CMD: sequence dict {
   "ROW":type="Row" space,
   identifier:name=@ space, identifier:site=@ space,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  <XY_PAIR>,
   identifier:orient=@ space,
   "DO" space, <NUMBER>:num_x=@ space,
   "BY" space, <NUMBER>:num_y=@ space,
@@ -1885,7 +1931,7 @@ DEF_VIA_VIARULE_CLAUSE: sequence dict {
 }
 DEF_VIA_CUTSIZE_CLAUSE: sequence dict {
   "+" space, "CUTSIZE":type="CutSize" space,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+  <XY_PAIR>
 }
 DEF_VIA_LAYERS_CLAUSE: sequence dict {
   "+" space, "LAYERS":type="Layers" space,
@@ -1895,7 +1941,7 @@ DEF_VIA_LAYERS_CLAUSE: sequence dict {
 }
 DEF_VIA_CUTSPACING_CLAUSE: sequence dict {
   "+" space, "CUTSPACING":type="CutSpacing" space,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+  <XY_PAIR>
 }
 DEF_VIA_ENCLOSURE_CLAUSE: sequence dict {
   "+" space, "ENCLOSURE":type="Enclosure" space,
@@ -1908,7 +1954,7 @@ DEF_VIA_ROWCOL_CLAUSE: sequence dict {
 }
 DEF_VIA_ORIGIN_CLAUSE: sequence dict {
   "+" space, "ORIGIN":type="Origin" space,
-  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+  <XY_PAIR>
 }
 DEF_VIA_OFFSET_CLAUSE: sequence dict {
   "+" space, "OFFSET":type="Offset" space,
@@ -1928,8 +1974,7 @@ DEF_VIA_RECT_CLAUSE: sequence dict {
   "+" space, "RECT":type="Rect" space,
   identifier:layer=@ space,
   ?<DEF_VIA_MASK_QUAL>,
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+  <RECT_COORDS>
 }
 DEF_VIA_POLYGON_CLAUSE: sequence dict {
   "+" space, "POLYGON":type="Polygon" space,
@@ -1942,12 +1987,8 @@ DEF_VIA_MASK_QUAL: sequence {
 }
 // Polygon points — one or more `( x y )` pairs, no separator.
 DEF_VIA_POLYGON_POINTS: sequence array {
-  repeat <DEF_VIA_POLYGON_POINT>
+  repeat <POINT_DICT>
 }
-DEF_VIA_POLYGON_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 // `NONDEFAULTRULES num ; - ruleName clause+ ; ... END
 //  NONDEFAULTRULES` per LEF/DEF 5.8 §"NonDefaultRules". A list
 // of NDR definitions used by the design — conceptually the
@@ -2054,8 +2095,7 @@ DEF_REGION_BOXES: sequence array {
   repeat+ <DEF_REGION_BOX>
 }
 DEF_REGION_BOX: sequence dict {
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+  <RECT_COORDS>
 }
 
 // `+`-prefixed clauses after the boxes: TYPE qualifier and
@@ -2158,17 +2198,17 @@ DEF_COMP_SOURCE_CLAUSE: sequence dict {
 // `clause["type"]` to know the placement state).
 DEF_COMP_FIXED_CLAUSE: sequence dict {
   "+" space, "FIXED":type="Fixed" space,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  <PAREN_POINT>,
   identifier:orient=@ space
 }
 DEF_COMP_COVER_CLAUSE: sequence dict {
   "+" space, "COVER":type="Cover" space,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  <PAREN_POINT>,
   identifier:orient=@ space
 }
 DEF_COMP_PLACED_CLAUSE: sequence dict {
   "+" space, "PLACED":type="Placed" space,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  <PAREN_POINT>,
   identifier:orient=@ space
 }
 DEF_COMP_UNPLACED_CLAUSE: sequence dict {
@@ -2370,8 +2410,7 @@ DEF_PIN_LAYER_CLAUSE: sequence dict {
   identifier:layer=@ space,
   ?<DEF_PIN_MASK_QUAL>,
   ?<DEF_PIN_LAYER_QUALIFIER>,
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+  <RECT_COORDS>
 }
 
 // LAYER / POLYGON optional qualifier — SPACING or DESIGNRULEWIDTH
@@ -2396,17 +2435,13 @@ DEF_PIN_POLYGON_CLAUSE: sequence dict {
   <DEF_PIN_POLYGON_POINTS>:points=@
 }
 DEF_PIN_POLYGON_POINTS: sequence array {
-  repeat+ <DEF_PIN_POLYGON_POINT>
+  repeat+ <POINT_DICT>
 }
-DEF_PIN_POLYGON_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 DEF_PIN_VIA_CLAUSE: sequence dict {
   "+" space, "VIA":type="Via" space,
   identifier:via=@ space,
   ?<DEF_PIN_MASK_QUAL>,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+  <PAREN_POINT>
 }
 
 // Spec form is `+ MASK n` but real DEFs (klayout testdata
@@ -2431,17 +2466,17 @@ DEF_PIN_MASK_QUAL_BARE: sequence {
 // type discriminator.
 DEF_PIN_FIXED_CLAUSE: sequence dict {
   "+" space, "FIXED":type="Fixed" space,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  <PAREN_POINT>,
   identifier:orient=@ space
 }
 DEF_PIN_COVER_CLAUSE: sequence dict {
   "+" space, "COVER":type="Cover" space,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  <PAREN_POINT>,
   identifier:orient=@ space
 }
 DEF_PIN_PLACED_CLAUSE: sequence dict {
   "+" space, "PLACED":type="Placed" space,
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space,
+  <PAREN_POINT>,
   identifier:orient=@ space
 }
 DEF_PIN_UNPLACED_CLAUSE: sequence dict {
@@ -2577,8 +2612,7 @@ DEF_BLOCKAGE_MASK: sequence dict {
 
 DEF_BLOCKAGE_RECT: sequence dict {
   "RECT":type="Rect" space,
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+  <RECT_COORDS>
 }
 
 DEF_BLOCKAGE_POLYGON: sequence dict {
@@ -2586,12 +2620,8 @@ DEF_BLOCKAGE_POLYGON: sequence dict {
   <DEF_BLOCKAGE_POLYGON_POINTS>:points=@
 }
 DEF_BLOCKAGE_POLYGON_POINTS: sequence array {
-  repeat+ <DEF_BLOCKAGE_POLYGON_POINT>
+  repeat+ <POINT_DICT>
 }
-DEF_BLOCKAGE_POLYGON_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 // `- PLACEMENT [+ SOFT | + PARTIAL maxDensity | + PUSHDOWN |
 //   + COMPONENT name] RECT ( pt pt )+ ;` — placement-blockage
 // entry. Simpler qualifier set than LAYER blockage; only RECT
@@ -2644,8 +2674,7 @@ DEF_SLOT_SHAPE: choice {
 
 DEF_SLOT_RECT: sequence dict {
   "RECT":type="Rect" space,
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+  <RECT_COORDS>
 }
 
 DEF_SLOT_POLYGON: sequence dict {
@@ -2653,12 +2682,8 @@ DEF_SLOT_POLYGON: sequence dict {
   <DEF_SLOT_POLYGON_POINTS>:points=@
 }
 DEF_SLOT_POLYGON_POINTS: sequence array {
-  repeat+ <DEF_SLOT_POLYGON_POINT>
+  repeat+ <POINT_DICT>
 }
-DEF_SLOT_POLYGON_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 // ===========================================================================
 // === DEF Phase 8 — FILLS ===================================================
 // ===========================================================================
@@ -2731,8 +2756,7 @@ DEF_FILL_OPC_FLAG: sequence dict {
 
 DEF_FILL_RECT: sequence dict {
   "RECT":type="Rect" space,
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+  <RECT_COORDS>
 }
 
 DEF_FILL_POLYGON: sequence dict {
@@ -2740,12 +2764,8 @@ DEF_FILL_POLYGON: sequence dict {
   <DEF_FILL_POLYGON_POINTS>:points=@
 }
 DEF_FILL_POLYGON_POINTS: sequence array {
-  repeat+ <DEF_FILL_POLYGON_POINT>
+  repeat+ <POINT_DICT>
 }
-DEF_FILL_POLYGON_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 // One via-fill placement point: `( x y )`.
 DEF_FILL_VIA_POINT: sequence dict {
   "(":type="Point" space,
@@ -3057,6 +3077,11 @@ DEF_SPECIALNET_BODY_POLYGON: sequence dict {
 DEF_SPECIALNET_BODY_POLYGON_POINTS: sequence array {
   repeat+ <DEF_SPECIALNET_BODY_POLYGON_POINT>
 }
+// Distinct from POINT_DICT because this polygon's coordinates
+// may use the `*` wildcard form (`( * y )` / `( x * )`) per
+// LEF/DEF 5.8 — SPECIALNET shape geometry inherits the same
+// coord-compaction rules as routing paths. Uses DEF_NET_COORD
+// instead of bare NUMBER.
 DEF_SPECIALNET_BODY_POLYGON_POINT: sequence dict {
   "(" space, <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space, ")" space
 }
@@ -3384,10 +3409,6 @@ DEF_STYLE_ENTRY: sequence dict {
   ";" newline
 }
 DEF_STYLE_POINTS: sequence array {
-  repeat+ <DEF_STYLE_POINT>
+  repeat+ <POINT_DICT>
 }
-DEF_STYLE_POINT: sequence dict {
-  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
-}
-
 END_DESIGN: sequence { "END" space, "DESIGN" newline }
