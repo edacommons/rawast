@@ -384,4 +384,64 @@ FILLS 3 ;
       ( 100 100 ) ( 200 200 ) ( 300 300 ) ;
 END FILLS
 
+# ----- Phase 9: SPECIALNETS + NETS -----
+
+# Per LEF/DEF 5.8 §"Special Nets". Power/ground/clock nets with
+# explicit stripe-style routing, voltage, spacing constraints,
+# and SHIELD wires. Three entries cover every typed clause and
+# every connection-list form (compName pinName / PIN pinName /
+# * pinName).
+SPECIALNETS 2 ;
+  - VDD ( PIN VDD ) ( * VDD ) ( spec_comp_full VDD )
+      + USE POWER
+      + SYNTHESIZED
+      + VOLTAGE 1.8
+      + SPACING met1 0.5 RANGE 0.0 10.0
+      + SOURCE NETLIST
+      + ORIGINAL VDD_pre_synth
+      + PATTERN BALANCED
+      + ESTCAP 1.5
+      + WEIGHT 10
+      + PROPERTY prop_sn_i 1
+      + ROUTED met1 100 + SHAPE STRIPE + MASK 2
+        ( 0 0 ) ( 1000 0 ) VIA spec_via_geom
+      + SHIELD shield_net met2 50 ( 0 100 ) ( 1000 100 ) ;
+  - VSS ( PIN VSS )
+      + USE GROUND
+      + FIXEDBUMP
+      + FIXED met1 100 ( 0 200 ) ( 1000 200 )
+      + COVER met2 50 ( 0 300 ) ( 1000 300 ) ;
+END SPECIALNETS
+
+# Per LEF/DEF 5.8 §"Nets". Signal nets with looser routing
+# semantics. Three entries cover the NETS-specific clauses
+# (FREQUENCY / NONDEFAULTRULE / SHIELDNET / SUBNET / XTALK /
+# NOSHIELD) plus the shared ones.
+NETS 3 ;
+  - sig_data ( spec_comp_full A ) ( spec_comp_full B )
+      + USE SIGNAL
+      + SOURCE TIMING
+      + NONDEFAULTRULE spec_ndr_full
+      + FREQUENCY 1000
+      + ORIGINAL sig_data_pre
+      + PATTERN STEINER
+      + ESTCAP 0.5
+      + WEIGHT 2
+      + SHIELDNET shield_a
+      + SUBNET sub_a
+      + XTALK 3
+      + PROPERTY prop_n_def_s "net-prop"
+      + ROUTED met1 + SHAPE STRIPE + MASK 1
+        + NONDEFAULTRULE spec_ndr_full
+        ( 100 100 ) ( 200 100 ) VIA spec_via_geom ;
+  - sig_clk ( PIN spec_pin_clk )
+      + USE CLOCK
+      + FIXEDBUMP
+      + NOSHIELD met1 ( 0 0 ) ( 100 0 ) ;
+  - sig_test ( spec_comp_full out1 )
+      + USE SIGNAL
+      + FIXED met2 ( 0 200 ) ( 100 200 )
+      + COVER met3 ( 0 300 ) ( 100 300 ) ;
+END NETS
+
 END DESIGN

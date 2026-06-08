@@ -1710,7 +1710,9 @@ DEF_ITEM: choice {
   <DEF_PINS_BLOCK>,
   <DEF_BLOCKAGES_BLOCK>,
   <DEF_SLOTS_BLOCK>,
-  <DEF_FILLS_BLOCK>
+  <DEF_FILLS_BLOCK>,
+  <DEF_SPECIALNETS_BLOCK>,
+  <DEF_NETS_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -2697,6 +2699,325 @@ DEF_FILL_POLYGON_POINT: sequence dict {
 DEF_FILL_VIA_POINT: sequence dict {
   "(":type="Point" space,
   <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+// ===========================================================================
+// === DEF Phase 9 — SPECIALNETS + NETS =====================================
+// ===========================================================================
+//
+// The two connectivity sections of a DEF file. SPECIALNETS holds
+// power/ground/clock nets with explicit stripe-style routing;
+// NETS holds the signal nets. Both share most of the entry shape:
+//
+//   - netName ( connection )+ + clause+ ;
+//
+// where each connection is `( compName pinName )` / `( PIN pinName )`
+// / `( * pinName )` and clauses are `+`-prefixed typed dicts.
+// Routing clauses (`+ ROUTED|FIXED|COVER|SHIELD|NOSHIELD layer
+// width ...`) carry layer + width + optional SHAPE/MASK/NDR
+// qualifiers and a path geometry of (Point | Via | New) elements.
+//
+// SHIELD is SPECIALNETS-only; NOSHIELD is NETS-only. Several
+// clauses are shared (SOURCE / USE / WEIGHT / PROPERTY / ESTCAP /
+// PATTERN / ORIGINAL / FIXEDBUMP).
+
+// --- Shared sub-rules -----------------------------------------------------
+
+// `( compName pinName )` / `( PIN pinName )` / `( * pinName )` —
+// one entry connection. PIN before identifier (Choice tries
+// keyword form first); `*` (global) is its own alt.
+DEF_NET_CONNECTION: choice {
+  <DEF_NET_PIN_CONN>,
+  <DEF_NET_GLOBAL_CONN>,
+  <DEF_NET_COMP_CONN>
+}
+DEF_NET_PIN_CONN: sequence dict {
+  "(" space, "PIN":type="Pin" space, identifier:pin=@ space, ")" space
+}
+DEF_NET_GLOBAL_CONN: sequence dict {
+  "(" space, "*":type="Global" space, identifier:pin=@ space, ")" space
+}
+DEF_NET_COMP_CONN: sequence dict {
+  "(" space, "":type="CompPin",
+  identifier:component=@ space, identifier:pin=@ space, ")" space
+}
+
+// Wire-path elements inside a routing clause. Two element
+// kinds; each starts with a recognisable prefix (`(` or `VIA`)
+// so the Choice dispatch is unambiguous.
+//
+// (Deferred: `NEW layerName [width] [qualifiers] path` segments
+// that continue a wire across multiple connected sub-paths.
+// SPECIALNETS NEW carries an explicit width; NETS NEW carries
+// optional TAPER / TAPERRULE — different syntactic shapes that
+// need parallel rules. The single-segment form below covers
+// every modern-router-emitted DEF we've seen; NEW continuation
+// segments land when a corpus DEF uses them.)
+DEF_NET_PATH_ELEM: choice {
+  <DEF_NET_PATH_POINT>:path[]=@,
+  <DEF_NET_PATH_VIA>:path[]=@
+}
+DEF_NET_PATH_POINT: sequence dict {
+  "(":type="Point" space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space,
+  ?<DEF_NET_PATH_POINT_EXT>,
+  ")" space
+}
+DEF_NET_PATH_POINT_EXT: sequence { <NUMBER>:ext=@ space }
+DEF_NET_PATH_VIA: sequence dict {
+  "VIA":type="Via" space, identifier:via=@ space,
+  ?<DEF_NET_PATH_VIA_ORIENT>
+}
+DEF_NET_PATH_VIA_ORIENT: sequence { identifier:orient=@ space }
+
+// SHAPE / MASK / NDR qualifiers — appear inside ROUTED clauses
+// and inside NEW segments. List-append to `qualifiers[]` so the
+// parent routing-clause dict carries them as a list.
+DEF_NET_ROUTE_QUAL: choice {
+  <DEF_NET_QUAL_SHAPE>:qualifiers[]=@,
+  <DEF_NET_QUAL_MASK>:qualifiers[]=@,
+  <DEF_NET_QUAL_NDR>:qualifiers[]=@
+}
+DEF_NET_QUAL_SHAPE: sequence dict {
+  "+" space, "SHAPE":type="Shape" space, identifier:shape_type=@ space
+}
+DEF_NET_QUAL_MASK: sequence dict {
+  "+" space, "MASK":type="Mask" space, int:mask=@ space
+}
+DEF_NET_QUAL_NDR: sequence dict {
+  "+" space, "NONDEFAULTRULE":type="NonDefaultRule" space,
+  identifier:rule=@ space
+}
+
+// --- SPECIALNETS ----------------------------------------------------------
+
+DEF_SPECIALNETS_BLOCK: sequence dict {
+  "SPECIALNETS":type="SpecialNets" space,
+  int:count=@ space, ";" newline,
+  <DEF_SPECIALNETS_LIST>:nets=@,
+  "END" space, "SPECIALNETS" newline
+}
+
+DEF_SPECIALNETS_LIST: sequence array { repeat <DEF_SPECIALNET_ENTRY> }
+
+// `- netName connection+ clause+ ;` — entry shape. The
+// connection list is one or more `( ... )` pairs, captured as
+// `connections`. Subsequent `+`-prefixed clauses land in
+// `clauses[]`.
+DEF_SPECIALNET_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  <DEF_SPECIALNET_CONNECTIONS>:connections=@,
+  repeat <DEF_SPECIALNET_CLAUSE>,
+  ";" newline
+}
+DEF_SPECIALNET_CONNECTIONS: sequence array {
+  repeat <DEF_NET_CONNECTION>
+}
+
+// All `+`-prefixed SPECIALNET clauses. Ordered longer-prefix-
+// first within each prefix group; `SOURCE` / `SUBNET` /
+// `SYNTHESIZED` distinct first chars (no overlap).
+DEF_SPECIALNET_CLAUSE: choice {
+  <DEF_SPECIALNET_SYNTHESIZED>:clauses[]=@,
+  <DEF_SPECIALNET_VOLTAGE>:clauses[]=@,
+  <DEF_SPECIALNET_SPACING>:clauses[]=@,
+  <DEF_SPECIALNET_SOURCE>:clauses[]=@,
+  <DEF_SPECIALNET_FIXEDBUMP>:clauses[]=@,
+  <DEF_SPECIALNET_ORIGINAL>:clauses[]=@,
+  <DEF_SPECIALNET_USE>:clauses[]=@,
+  <DEF_SPECIALNET_PATTERN>:clauses[]=@,
+  <DEF_SPECIALNET_ESTCAP>:clauses[]=@,
+  <DEF_SPECIALNET_WEIGHT>:clauses[]=@,
+  <DEF_SPECIALNET_PROPERTY>:clauses[]=@,
+  <DEF_SPECIALNET_ROUTED>:clauses[]=@
+}
+
+DEF_SPECIALNET_SYNTHESIZED: sequence dict {
+  "+" space, "SYNTHESIZED":type="Synthesized":is_synthesized=true space
+}
+DEF_SPECIALNET_VOLTAGE: sequence dict {
+  "+" space, "VOLTAGE":type="Voltage" space, <NUMBER>:voltage=@ space
+}
+DEF_SPECIALNET_SPACING: sequence dict {
+  "+" space, "SPACING":type="Spacing" space,
+  identifier:layer=@ space, <NUMBER>:spacing=@ space,
+  ?<DEF_SPECIALNET_SPACING_RANGE>
+}
+DEF_SPECIALNET_SPACING_RANGE: sequence {
+  "RANGE" space, <NUMBER>:range_min=@ space, <NUMBER>:range_max=@ space
+}
+DEF_SPECIALNET_SOURCE: sequence dict {
+  "+" space, "SOURCE":type="Source" space, identifier:source_type=@ space
+}
+DEF_SPECIALNET_FIXEDBUMP: sequence dict {
+  "+" space, "FIXEDBUMP":type="FixedBump":is_fixed_bump=true space
+}
+DEF_SPECIALNET_ORIGINAL: sequence dict {
+  "+" space, "ORIGINAL":type="Original" space,
+  identifier:original=@ space
+}
+DEF_SPECIALNET_USE: sequence dict {
+  "+" space, "USE":type="Use" space, identifier:use=@ space
+}
+DEF_SPECIALNET_PATTERN: sequence dict {
+  "+" space, "PATTERN":type="Pattern" space, identifier:pattern_type=@ space
+}
+DEF_SPECIALNET_ESTCAP: sequence dict {
+  "+" space, "ESTCAP":type="EstCap" space, <NUMBER>:est_cap=@ space
+}
+DEF_SPECIALNET_WEIGHT: sequence dict {
+  "+" space, "WEIGHT":type="Weight" space, <NUMBER>:weight=@ space
+}
+DEF_SPECIALNET_PROPERTY: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
+}
+
+// SPECIALNET routing clause — `+ {ROUTED|FIXED|COVER|SHIELD
+// shieldNet} layer width [+ qualifiers] (path elements)+`.
+DEF_SPECIALNET_ROUTED: sequence dict {
+  "+" space,
+  <DEF_SPECIALNET_ROUTE_KW>,
+  identifier:layer=@ space, int:width=@ space,
+  repeat <DEF_NET_ROUTE_QUAL>,
+  repeat+ <DEF_NET_PATH_ELEM>
+}
+// SHIELD takes an extra `shieldNet` name; ROUTED / FIXED / COVER
+// don't. Modelled as a Choice over four typed sub-rules.
+DEF_SPECIALNET_ROUTE_KW: choice {
+  <DEF_SPECIALNET_ROUTE_SHIELD>,
+  <DEF_SPECIALNET_ROUTE_ROUTED>,
+  <DEF_SPECIALNET_ROUTE_FIXED>,
+  <DEF_SPECIALNET_ROUTE_COVER>
+}
+DEF_SPECIALNET_ROUTE_ROUTED: sequence {
+  "ROUTED":type="Routed" space
+}
+DEF_SPECIALNET_ROUTE_FIXED: sequence {
+  "FIXED":type="FixedRoute" space
+}
+DEF_SPECIALNET_ROUTE_COVER: sequence {
+  "COVER":type="CoverRoute" space
+}
+DEF_SPECIALNET_ROUTE_SHIELD: sequence {
+  "SHIELD":type="Shield" space, identifier:shield_net=@ space
+}
+
+// --- NETS ------------------------------------------------------------------
+
+DEF_NETS_BLOCK: sequence dict {
+  "NETS":type="Nets" space,
+  int:count=@ space, ";" newline,
+  <DEF_NETS_LIST>:nets=@,
+  "END" space, "NETS" newline
+}
+
+DEF_NETS_LIST: sequence array { repeat <DEF_NET_ENTRY> }
+
+DEF_NET_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  <DEF_NET_CONNECTIONS>:connections=@,
+  repeat <DEF_NET_CLAUSE>,
+  ";" newline
+}
+DEF_NET_CONNECTIONS: sequence array { repeat <DEF_NET_CONNECTION> }
+
+// `+`-prefixed NET clauses. Includes the NETS-only clauses
+// (FREQUENCY / NONDEFAULTRULE / SHIELDNET / SUBNET / XTALK)
+// plus the shared ones (USE / SOURCE / WEIGHT / PROPERTY /
+// ESTCAP / PATTERN / ORIGINAL / FIXEDBUMP) plus routing
+// (ROUTED / FIXED / COVER / NOSHIELD).
+DEF_NET_CLAUSE: choice {
+  <DEF_NET_FREQUENCY>:clauses[]=@,
+  <DEF_NET_NONDEFAULTRULE>:clauses[]=@,
+  <DEF_NET_SHIELDNET>:clauses[]=@,
+  <DEF_NET_SUBNET>:clauses[]=@,
+  <DEF_NET_XTALK>:clauses[]=@,
+  <DEF_NET_SOURCE>:clauses[]=@,
+  <DEF_NET_FIXEDBUMP>:clauses[]=@,
+  <DEF_NET_ORIGINAL>:clauses[]=@,
+  <DEF_NET_USE>:clauses[]=@,
+  <DEF_NET_PATTERN>:clauses[]=@,
+  <DEF_NET_ESTCAP>:clauses[]=@,
+  <DEF_NET_WEIGHT>:clauses[]=@,
+  <DEF_NET_PROPERTY>:clauses[]=@,
+  <DEF_NET_ROUTED>:clauses[]=@
+}
+
+DEF_NET_FREQUENCY: sequence dict {
+  "+" space, "FREQUENCY":type="Frequency" space,
+  <NUMBER>:frequency=@ space
+}
+DEF_NET_NONDEFAULTRULE: sequence dict {
+  "+" space, "NONDEFAULTRULE":type="NonDefaultRule" space,
+  identifier:rule=@ space
+}
+DEF_NET_SHIELDNET: sequence dict {
+  "+" space, "SHIELDNET":type="ShieldNet" space,
+  identifier:shield_net=@ space
+}
+DEF_NET_SUBNET: sequence dict {
+  "+" space, "SUBNET":type="SubNet" space,
+  identifier:sub_net=@ space
+}
+DEF_NET_XTALK: sequence dict {
+  "+" space, "XTALK":type="Xtalk" space, int:xtalk_class=@ space
+}
+DEF_NET_SOURCE: sequence dict {
+  "+" space, "SOURCE":type="Source" space, identifier:source_type=@ space
+}
+DEF_NET_FIXEDBUMP: sequence dict {
+  "+" space, "FIXEDBUMP":type="FixedBump":is_fixed_bump=true space
+}
+DEF_NET_ORIGINAL: sequence dict {
+  "+" space, "ORIGINAL":type="Original" space,
+  identifier:original=@ space
+}
+DEF_NET_USE: sequence dict {
+  "+" space, "USE":type="Use" space, identifier:use=@ space
+}
+DEF_NET_PATTERN: sequence dict {
+  "+" space, "PATTERN":type="Pattern" space, identifier:pattern_type=@ space
+}
+DEF_NET_ESTCAP: sequence dict {
+  "+" space, "ESTCAP":type="EstCap" space, <NUMBER>:est_cap=@ space
+}
+DEF_NET_WEIGHT: sequence dict {
+  "+" space, "WEIGHT":type="Weight" space, <NUMBER>:weight=@ space
+}
+DEF_NET_PROPERTY: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
+}
+
+// NET routing clause — `+ {ROUTED|FIXED|COVER|NOSHIELD} layer
+// [+ qualifiers] (path elements)+`. Note: NET routes don't
+// have an explicit width — it's inherited from the NDR or the
+// LEF technology.
+DEF_NET_ROUTED: sequence dict {
+  "+" space,
+  <DEF_NET_ROUTE_KW>,
+  identifier:layer=@ space,
+  repeat <DEF_NET_ROUTE_QUAL>,
+  repeat+ <DEF_NET_PATH_ELEM>
+}
+DEF_NET_ROUTE_KW: choice {
+  <DEF_NET_ROUTE_NOSHIELD>,
+  <DEF_NET_ROUTE_ROUTED>,
+  <DEF_NET_ROUTE_FIXED>,
+  <DEF_NET_ROUTE_COVER>
+}
+DEF_NET_ROUTE_ROUTED: sequence {
+  "ROUTED":type="Routed" space
+}
+DEF_NET_ROUTE_FIXED: sequence {
+  "FIXED":type="FixedRoute" space
+}
+DEF_NET_ROUTE_COVER: sequence {
+  "COVER":type="CoverRoute" space
+}
+DEF_NET_ROUTE_NOSHIELD: sequence {
+  "NOSHIELD":type="NoShield" space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }

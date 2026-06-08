@@ -1501,6 +1501,73 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert points[0] == {"type": "Point", "x": 100, "y": 100}
     assert points[2] == {"type": "Point", "x": 300, "y": 300}
 
+    # Phase 9: SPECIALNETS + NETS. The two connectivity sections.
+    sn = next(it for it in parsed["items"]
+              if it.get("type") == "SpecialNets")
+    assert sn["count"] == 2
+    vdd = sn["nets"][0]
+    assert vdd["name"] == "VDD"
+    # Three connection forms: PIN, *, comp-pin.
+    assert [c["type"] for c in vdd["connections"]] == [
+        "Pin", "Global", "CompPin",
+    ]
+    assert vdd["connections"][2] == {
+        "type": "CompPin", "component": "spec_comp_full", "pin": "VDD",
+    }
+    # Every spec'd SPECIALNET clause type in source order.
+    vdd_clauses = [c["type"] for c in vdd["clauses"]]
+    assert vdd_clauses == [
+        "Use", "Synthesized", "Voltage", "Spacing", "Source",
+        "Original", "Pattern", "EstCap", "Weight", "Property",
+        "Routed", "Shield",
+    ]
+    routed = next(c for c in vdd["clauses"] if c["type"] == "Routed")
+    assert routed["layer"] == "met1" and routed["width"] == 100
+    # SHIELD routing — extra shield_net field on top of layer + width.
+    shield = next(c for c in vdd["clauses"] if c["type"] == "Shield")
+    assert shield["shield_net"] == "shield_net"
+    assert shield["layer"] == "met2" and shield["width"] == 50
+
+    # VSS exercises FIXED and COVER routing keywords.
+    vss = sn["nets"][1]
+    vss_clauses = [c["type"] for c in vss["clauses"]]
+    assert vss_clauses == [
+        "Use", "FixedBump", "FixedRoute", "CoverRoute",
+    ]
+
+    nets = next(it for it in parsed["items"]
+                if it.get("type") == "Nets")
+    assert nets["count"] == 3
+    # sig_data: every NETS-specific clause.
+    sig_data = nets["nets"][0]
+    sig_data_types = [c["type"] for c in sig_data["clauses"]]
+    assert sig_data_types == [
+        "Use", "Source", "NonDefaultRule", "Frequency", "Original",
+        "Pattern", "EstCap", "Weight", "ShieldNet", "SubNet",
+        "Xtalk", "Property", "Routed",
+    ]
+    # Routing qualifiers (SHAPE + MASK + NONDEFAULTRULE) land in
+    # `qualifiers[]` on the Routed clause; path elements in `path[]`.
+    net_routed = next(c for c in sig_data["clauses"]
+                      if c["type"] == "Routed")
+    qual_types = [q["type"] for q in net_routed["qualifiers"]]
+    assert qual_types == ["Shape", "Mask", "NonDefaultRule"]
+    path_types = [p["type"] for p in net_routed["path"]]
+    assert path_types == ["Point", "Point", "Via"]
+
+    # sig_clk: NOSHIELD routing.
+    sig_clk = nets["nets"][1]
+    sig_clk_types = [c["type"] for c in sig_clk["clauses"]]
+    assert sig_clk_types == ["Use", "FixedBump", "NoShield"]
+
+    # sig_test: FIXED + COVER NETS routing (distinct from
+    # SPECIALNETS FixedRoute/CoverRoute since NETS Routes don't
+    # have explicit width).
+    sig_test = nets["nets"][2]
+    assert [c["type"] for c in sig_test["clauses"]] == [
+        "Use", "FixedRoute", "CoverRoute",
+    ]
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")
