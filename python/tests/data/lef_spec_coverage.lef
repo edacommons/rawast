@@ -160,9 +160,25 @@ END spec_routing
 
 LAYER spec_cut
   TYPE CUT ;
-  SPACING 0.17 ;
   WIDTH 0.17 ;
+  # SPACING family per LEF/DEF 5.8 §"Layer (Cut)" — bare value
+  # plus all four advanced qualifiers (LAYER name, ADJACENTCUTS
+  # WITHIN, PARALLELOVERLAP, AREA). All fall through to the
+  # generic LAYER_PROPERTY pass-through as kind="SPACING" with
+  # the qualifier embedded in the values list, which preserves
+  # the source order on save.
+  SPACING 0.17 ;
+  SPACING 0.18 LAYER met1 ;
+  SPACING 0.20 ADJACENTCUTS 4 WITHIN 0.5 ;
+  SPACING 0.22 PARALLELOVERLAP ;
+  SPACING 0.24 AREA 0.5 ;
+  # ENCLOSURE — bare and ABOVE/BELOW qualifier forms.
   ENCLOSURE 0.06 0.06 ;
+  ENCLOSURE ABOVE 0.05 0.07 ;
+  ENCLOSURE BELOW 0.04 0.05 ;
+  # CUT-array placement and minimum-cut rules.
+  ARRAYSPACING LONGARRAY WIDTH 0.5 CUTSPACING 0.3 ARRAYCUTS 4 SPACING 0.5 ;
+  MINIMUMCUT 2 WIDTH 0.5 ;
   ANTENNAAREARATIO 10 ;
   ANTENNAMODEL OXIDE1 ;
   PROPERTY LEF58_TYPE "TYPE CUT ;" ;
@@ -265,10 +281,23 @@ MACRO spec_macro
     GROUNDSENSITIVITY VSS ;
     MUSTJOIN OTHER_PIN ;
     PROPERTY prop_pin_i 7 ;
-    ANTENNAGATEAREA           0.01 ;
-    ANTENNADIFFAREA           0.02 LAYER met1 ;
-    ANTENNAPARTIALMETALAREA   0.05 LAYER met1 ;
-    ANTENNAMODEL              OXIDE1 ;
+    # Every PIN ANTENNA property defined by LEF/DEF 5.8 §"Pin".
+    # The closed-list discriminator PIN_ANTENNA_KIND is ordered
+    # longest-prefix-first to avoid KeyParser prefix collisions
+    # (PARTIALMETALSIDEAREA must come before PARTIALMETALAREA,
+    # MAXSIDEAREACAR before MAXAREACAR, ANYDIFFAREA before
+    # DIFFAREA). Mix of `[VALUE [LAYER name] ;]` and the bare-
+    # value forms — both shapes covered by PIN_ANTENNA_PROP.
+    ANTENNAGATEAREA              0.01 ;
+    ANTENNADIFFAREA              0.02 LAYER met1 ;
+    ANTENNAPARTIALMETALAREA      0.05 LAYER met1 ;
+    ANTENNAPARTIALMETALSIDEAREA  0.04 LAYER met1 ;
+    ANTENNAPARTIALCUTAREA        0.06 LAYER mcon ;
+    ANTENNAMAXAREACAR            0.10 LAYER met1 ;
+    ANTENNAMAXSIDEAREACAR        0.08 LAYER met1 ;
+    ANTENNAMAXCUTCAR             0.12 LAYER mcon ;
+    ANTENNAANYDIFFAREA           0.03 LAYER met1 ;
+    ANTENNAMODEL                 OXIDE1 ;
     PORT
       CLASS CORE ;
       LAYER met1 EXCEPTPGNET SPACING 0.05 DESIGNRULEWIDTH 0.1 MASK 2 ;

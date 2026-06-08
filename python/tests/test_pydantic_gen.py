@@ -581,9 +581,31 @@ def test_lef_spec_coverage_phase1(tmp_path):
 
     assert layers["spec_cut"]["layer_type"] == "CUT"
     assert layers["spec_cut"]["width"] == 0.17
-    cut_kinds = [p["kind"] for p in layers["spec_cut"]["properties"]]
-    assert cut_kinds == ["SPACING", "ENCLOSURE", "ANTENNAAREARATIO",
-                          "ANTENNAMODEL", "PROPERTY"]
+    cut_props = layers["spec_cut"]["properties"]
+    cut_kinds = [p["kind"] for p in cut_props]
+    # LEF/DEF 5.8 §"Layer (Cut)" — bare SPACING + 4 qualifier
+    # variants (LAYER, ADJACENTCUTS, PARALLELOVERLAP, AREA) + 3
+    # ENCLOSURE forms (bare, ABOVE, BELOW) + ARRAYSPACING +
+    # MINIMUMCUT + antenna + LEF58 property.
+    assert cut_kinds == [
+        "SPACING", "SPACING", "SPACING", "SPACING", "SPACING",
+        "ENCLOSURE", "ENCLOSURE", "ENCLOSURE",
+        "ARRAYSPACING", "MINIMUMCUT",
+        "ANTENNAAREARATIO", "ANTENNAMODEL", "PROPERTY",
+    ]
+    # Spot-check the qualifiers landed in the values list in
+    # source order — guards against future LAYER_PROPERTY
+    # restructuring that flattens or reorders the value tail.
+    spacing_props = [p for p in cut_props if p["kind"] == "SPACING"]
+    assert spacing_props[1]["values"] == [0.18, "LAYER", "met1"]
+    assert spacing_props[2]["values"] == [0.20, "ADJACENTCUTS", 4,
+                                           "WITHIN", 0.5]
+    assert spacing_props[3]["values"] == [0.22, "PARALLELOVERLAP"]
+    assert spacing_props[4]["values"] == [0.24, "AREA", 0.5]
+    enclosures = [p for p in cut_props if p["kind"] == "ENCLOSURE"]
+    assert enclosures[0]["values"] == [0.06, 0.06]
+    assert enclosures[1]["values"] == ["ABOVE", 0.05, 0.07]
+    assert enclosures[2]["values"] == ["BELOW", 0.04, 0.05]
 
     assert layers["spec_masterslice"]["layer_type"] == "MASTERSLICE"
     assert [p["kind"] for p in layers["spec_masterslice"]["properties"]] \
@@ -725,10 +747,23 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # list-append binding. Each entry is a dict with `kind`, `value`,
     # and optional `layer`. Multiple ANTENNAs of any kind round-trip
     # losslessly.
+    # Every PIN ANTENNA kind defined by LEF/DEF 5.8 §"Pin" —
+    # 10 entries, ordered the same as the source LEF. The
+    # ANTENNAANYDIFFAREA / PARTIALMETALSIDEAREA / PARTIALCUTAREA
+    # / MAX{,SIDE,CUT}AREACAR entries exercise PIN_ANTENNA_KIND
+    # alternatives the IO-pad fixture (`top_xres4v2`) hit only
+    # one of (PartialMetalSideArea). Order of the list matters
+    # because the grammar preserves source order.
     assert sig_in["antennas"] == [
         {"kind": "GateArea", "value": 0.01},
         {"kind": "DiffArea", "layer": "met1", "value": 0.02},
         {"kind": "PartialMetalArea", "layer": "met1", "value": 0.05},
+        {"kind": "PartialMetalSideArea", "layer": "met1", "value": 0.04},
+        {"kind": "PartialCutArea", "layer": "mcon", "value": 0.06},
+        {"kind": "MaxAreaCar", "layer": "met1", "value": 0.10},
+        {"kind": "MaxSideAreaCar", "layer": "met1", "value": 0.08},
+        {"kind": "MaxCutCar", "layer": "mcon", "value": 0.12},
+        {"kind": "AnyDiffArea", "layer": "met1", "value": 0.03},
         {"kind": "Model", "value": "OXIDE1"},
     ]
 

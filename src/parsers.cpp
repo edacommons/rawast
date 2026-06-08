@@ -32,6 +32,21 @@ ParseResult KeyParser::parse(StreamReader& sr) {
     sr.accept();
     return make_string(token_);
 }
+// Word-boundary checking inside KeyParser was prototyped and
+// reverted: it correctly handles whitespace-separated grammars
+// (LEF, DEF, GDSII text, JSON) where each token is meant to be
+// word-bounded, but it breaks grammars that intentionally pack
+// adjacent tokens without whitespace (the doctest cases for
+// shared-prefix Choice resolution use single-char keys `"a"` +
+// `"b"` parsing `"ab"` as two tokens), and it changes the
+// contract for grammars that emit compact save output (the
+// rawast meta-grammar saves `"sequence"` + `"dict"` as
+// `sequencedict` — reparse via word-boundary would reject).
+//
+// Until there's an opt-in flag on the Key node (`set_word_bounded`
+// mutator), closed-keyword Choices that need longer-prefix-first
+// matching (`SPACING` ⊂ `SPACINGTABLE`) must be hand-ordered in
+// the grammar; see LAYER_KEYWORD in lef.rawast.
 
 SaveResult KeyParser::unparse(const Value& /*value*/) const {
     // Literal is fixed; the input value (if any) is ignored.
