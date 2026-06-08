@@ -168,4 +168,42 @@ ROW ROW_FS spec_site 1000  5000  FS DO 10 BY 1 STEP 2540 0    ;
 ROW ROW_FE spec_site 2000  5000  FE DO  1 BY 8 STEP 0    1900 ;
 ROW ROW_FW spec_site 3000  5000  FW DO  1 BY 8 STEP 0    1900 ;
 
+# ----- Phase 3: TRACKS + GCELLGRID + VIAS -----
+
+# `TRACKS dir start DO num STEP space [MASK n [SAMEMASK]]
+#  LAYER name+ ;`. Both X and Y directions, with the MASK +
+# SAMEMASK qualifier on one to exercise the optional path.
+TRACKS X    100   DO 50  STEP 200   LAYER met1 ;
+TRACKS Y    100   DO 50  STEP 200   MASK 2 LAYER met2 met3 ;
+TRACKS X    100   DO 50  STEP 200   MASK 3 SAMEMASK LAYER met4 ;
+
+# `GCELLGRID dir start DO num STEP space ;`.
+GCELLGRID X 0     DO 11  STEP 1000 ;
+GCELLGRID Y 0     DO  6  STEP 2000 ;
+
+# `VIAS num ;` block. Two entries — one geometry-form (RECT
+# clauses, with the optional + MASK qualifier on one), one
+# VIARULE-form (every typed `+`-clause: VIARULE / CUTSIZE /
+# LAYERS / CUTSPACING / ENCLOSURE / ROWCOL / ORIGIN / OFFSET /
+# PATTERN). Plus a POLYGON-shape entry covering the geometry
+# form's polygon variant.
+VIAS 3 ;
+  - spec_via_geom
+      + RECT met1 ( -100 -100 ) ( 100 100 )
+      + RECT met2 + MASK 2 ( -50 -50 ) ( 50 50 ) ;
+  - spec_via_rule
+      + VIARULE myViaRule
+      + CUTSIZE 100 100
+      + LAYERS met1 cut1 met2
+      + CUTSPACING 200 200
+      + ENCLOSURE 50 50 50 50
+      + ROWCOL 2 3
+      + ORIGIN 5 5
+      + OFFSET 1 2 3 4
+      + PATTERN myCutPattern ;
+  - spec_via_polygon
+      + POLYGON met3 ( 0 0 ) ( 100 0 ) ( 100 100 ) ( 0 100 )
+      + POLYGON met4 + MASK 1 ( 200 200 ) ( 300 200 ) ( 300 300 ) ;
+END VIAS
+
 END DESIGN

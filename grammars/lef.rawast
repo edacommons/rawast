@@ -1690,7 +1690,10 @@ DEF_ITEM: choice {
   <PROPERTYDEFINITIONS_BLOCK>,
   <DEF_UNITS_CMD>,
   <DEF_DIEAREA_CMD>,
-  <DEF_ROW_CMD>
+  <DEF_ROW_CMD>,
+  <DEF_TRACKS_CMD>,
+  <DEF_GCELLGRID_CMD>,
+  <DEF_VIAS_BLOCK>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -1755,6 +1758,164 @@ DEF_ROW_CMD: sequence dict {
   "BY" space, <NUMBER>:num_y=@ space,
   "STEP" space, <NUMBER>:step_x=@ space, <NUMBER>:step_y=@ space,
   ";" newline
+}
+
+// `TRACKS X|Y start DO numTracks STEP space [MASK n [SAMEMASK]]
+//  LAYER layerName1 [layerName2 ...] ;`
+// per LEF/DEF 5.8 §"Tracks". One TRACKS line per layer set;
+// repeatable as many times as the design has layer-track
+// declarations. Direction is one of `X` / `Y` (captured as
+// identifier — downstream consumers can constrain via Enum).
+DEF_TRACKS_CMD: sequence dict {
+  "TRACKS":type="Tracks" space,
+  identifier:direction=@ space,
+  <NUMBER>:start=@ space,
+  "DO" space, <NUMBER>:num_tracks=@ space,
+  "STEP" space, <NUMBER>:step=@ space,
+  ?<DEF_TRACKS_MASK>,
+  "LAYER" space, <DEF_TRACKS_LAYER_LIST>:layers=@,
+  ";" newline
+}
+
+// Optional `MASK n [SAMEMASK]` qualifier between STEP and LAYER.
+DEF_TRACKS_MASK: sequence {
+  "MASK" space, int:mask=@ space, ?<DEF_TRACKS_SAMEMASK>
+}
+DEF_TRACKS_SAMEMASK: sequence {
+  "SAMEMASK":same_mask=true space
+}
+
+// Layer names — one or more identifiers, space-separated. `space`
+// postfix on the repeat item so save emits a separator between
+// names (matches the CLASS_LIST / SYMMETRY_LIST pattern).
+DEF_TRACKS_LAYER_LIST: sequence array { repeat identifier space }
+
+// `GCELLGRID X|Y start DO numGCells+1 STEP space ;` per LEF/DEF
+// 5.8 §"GCellGrid". Each declaration defines one row of grid
+// lines along the named direction; repeatable.
+DEF_GCELLGRID_CMD: sequence dict {
+  "GCELLGRID":type="GCellGrid" space,
+  identifier:direction=@ space,
+  <NUMBER>:start=@ space,
+  "DO" space, <NUMBER>:num_gcells=@ space,
+  "STEP" space, <NUMBER>:step=@ space,
+  ";" newline
+}
+
+// `VIAS num ; - viaName ... ; ... END VIAS` per LEF/DEF 5.8
+// §"Vias" — a list of VIA definitions used by the design.
+// Each entry has either VIARULE-form clauses (+ VIARULE / +
+// CUTSIZE / + LAYERS / + CUTSPACING / + ENCLOSURE / + ROWCOL /
+// + ORIGIN / + OFFSET / + PATTERN) or geometry-form clauses
+// (+ RECT / + POLYGON). `+`-prefixed clauses are captured as a
+// list of typed dicts in source order — same pattern as
+// LAYER_PROPERTY uses for unknown LAYER clauses.
+DEF_VIAS_BLOCK: sequence dict {
+  "VIAS":type="Vias" space,
+  int:count=@ space, ";" newline,
+  <DEF_VIAS_LIST>:vias=@,
+  "END" space, "VIAS" newline
+}
+
+DEF_VIAS_LIST: sequence array { repeat <DEF_VIA_ENTRY> }
+
+// One VIA entry: `- viaName + clause + clause … ;`. Per-alt
+// `:clauses[]=@` list-append binding routes every clause type
+// into the same `clauses` list on the entry dict. Same pattern
+// as MACRO_TRAILING_PROPERTY uses to split LEF58 and generic
+// PROPERTY into `lef58` vs `properties` lists — except here all
+// 11 alts share one list since they're all "VIA clauses".
+DEF_VIA_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  repeat <DEF_VIA_CLAUSE>,
+  ";" newline
+}
+
+DEF_VIA_CLAUSE: choice {
+  <DEF_VIA_VIARULE_CLAUSE>:clauses[]=@,
+  <DEF_VIA_CUTSIZE_CLAUSE>:clauses[]=@,
+  <DEF_VIA_LAYERS_CLAUSE>:clauses[]=@,
+  <DEF_VIA_CUTSPACING_CLAUSE>:clauses[]=@,
+  <DEF_VIA_ENCLOSURE_CLAUSE>:clauses[]=@,
+  <DEF_VIA_ROWCOL_CLAUSE>:clauses[]=@,
+  <DEF_VIA_ORIGIN_CLAUSE>:clauses[]=@,
+  <DEF_VIA_OFFSET_CLAUSE>:clauses[]=@,
+  <DEF_VIA_PATTERN_CLAUSE>:clauses[]=@,
+  <DEF_VIA_RECT_CLAUSE>:clauses[]=@,
+  <DEF_VIA_POLYGON_CLAUSE>:clauses[]=@
+}
+
+// VIARULE-form clauses. The `+` prefix lives inside each clause
+// dict so save emits it before the typed keyword. Discriminator
+// is the typed keyword (VIARULE / CUTSIZE / …) via the
+// `:type="..."` binding on the Key.
+DEF_VIA_VIARULE_CLAUSE: sequence dict {
+  "+" space, "VIARULE":type="ViaRule" space,
+  identifier:name=@ space
+}
+DEF_VIA_CUTSIZE_CLAUSE: sequence dict {
+  "+" space, "CUTSIZE":type="CutSize" space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+}
+DEF_VIA_LAYERS_CLAUSE: sequence dict {
+  "+" space, "LAYERS":type="Layers" space,
+  identifier:bot=@ space,
+  identifier:cut=@ space,
+  identifier:top=@ space
+}
+DEF_VIA_CUTSPACING_CLAUSE: sequence dict {
+  "+" space, "CUTSPACING":type="CutSpacing" space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+}
+DEF_VIA_ENCLOSURE_CLAUSE: sequence dict {
+  "+" space, "ENCLOSURE":type="Enclosure" space,
+  <NUMBER>:bot_x=@ space, <NUMBER>:bot_y=@ space,
+  <NUMBER>:top_x=@ space, <NUMBER>:top_y=@ space
+}
+DEF_VIA_ROWCOL_CLAUSE: sequence dict {
+  "+" space, "ROWCOL":type="RowCol" space,
+  int:rows=@ space, int:cols=@ space
+}
+DEF_VIA_ORIGIN_CLAUSE: sequence dict {
+  "+" space, "ORIGIN":type="Origin" space,
+  <NUMBER>:x=@ space, <NUMBER>:y=@ space
+}
+DEF_VIA_OFFSET_CLAUSE: sequence dict {
+  "+" space, "OFFSET":type="Offset" space,
+  <NUMBER>:bot_x=@ space, <NUMBER>:bot_y=@ space,
+  <NUMBER>:top_x=@ space, <NUMBER>:top_y=@ space
+}
+DEF_VIA_PATTERN_CLAUSE: sequence dict {
+  "+" space, "PATTERN":type="Pattern" space,
+  identifier:name=@ space
+}
+
+// Geometry-form clauses — `+`-prefixed RECT and POLYGON with
+// parenthesised coordinate pairs (distinct from LEF's bare
+// form). Optional MASK qualifier as a separate optional sub-
+// clause.
+DEF_VIA_RECT_CLAUSE: sequence dict {
+  "+" space, "RECT":type="Rect" space,
+  identifier:layer=@ space,
+  ?<DEF_VIA_MASK_QUAL>,
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+DEF_VIA_POLYGON_CLAUSE: sequence dict {
+  "+" space, "POLYGON":type="Polygon" space,
+  identifier:layer=@ space,
+  ?<DEF_VIA_MASK_QUAL>,
+  <DEF_VIA_POLYGON_POINTS>:points=@
+}
+DEF_VIA_MASK_QUAL: sequence {
+  "+" space, "MASK" space, int:mask=@ space
+}
+// Polygon points — one or more `( x y )` pairs, no separator.
+DEF_VIA_POLYGON_POINTS: sequence array {
+  repeat <DEF_VIA_POLYGON_POINT>
+}
+DEF_VIA_POLYGON_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }

@@ -382,6 +382,65 @@ def _collect_from_item(item: Any, rule_names: set[str], grammar: dict,
     return out
 
 
+def _split_union(s: str) -> list[str]:
+    """Split a Python type-annotation string on top-level ` | `,
+    respecting `[]` bracket depth. Needed because the naive
+    `.split(' | ')` mis-splits nested unions like `list[A | B]`."""
+    parts: list[str] = []
+    depth = 0
+    buf = ""
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == '[':
+            depth += 1
+            buf += c
+        elif c == ']':
+            depth -= 1
+            buf += c
+        elif depth == 0 and s[i:i + 3] == ' | ':
+            parts.append(buf.strip())
+            buf = ""
+            i += 3
+            continue
+        else:
+            buf += c
+        i += 1
+    if buf.strip():
+        parts.append(buf.strip())
+    return parts
+
+
+def _merge_union_types(a: str, b: str) -> str:
+    """Build the merged Python type for two same-name field
+    contributions. Either side may already be a union.
+
+    Special case: if EVERY part on both sides is a `list[X]`, the
+    result is `list[X | Y | …]` (list of union) instead of
+    `list[X] | list[Y] | …` (union of lists) — see _dedupe for
+    why heterogeneous lists need the inner-union form."""
+    outer_parts: set[str] = set()
+    inner_parts: set[str] = set()
+    all_lists = True
+    for t in (a, b):
+        for piece in _split_union(t):
+            if not piece:
+                continue
+            outer_parts.add(piece)
+            if piece.startswith("list[") and piece.endswith("]"):
+                # Flatten any nested union inside the list.
+                inner = piece[len("list["):-1]
+                for ip in _split_union(inner):
+                    if ip:
+                        inner_parts.add(ip)
+            else:
+                all_lists = False
+    if all_lists and inner_parts:
+        return f"list[{' | '.join(sorted(inner_parts))}]"
+    return " | ".join(sorted(outer_parts))
+
+
 def _dedupe(fields: list[_Field]) -> list[_Field]:
     """Merge same-name field entries.
 
@@ -420,16 +479,19 @@ def _dedupe(fields: list[_Field]) -> list[_Field]:
                 fname, ftype, prev_optional or optional, default)
         else:
             # Different types from sibling Choice branches — emit
-            # the union. Split-and-rejoin so re-merging an already-
-            # unioned type stays flat (`A | B | C` rather than
-            # nested). Sort for stable output across runs.
-            parts: set[str] = set()
-            for t in (prev_type, ftype):
-                for piece in t.split(" | "):
-                    piece = piece.strip()
-                    if piece:
-                        parts.add(piece)
-            merged = " | ".join(sorted(parts))
+            # the union. Sort for stable output across runs.
+            #
+            # Special case: when EVERY contributing type is `list[X]`,
+            # produce `list[X | Y | …]` (list of union) rather than
+            # `list[X] | list[Y] | …` (union of lists). The former
+            # validates each list element against the inner union;
+            # the latter forces Pydantic to pick one list-type and
+            # validate every element against ONE inner type, which
+            # fails when a `repeat <Choice>:list[]=@` produces a
+            # heterogeneous list (e.g. DEF VIA clauses where every
+            # `+`-prefixed clause-type goes into the same `clauses`
+            # list).
+            merged = _merge_union_types(prev_type, ftype)
             by_name[fname] = (
                 fname, merged, prev_optional or optional, prev_default)
     return list(by_name.values())

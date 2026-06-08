@@ -1205,6 +1205,56 @@ def test_def_spec_coverage_phase1(tmp_path):
     assert (rows[2]["num_x"], rows[2]["num_y"]) == (1, 8)
     assert (rows[2]["step_x"], rows[2]["step_y"]) == (0, 1900)
 
+    # Phase 3: TRACKS + GCELLGRID + VIAS.
+    tracks = [it for it in parsed["items"] if it.get("type") == "Tracks"]
+    assert len(tracks) == 3
+    assert tracks[0]["direction"] == "X"
+    assert tracks[0]["layers"] == ["met1"]
+    # MASK qualifier — captured as optional field. SAMEMASK is a
+    # separate boolean flag on top of MASK.
+    assert tracks[1]["mask"] == 2
+    assert tracks[1]["layers"] == ["met2", "met3"]
+    assert "same_mask" not in tracks[1]
+    assert tracks[2]["mask"] == 3
+    assert tracks[2]["same_mask"] is True
+
+    gcellgrids = [it for it in parsed["items"]
+                  if it.get("type") == "GCellGrid"]
+    assert len(gcellgrids) == 2
+    assert gcellgrids[0] == {"type": "GCellGrid", "direction": "X",
+                             "start": 0, "num_gcells": 11, "step": 1000}
+    assert gcellgrids[1]["direction"] == "Y"
+
+    # VIAS block — 3 entries exercising geometry-form, VIARULE-
+    # form, and POLYGON geometry. Each entry's `clauses` list
+    # holds typed dicts in source order.
+    vias = next(it for it in parsed["items"] if it.get("type") == "Vias")
+    assert vias["count"] == 3
+    assert len(vias["vias"]) == 3
+    geom = vias["vias"][0]
+    assert geom["name"] == "spec_via_geom"
+    assert len(geom["clauses"]) == 2
+    assert geom["clauses"][0] == {
+        "type": "Rect", "layer": "met1",
+        "x1": -100, "y1": -100, "x2": 100, "y2": 100,
+    }
+    assert geom["clauses"][1]["mask"] == 2
+    vr = vias["vias"][1]
+    assert vr["name"] == "spec_via_rule"
+    clause_types = [c["type"] for c in vr["clauses"]]
+    assert clause_types == ["ViaRule", "CutSize", "Layers", "CutSpacing",
+                            "Enclosure", "RowCol", "Origin", "Offset",
+                            "Pattern"]
+    poly = vias["vias"][2]
+    assert poly["name"] == "spec_via_polygon"
+    assert [c["type"] for c in poly["clauses"]] == ["Polygon", "Polygon"]
+    # 4-vertex polygon's points captured as a list of {x, y} dicts.
+    assert poly["clauses"][0]["points"] == [
+        {"x": 0,   "y": 0},   {"x": 100, "y": 0},
+        {"x": 100, "y": 100}, {"x": 0,   "y": 100},
+    ]
+    assert poly["clauses"][1]["mask"] == 1
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")
