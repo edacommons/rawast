@@ -1757,16 +1757,21 @@ DEF_UNITS_CMD: sequence dict {
   <NUMBER>:database_microns=@ space, ";" newline
 }
 
-// `DIEAREA ( x1 y1 ) ( x2 y2 [ x3 y3 …] ) ;` — for an axis-aligned
-// rectangular die, two points. The spec also allows additional
-// points to describe a non-rectangular die polygon; this cut
-// captures the two-point common case. Polygon-die handling lands
-// once a real polygon-die DEF appears in the corpus.
+// `DIEAREA ( pt )+ ;` — per LEF/DEF 5.8 §"DieArea", two or more
+// coordinate pairs. Two points = axis-aligned rectangle
+// (lower-left, upper-right). More than two = die polygon outline
+// (real DEFs from advanced PDN flows use this for non-rectangular
+// dies).
 DEF_DIEAREA_CMD: sequence dict {
   "DIEAREA":type="DieArea" space,
-  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
-  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space,
+  <DEF_DIEAREA_POINTS>:points=@,
   ";" newline
+}
+DEF_DIEAREA_POINTS: sequence array {
+  repeat+ <DEF_DIEAREA_POINT>
+}
+DEF_DIEAREA_POINT: sequence dict {
+  "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
 }
 
 // `ROW rowName siteName x y orient DO numX BY numY STEP stepX stepY ;`

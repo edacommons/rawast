@@ -1090,8 +1090,10 @@ def test_def_prelude_parses_and_saves_round_trip(tmp_path):
     assert units["database_microns"] == 1000
 
     diearea = next(it for it in ast["items"] if it.get("type") == "DieArea")
-    assert (diearea["x1"], diearea["y1"]) == (0, 0)
-    assert (diearea["x2"], diearea["y2"]) == (200000, 200000)
+    assert diearea["points"] == [
+        {"x": 0, "y": 0},
+        {"x": 200000, "y": 200000},
+    ]
 
     rows = [it for it in ast["items"] if it.get("type") == "Row"]
     assert len(rows) == 2
@@ -1175,12 +1177,14 @@ def test_def_spec_coverage_phase1(tmp_path):
     units = next(it for it in parsed["items"] if it.get("type") == "Units")
     assert units["database_microns"] == 2000
 
-    # DIEAREA — two-point rectangular form covers most layouts; the
-    # spec's polygon-die N-point form lands when a polygon-die DEF
-    # appears in the corpus.
+    # DIEAREA — N-point form per LEF/DEF 5.8 §"DieArea". Two
+    # points define a rectangle; more points define a die
+    # polygon outline. The fixture uses the 2-point form.
     die = next(it for it in parsed["items"] if it.get("type") == "DieArea")
-    assert (die["x1"], die["y1"]) == (-100, -100)
-    assert (die["x2"], die["y2"]) == (100100, 100100)
+    assert die["points"] == [
+        {"x": -100, "y": -100},
+        {"x": 100100, "y": 100100},
+    ]
 
     # ROW — eight spec orientations (N S E W FN FS FE FW), one per
     # ROW in the fixture. Verify every captured field per ROW.
