@@ -206,4 +206,39 @@ VIAS 3 ;
       + POLYGON met4 + MASK 1 ( 200 200 ) ( 300 200 ) ( 300 300 ) ;
 END VIAS
 
+# ----- Phase 4: NONDEFAULTRULES + REGIONS + COMPONENTMASKSHIFT -----
+
+# `COMPONENTMASKSHIFT layerList ;` — declares the mask layers
+# any downstream COMPONENT's MASKSHIFT property may reference.
+COMPONENTMASKSHIFT met1 met2 met3 ;
+
+# NONDEFAULTRULES — two entries exercising every typed `+`-clause:
+# HARDSPACING flag, LAYER (with optional DIAGWIDTH / SPACING /
+# WIREEXT qualifiers — see DEF_NDR_LAYER_CLAUSE), VIA reference,
+# VIARULE reference, MINCUTS per-layer, PROPERTY trailer.
+NONDEFAULTRULES 2 ;
+  - spec_ndr_full
+      + HARDSPACING
+      + LAYER met1 WIDTH 0.2 SPACING 0.2 WIREEXT 0.05
+      + LAYER met2 WIDTH 0.3 DIAGWIDTH 0.4 SPACING 0.3
+      + VIA spec_via_geom
+      + VIARULE spec_via_rule
+      + MINCUTS met1 2
+      + PROPERTY prop_ndr_r 1.5 ;
+  - spec_ndr_minimal
+      + LAYER met3 WIDTH 0.1 ;
+END NONDEFAULTRULES
+
+# REGIONS — two entries: a rectangular FENCE region with a
+# PROPERTY trailer, and a multi-box GUIDE region.
+REGIONS 2 ;
+  - spec_region_fence
+      ( 0 0 ) ( 100 100 )
+      + TYPE FENCE
+      + PROPERTY prop_reg_s "fence-metadata" ;
+  - spec_region_guide
+      ( 200 0 ) ( 300 100 ) ( 200 200 ) ( 300 300 )
+      + TYPE GUIDE ;
+END REGIONS
+
 END DESIGN

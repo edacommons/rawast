@@ -1693,7 +1693,10 @@ DEF_ITEM: choice {
   <DEF_ROW_CMD>,
   <DEF_TRACKS_CMD>,
   <DEF_GCELLGRID_CMD>,
-  <DEF_VIAS_BLOCK>
+  <DEF_VIAS_BLOCK>,
+  <DEF_NDRS_BLOCK>,
+  <DEF_REGIONS_BLOCK>,
+  <DEF_COMPONENTMASKSHIFT_CMD>
 }
 
 // `TECHNOLOGY techName ;` — per LEF/DEF 5.8 §"DEF File", the
@@ -1916,6 +1919,147 @@ DEF_VIA_POLYGON_POINTS: sequence array {
 }
 DEF_VIA_POLYGON_POINT: sequence dict {
   "(" space, <NUMBER>:x=@ space, <NUMBER>:y=@ space, ")" space
+}
+
+// `NONDEFAULTRULES num ; - ruleName clause+ ; ... END
+//  NONDEFAULTRULES` per LEF/DEF 5.8 §"NonDefaultRules". A list
+// of NDR definitions used by the design — conceptually the
+// same construct as LEF's NONDEFAULTRULE_BLOCK but in DEF's
+// `-`-entry + `+`-clause syntax. Each entry's clauses include
+// HARDSPACING (flag), LAYER (with WIDTH / DIAGWIDTH / SPACING /
+// WIREEXT qualifiers), VIA references, VIARULE references,
+// MINCUTS per-layer, and PROPERTY trailers.
+DEF_NDRS_BLOCK: sequence dict {
+  "NONDEFAULTRULES":type="NonDefaultRules" space,
+  int:count=@ space, ";" newline,
+  <DEF_NDRS_LIST>:rules=@,
+  "END" space, "NONDEFAULTRULES" newline
+}
+
+DEF_NDRS_LIST: sequence array { repeat <DEF_NDR_ENTRY> }
+
+DEF_NDR_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  repeat <DEF_NDR_CLAUSE>,
+  ";" newline
+}
+
+// `+`-prefixed clause Choice — every alt list-appends to the
+// same `clauses` field on the entry dict, same pattern as
+// DEF_VIA_CLAUSE. VIARULE before VIA because KeyParser doesn't
+// word-boundary check: `"VIA"` would otherwise prefix-match the
+// first 3 chars of `VIARULE` and commit to the wrong alt.
+DEF_NDR_CLAUSE: choice {
+  <DEF_NDR_HARDSPACING_CLAUSE>:clauses[]=@,
+  <DEF_NDR_LAYER_CLAUSE>:clauses[]=@,
+  <DEF_NDR_VIARULE_CLAUSE>:clauses[]=@,
+  <DEF_NDR_VIA_CLAUSE>:clauses[]=@,
+  <DEF_NDR_MINCUTS_CLAUSE>:clauses[]=@,
+  <DEF_NDR_PROPERTY_CLAUSE>:clauses[]=@
+}
+
+DEF_NDR_HARDSPACING_CLAUSE: sequence dict {
+  "+" space, "HARDSPACING":type="HardSpacing":is_hard_spacing=true space
+}
+
+// `+ LAYER name WIDTH x [DIAGWIDTH x] [SPACING x] [WIREEXT x]`
+// — qualifiers are positional after the LAYER name; WIDTH is
+// required by spec but the others are optional in any order.
+DEF_NDR_LAYER_CLAUSE: sequence dict {
+  "+" space, "LAYER":type="Layer" space,
+  identifier:layer=@ space,
+  "WIDTH" space, <NUMBER>:width=@ space,
+  ?<DEF_NDR_LAYER_DIAGWIDTH>,
+  ?<DEF_NDR_LAYER_SPACING>,
+  ?<DEF_NDR_LAYER_WIREEXT>
+}
+DEF_NDR_LAYER_DIAGWIDTH: sequence {
+  "DIAGWIDTH" space, <NUMBER>:diag_width=@ space
+}
+DEF_NDR_LAYER_SPACING: sequence {
+  "SPACING" space, <NUMBER>:spacing=@ space
+}
+DEF_NDR_LAYER_WIREEXT: sequence {
+  "WIREEXT" space, <NUMBER>:wire_ext=@ space
+}
+
+DEF_NDR_VIA_CLAUSE: sequence dict {
+  "+" space, "VIA":type="Via" space, identifier:via=@ space
+}
+DEF_NDR_VIARULE_CLAUSE: sequence dict {
+  "+" space, "VIARULE":type="ViaRule" space,
+  identifier:viarule=@ space
+}
+DEF_NDR_MINCUTS_CLAUSE: sequence dict {
+  "+" space, "MINCUTS":type="MinCuts" space,
+  identifier:cut_layer=@ space, int:num_cuts=@ space
+}
+DEF_NDR_PROPERTY_CLAUSE: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space
+}
+
+// `REGIONS num ; - regionName ( pt pt ) [( pt pt )...]
+//  [+ TYPE FENCE|GUIDE] [+ PROPERTY ...] ; ... END REGIONS`
+// per LEF/DEF 5.8 §"Regions". Each region is one or more
+// rectangular box areas plus optional TYPE and PROPERTY
+// metadata.
+DEF_REGIONS_BLOCK: sequence dict {
+  "REGIONS":type="Regions" space,
+  int:count=@ space, ";" newline,
+  <DEF_REGIONS_LIST>:regions=@,
+  "END" space, "REGIONS" newline
+}
+
+DEF_REGIONS_LIST: sequence array { repeat <DEF_REGION_ENTRY> }
+
+DEF_REGION_ENTRY: sequence dict {
+  "-" space, identifier:name=@ space,
+  <DEF_REGION_BOXES>:boxes=@,
+  repeat <DEF_REGION_CLAUSE>,
+  ";" newline
+}
+
+// One or more `( pt pt )` box pairs at the start of the region
+// body — defines the rectangular shapes the region covers.
+DEF_REGION_BOXES: sequence array {
+  repeat+ <DEF_REGION_BOX>
+}
+DEF_REGION_BOX: sequence dict {
+  "(" space, <NUMBER>:x1=@ space, <NUMBER>:y1=@ space, ")" space,
+  "(" space, <NUMBER>:x2=@ space, <NUMBER>:y2=@ space, ")" space
+}
+
+// `+`-prefixed clauses after the boxes: TYPE qualifier and
+// trailing PROPERTY entries.
+DEF_REGION_CLAUSE: choice {
+  <DEF_REGION_TYPE_CLAUSE>:clauses[]=@,
+  <DEF_REGION_PROPERTY_CLAUSE>:clauses[]=@
+}
+
+// `+ TYPE { FENCE | GUIDE }` — region semantic per LEF/DEF 5.8.
+DEF_REGION_TYPE_CLAUSE: sequence dict {
+  "+" space, "TYPE":type="Type" space,
+  identifier:region_type=@ space
+}
+DEF_REGION_PROPERTY_CLAUSE: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space,
+  <PROPERTY_VALUE>:prop_value=@ space
+}
+
+// `COMPONENTMASKSHIFT layerName1 [layerName2 ...] ;` per
+// LEF/DEF 5.8 §"ComponentMaskShift" — single-line directive
+// declaring which mask layers a downstream COMPONENT's
+// MASKSHIFT property may reference.
+DEF_COMPONENTMASKSHIFT_CMD: sequence dict {
+  "COMPONENTMASKSHIFT":type="ComponentMaskShift" space,
+  <DEF_COMPONENTMASKSHIFT_LAYERS>:layers=@,
+  ";" newline
+}
+DEF_COMPONENTMASKSHIFT_LAYERS: sequence array {
+  repeat identifier space
 }
 
 END_DESIGN: sequence { "END" space, "DESIGN" newline }

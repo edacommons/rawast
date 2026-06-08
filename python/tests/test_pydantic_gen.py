@@ -1255,6 +1255,50 @@ def test_def_spec_coverage_phase1(tmp_path):
     ]
     assert poly["clauses"][1]["mask"] == 1
 
+    # Phase 4: NONDEFAULTRULES + REGIONS + COMPONENTMASKSHIFT.
+    cms = next(it for it in parsed["items"]
+               if it.get("type") == "ComponentMaskShift")
+    assert cms["layers"] == ["met1", "met2", "met3"]
+
+    ndrs = next(it for it in parsed["items"]
+                if it.get("type") == "NonDefaultRules")
+    assert ndrs["count"] == 2
+    assert len(ndrs["rules"]) == 2
+    full = ndrs["rules"][0]
+    assert full["name"] == "spec_ndr_full"
+    assert [c["type"] for c in full["clauses"]] == [
+        "HardSpacing", "Layer", "Layer", "Via", "ViaRule",
+        "MinCuts", "Property",
+    ]
+    # First Layer has WIREEXT + SPACING; second has DIAGWIDTH +
+    # SPACING. The optional fields land directly on the clause
+    # dict via DEF_NDR_LAYER_*-flavour sub-rules' catcher binds.
+    assert full["clauses"][1] == {
+        "type": "Layer", "layer": "met1",
+        "width": 0.2, "spacing": 0.2, "wire_ext": 0.05,
+    }
+    assert full["clauses"][2]["diag_width"] == 0.4
+    minimal = ndrs["rules"][1]
+    assert minimal["name"] == "spec_ndr_minimal"
+    assert len(minimal["clauses"]) == 1
+
+    regions = next(it for it in parsed["items"]
+                   if it.get("type") == "Regions")
+    assert regions["count"] == 2
+    fence = regions["regions"][0]
+    assert fence["name"] == "spec_region_fence"
+    # Single box; `boxes` is the list of `( pt pt )` pairs.
+    assert fence["boxes"] == [
+        {"x1": 0, "y1": 0, "x2": 100, "y2": 100},
+    ]
+    # TYPE FENCE then PROPERTY trailer.
+    assert [c["type"] for c in fence["clauses"]] == ["Type", "Property"]
+    assert fence["clauses"][0]["region_type"] == "FENCE"
+    guide = regions["regions"][1]
+    assert guide["name"] == "spec_region_guide"
+    assert len(guide["boxes"]) == 2  # Multi-box region.
+    assert guide["clauses"][0]["region_type"] == "GUIDE"
+
     # Parse → save → reparse round-trip via the new start="DEF"
     # parameter on save (mirrors parse's start=).
     saved = g.save(parsed, start="DEF").decode("utf-8")
