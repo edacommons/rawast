@@ -787,6 +787,13 @@ PIN_ANTENNA_VALUE: choice {
 // before PARTIALMETALAREA, MAXSIDEAREACAR before MAXAREACAR, and
 // ANYDIFFAREA before DIFFAREA, or predictive PEG will match the
 // shorter prefix and fail at the next token.
+//
+// The trailing block holds the LEF 5.4-era deprecated forms.
+// LEF/DEF 5.8 §"Pin" lists them as DEPRECATED (replaced by
+// ANTENNAGATEAREA / ANTENNADIFFAREA), but they still appear in
+// older PDK LEFs that were never re-emitted by a modern tool.
+// Each maps to its own discriminator so downstream consumers can
+// distinguish deprecated from current forms.
 PIN_ANTENNA_KIND: choice {
   "ANTENNAPARTIALMETALSIDEAREA":"PartialMetalSideArea",
   "ANTENNAPARTIALMETALAREA":"PartialMetalArea",
@@ -797,6 +804,10 @@ PIN_ANTENNA_KIND: choice {
   "ANTENNAANYDIFFAREA":"AnyDiffArea",
   "ANTENNADIFFAREA":"DiffArea",
   "ANTENNAGATEAREA":"GateArea",
+  "ANTENNAINPUTGATEAREA":"InputGateAreaLegacy",
+  "ANTENNAINPUTDIFFAREA":"InputDiffAreaLegacy",
+  "ANTENNAOUTPUTDIFFAREA":"OutputDiffAreaLegacy",
+  "ANTENNAINOUTDIFFAREA":"InOutDiffAreaLegacy",
   "ANTENNAMODEL":"Model"
 }
 
