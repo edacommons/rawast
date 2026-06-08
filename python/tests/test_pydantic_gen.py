@@ -828,6 +828,16 @@ def test_lef_spec_coverage_phase1(tmp_path):
     # PIN-level PROPERTY clauses — now a list via the `:properties[]=@`
     # binding, so multiple per-PIN PROPERTYs round-trip losslessly.
     assert sig_in["properties"] == [{"name": "prop_pin_i", "value": 7}]
+    # PIN-scope LEF58_* PROPERTY clauses route to `pin.lef58` via
+    # the PIN_LEF58_PROPERTY rule, distinct from generic
+    # pin.properties. Suffix-only name; prefix encoded in the
+    # type discriminator.
+    assert sig_in["lef58"] == [
+        {"type": "Lef58Property", "name": "VOLTAGE",
+         "content": "VDD"},
+        {"type": "Lef58Property", "name": "DRIVE",
+         "content": "STRONG"},
+    ]
     # ANTENNA clauses — captured as a list via the engine's `[]`
     # list-append binding. Each entry is a dict with `kind`, `value`,
     # and optional `layer`. Multiple ANTENNAs of any kind round-trip
@@ -928,11 +938,21 @@ def test_lef_spec_coverage_phase1(tmp_path):
     assert len(macro["obses"]) == 1
     assert macro["obses"][0]["type"] == "Obs"
 
-    # Trailing PROPERTY clauses captured as a list.
+    # Trailing PROPERTY clauses captured as a list. Generic
+    # PROPERTY clauses land in `macro.properties`; LEF58_* ones
+    # route to `macro.lef58` instead via MACRO_LEF58_PROPERTY +
+    # MACRO_TRAILING_PROPERTY (the trailing-position Choice that
+    # tries the LEF58 form before the generic KV form).
     assert macro["properties"] == [
         {"prop_name": "prop_macro_i", "prop_value": 42},
         {"prop_name": "prop_macro_r", "prop_value": 3.14},
         {"prop_name": "prop_macro_s", "prop_value": "hello"},
+    ]
+    assert macro["lef58"] == [
+        {"type": "Lef58Property", "name": "PWRPLUS",
+         "content": "VDD"},
+        {"type": "Lef58Property", "name": "LIBRARYTYPE",
+         "content": "STDCELL"},
     ]
 
     # Generated Pydantic validates the whole thing under extra="forbid".

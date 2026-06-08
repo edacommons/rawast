@@ -322,6 +322,11 @@ MACRO spec_macro
     GROUNDSENSITIVITY VSS ;
     MUSTJOIN OTHER_PIN ;
     PROPERTY prop_pin_i 7 ;
+    # PIN-scope LEF58_* PROPERTY clauses — typed Lef58Property
+    # shape via PIN_LEF58_PROPERTY rule, identical pattern to
+    # LAYER and MACRO scopes.
+    PROPERTY LEF58_VOLTAGE "VDD" ;
+    PROPERTY LEF58_DRIVE "STRONG" ;
     # Every PIN ANTENNA property defined by LEF/DEF 5.8 §"Pin".
     # The closed-list discriminator PIN_ANTENNA_KIND is ordered
     # longest-prefix-first to avoid KeyParser prefix collisions
@@ -371,6 +376,11 @@ MACRO spec_macro
   PROPERTY prop_macro_i 42 ;
   PROPERTY prop_macro_r 3.14 ;
   PROPERTY prop_macro_s "hello" ;
+  # MACRO-scope LEF58_* PROPERTY clauses — also typed via
+  # MACRO_LEF58_PROPERTY rule. Source order preserved by the
+  # engine's list-append binding into `lef58`.
+  PROPERTY LEF58_PWRPLUS "VDD" ;
+  PROPERTY LEF58_LIBRARYTYPE "STDCELL" ;
 END spec_macro
 
 # === Phase 7: vendor-extension wrapper ===
