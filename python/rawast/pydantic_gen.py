@@ -504,7 +504,13 @@ def _emit_model_class(rule_name: str, fields: list[_Field]) -> str:
     cls = _class_name(rule_name)
     lines = [f"class {cls}(BaseModel):"]
     lines.append(f'    """Generated from grammar rule `{rule_name}`."""')
-    lines.append('    model_config = ConfigDict(extra="forbid")')
+    # `populate_by_name=True` lets the constructor accept either the
+    # field's Python name OR its alias. Required when an alias is a
+    # Python keyword (e.g. `class` for LEF's CLASS field) — the field
+    # name (`class_`) is what callers and generated code can pass as
+    # a kwarg, while the alias (`class`) is what model_dump emits.
+    lines.append('    model_config = ConfigDict(extra="forbid",'
+                 ' populate_by_name=True)')
     if not fields:
         lines.append("    pass")
         return "\n".join(lines) + "\n"
