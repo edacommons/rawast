@@ -122,4 +122,27 @@ inline ValuePtr make_string(std::string v) { return std::make_shared<StringValue
 inline ValuePtr make_array() { return std::make_shared<ArrayValue>(); }
 inline ValuePtr make_dict() { return std::make_shared<DictValue>(); }
 
+// Type-tagged narrowing helpers. Faster than `dynamic_pointer_cast<T>`
+// for two reasons: (1) single virtual call to type() instead of RTTI
+// walk, and (2) static_pointer_cast adjusts the share-count atomically
+// without consulting the type-info chain. Use anywhere the save and
+// parse engines need to narrow a base ValuePtr to a concrete subclass.
+// Returns nullptr for type mismatch or null input.
+inline std::shared_ptr<StringValue> as_string(const ValuePtr& v) {
+    return (v && v->type() == ValueType::String)
+        ? std::static_pointer_cast<StringValue>(v) : nullptr;
+}
+inline std::shared_ptr<ArrayValue> as_array(const ValuePtr& v) {
+    return (v && v->type() == ValueType::Array)
+        ? std::static_pointer_cast<ArrayValue>(v) : nullptr;
+}
+inline std::shared_ptr<DictValue> as_dict(const ValuePtr& v) {
+    return (v && v->type() == ValueType::Dict)
+        ? std::static_pointer_cast<DictValue>(v) : nullptr;
+}
+inline std::shared_ptr<IntValue> as_int(const ValuePtr& v) {
+    return (v && v->type() == ValueType::Int)
+        ? std::static_pointer_cast<IntValue>(v) : nullptr;
+}
+
 } // namespace rawast

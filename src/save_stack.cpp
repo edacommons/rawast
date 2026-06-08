@@ -138,7 +138,7 @@ public:
                 // element of dict[name] as an array, advance the
                 // per-field cursor, mark consumed when exhausted.
                 if (was_list) {
-                    auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
+                    auto arr = as_array(it->second);
                     if (!arr) {
                         return tl::unexpected(SaveError{
                             "list-append binding (`" + name + "[]`) "
@@ -247,7 +247,7 @@ bool node_is_optional_chain(const Grammar& g, NodeId id) {
         const Node& cn = g.node(cur);
         if (cn.is_optional) return true;
         if (cn.kind != NodeKind::Ref) break;
-        auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
+        auto sv = as_string(cn.value);
         if (!sv) break;
         cur = g.rule_id(sv->data());
     }
@@ -449,13 +449,13 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         // Bare Key: key-based dispatch. Match if peek value is a
         // StringValue equal to this Key's literal token.
         if (n.value && peek_value) {
-            auto tok = std::dynamic_pointer_cast<StringValue>(n.value);
-            auto vs  = std::dynamic_pointer_cast<StringValue>(peek_value);
+            auto tok = as_string(n.value);
+            auto vs  = as_string(peek_value);
             if (tok && vs && tok->data() == vs->data()) return true;
         }
         // Match against the originating dict key (open-schema flatten).
         if (n.value && !peek_key.empty()) {
-            auto tok = std::dynamic_pointer_cast<StringValue>(n.value);
+            auto tok = as_string(n.value);
             if (tok && tok->data() == peek_key) return true;
         }
         // Trivial-emit fallback: with no peek to discriminate against,
@@ -477,7 +477,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
 
     case NodeKind::Parse: {
         if (!peek_value) return false;
-        auto name = std::dynamic_pointer_cast<StringValue>(n.value);
+        auto name = as_string(n.value);
         if (!name) return false;
         const std::string& p = name->data();
         ValueType vt = peek_value->type();
@@ -558,7 +558,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
                 const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
                 if (a.kind != NodeKind::Value || !a.is_name) continue;
-                auto name_sv = std::dynamic_pointer_cast<StringValue>(a.value);
+                auto name_sv = as_string(a.value);
                 if (!name_sv) continue;
                 auto m = discriminator_pair_matches(g, name_sv->data(), b, dict);
                 if (!m.has_value()) continue;  // not a discriminator
@@ -575,7 +575,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
                 const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
                 if (a.kind != NodeKind::Value || !a.is_name) continue;
-                auto name_sv = std::dynamic_pointer_cast<StringValue>(a.value);
+                auto name_sv = as_string(a.value);
                 if (!name_sv) continue;
                 ValuePtr cv = discriminator_const_value(g, b);
                 if (!cv) continue;
@@ -604,7 +604,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             for (NodeId c : n.children) {
                 const Node& cn = g.node(g.resolve_ref(c));
                 if (cn.kind == NodeKind::Value && cn.is_name) {
-                    if (auto sv = std::dynamic_pointer_cast<StringValue>(cn.value)) {
+                    if (auto sv = as_string(cn.value)) {
                         sim_pending = sv->data();
                         have_sim_pending = true;
                     }
@@ -645,7 +645,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                     // dispatch one more element.
                     ValuePtr peek = it->second;
                     if (is_list) {
-                        auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
+                        auto arr = as_array(it->second);
                         if (!arr || arr->data().empty()) return false;
                         auto pit = scope->list_progress.find(field);
                         std::size_t idx = pit == scope->list_progress.end()
@@ -689,9 +689,9 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                     return can_consume_peek(g, c, peek_value, peek_key, s);
                 }
                 if (cn.value) {
-                    auto tok = std::dynamic_pointer_cast<StringValue>(cn.value);
+                    auto tok = as_string(cn.value);
                     if (tok) {
-                        auto vs = std::dynamic_pointer_cast<StringValue>(peek_value);
+                        auto vs = as_string(peek_value);
                         if (vs && vs->data() == tok->data()) return true;
                         if (!peek_key.empty() && peek_key == tok->data()) return true;
                     }
@@ -774,7 +774,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     case NodeKind::Value: {
         if (n.is_name) {
             // Name marker — set pending; next consumer looks it up.
-            auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+            auto sv = as_string(n.value);
             if (sv) s.set_pending(sv->data());
         } else {
             // Constant — closes a (Value-name, Value-const) discriminator
@@ -803,7 +803,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     }
 
     case NodeKind::Key: {
-        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        auto sv = as_string(n.value);
         if (!sv) return tl::unexpected(SaveError{"Key without literal token"});
 
         // Does this Key consume a value? Either: it has a Value-child
@@ -838,7 +838,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     }
 
     case NodeKind::Parse: {
-        auto name = std::dynamic_pointer_cast<StringValue>(n.value);
+        auto name = as_string(n.value);
         if (!name) return tl::unexpected(SaveError{"Parse node without parser name"});
         Parser* p = g.parser(name->data());
         if (!p) return tl::unexpected(SaveError{"unknown parser: " + name->data()});
@@ -866,7 +866,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
         ValuePtr v = r->value ? r->value : null_value();
-        auto sv = std::dynamic_pointer_cast<StringValue>(v);
+        auto sv = as_string(v);
         if (!sv) {
             return tl::unexpected(SaveError{
                 "Raw save expects a StringValue payload"});
@@ -937,7 +937,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             "container Sequence with null value"});
 
         if (n.container == Container::Array) {
-            auto arr = std::dynamic_pointer_cast<ArrayValue>(v);
+            auto arr = as_array(v);
             if (!arr) return tl::unexpected(SaveError{
                 "expected ArrayValue for container=Array sequence"});
 
@@ -953,7 +953,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         }
 
         // container=Dict
-        auto dict = std::dynamic_pointer_cast<DictValue>(v);
+        auto dict = as_dict(v);
         if (!dict) return tl::unexpected(SaveError{
             "expected DictValue for container=Dict sequence"});
 
@@ -1021,7 +1021,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 // whole array. Falls back to the raw value for
                 // scalar fields.
                 ValuePtr peek = v;
-                if (auto arr = std::dynamic_pointer_cast<ArrayValue>(v)) {
+                if (auto arr = as_array(v)) {
                     auto pit = scope->list_progress.find(k);
                     std::size_t idx = pit == scope->list_progress.end()
                                         ? 0 : pit->second;
@@ -1164,6 +1164,10 @@ tl::expected<void, SaveError>
 Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
               NodeId start) const {
     if (!value) return tl::unexpected(SaveError{"save: null root value"});
+    // Precompute the resolved-Ref cache; resolve_ref becomes O(1)
+    // for the duration of this save call. Idempotent and amortised
+    // across subsequent calls.
+    ensure_refs_resolved_();
     SaveState s;
     s.push_q({value, false, ""});
     if (!start.valid()) start = top();

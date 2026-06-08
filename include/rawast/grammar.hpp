@@ -334,6 +334,17 @@ private:
     mutable std::vector<bool>             is_optional_chain_;
     mutable bool                          first_bytes_computed_ = false;
 
+    // Per-NodeId resolved Ref target. For Ref nodes, this is the
+    // final-target NodeId after walking the Ref chain (so `resolve_ref`
+    // becomes a single field read instead of a loop with map lookups
+    // and dynamic_pointer_cast on every visit). For non-Ref nodes,
+    // the entry mirrors the node's own id (resolve_ref is a no-op).
+    // Populated lazily by ensure_refs_resolved_(); the save engine
+    // is the hot consumer.
+    mutable std::vector<NodeId> resolved_refs_;
+    mutable bool                resolved_refs_computed_ = false;
+    void ensure_refs_resolved_() const;
+
     NodeId allocate_(NodeKind kind);
 };
 

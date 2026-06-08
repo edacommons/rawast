@@ -490,6 +490,14 @@ Node& Grammar::node(NodeId id) noexcept {
 }
 
 NodeId Grammar::resolve_ref(NodeId id) const {
+    // Fast path: lookup precomputed resolution table.
+    if (resolved_refs_computed_) {
+        return id.value() < resolved_refs_.size()
+            ? resolved_refs_[id.value()]
+            : id;
+    }
+    // Slow path (called pre-cache, e.g. during loader phases that
+    // run before ensure_refs_resolved_).
     while (id.valid() && nodes_[id.value()].kind == NodeKind::Ref) {
         const auto& v = nodes_[id.value()].value;
         auto sv = std::dynamic_pointer_cast<StringValue>(v);
@@ -499,6 +507,28 @@ NodeId Grammar::resolve_ref(NodeId id) const {
         id = it->second;
     }
     return id;
+}
+
+void Grammar::ensure_refs_resolved_() const {
+    if (resolved_refs_computed_) return;
+    const std::size_t N = nodes_.size();
+    resolved_refs_.resize(N);
+    for (std::size_t i = 0; i < N; ++i) {
+        NodeId id{i};
+        // Re-walk via the slow path (which is still active because
+        // resolved_refs_computed_ is false). After this loop the
+        // fast path takes over.
+        while (id.valid() && nodes_[id.value()].kind == NodeKind::Ref) {
+            const auto& v = nodes_[id.value()].value;
+            auto sv = std::dynamic_pointer_cast<StringValue>(v);
+            assert(sv);
+            auto it = named_rules_.find(sv->data());
+            assert(it != named_rules_.end());
+            id = it->second;
+        }
+        resolved_refs_[i] = id;
+    }
+    resolved_refs_computed_ = true;
 }
 
 bool Grammar::has_rule(const std::string& name) const noexcept {
