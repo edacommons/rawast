@@ -261,6 +261,12 @@ PROPDEF_OBJECT: choice {
   "SPECIALNET":@,
   "NET":@,
   "COMPONENTPIN":@,
+  // COMPONENT must come AFTER COMPONENTPIN — KeyParser doesn't
+  // word-boundary check, so the shorter `COMPONENT` would
+  // otherwise prefix-match `COMPONENTPIN` and commit to the
+  // wrong scope. Same hazard pattern as PINS ⊂ PINPROPERTIES
+  // and SPACING ⊂ SPACINGTABLE.
+  "COMPONENT":@,
   "PIN":@,
   "REGION":@,
   "DESIGN":@,
@@ -330,6 +336,17 @@ RECT_COORDS: sequence {
 // references this one rule.
 POINT_DICT: sequence dict {
   <PAREN_POINT>
+}
+
+// Wildcard-aware variant — x and y may be a NUMBER or the
+// literal `*` (captured as the single-char identifier). Used
+// by polygon-point arrays inside sections where the routing-
+// path coord-compaction rules apply (BLOCKAGES / FILLS / SLOTS
+// inside power flows that share path-emitter logic with
+// SPECIALNETS routing). DEF_NET_COORD defined later in file
+// (forward reference OK in rawast).
+WILD_POINT_DICT: sequence dict {
+  "(" space, <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space, ")" space
 }
 
 // === UNITS block ==========================================================
@@ -1830,10 +1847,22 @@ DEF_ROW_CMD: sequence dict {
   identifier:name=@ space, identifier:site=@ space,
   <XY_PAIR>,
   identifier:orient=@ space,
+  ?<DEF_ROW_DO_BY_STEP>,
+  repeat <DEF_ROW_PROPERTY>:properties[]=@,
+  ";" newline
+}
+// Optional `DO numX BY numY STEP stepX stepY` repetition. Some
+// DEFs declare a single-instance row (no repeat); making this
+// optional accepts both.
+DEF_ROW_DO_BY_STEP: sequence {
   "DO" space, <NUMBER>:num_x=@ space,
   "BY" space, <NUMBER>:num_y=@ space,
-  "STEP" space, <NUMBER>:step_x=@ space, <NUMBER>:step_y=@ space,
-  ";" newline
+  "STEP" space, <NUMBER>:step_x=@ space, <NUMBER>:step_y=@ space
+}
+// `+ PROPERTY name value` trailers per LEF/DEF 5.8 §"Row".
+DEF_ROW_PROPERTY: sequence dict {
+  "+" space, "PROPERTY":type="Property" space,
+  identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
 }
 
 // `TRACKS X|Y start DO numTracks STEP space [MASK n [SAMEMASK]]
@@ -1849,8 +1878,14 @@ DEF_TRACKS_CMD: sequence dict {
   "DO" space, <NUMBER>:num_tracks=@ space,
   "STEP" space, <NUMBER>:step=@ space,
   ?<DEF_TRACKS_MASK>,
-  "LAYER" space, <DEF_TRACKS_LAYER_LIST>:layers=@,
+  ?<DEF_TRACKS_LAYER_PART>,
   ";" newline
+}
+// Per spec LAYER is required (each TRACKS line maps to a metal
+// layer); some test/abstracted DEFs (klayout testdata
+// parser_test) omit it. Wrapped in an optional sub-rule.
+DEF_TRACKS_LAYER_PART: sequence {
+  "LAYER" space, <DEF_TRACKS_LAYER_LIST>:layers=@
 }
 
 // Optional `MASK n [SAMEMASK]` qualifier between STEP and LAYER.
@@ -1916,6 +1951,8 @@ DEF_VIA_CLAUSE: choice {
   <DEF_VIA_ROWCOL_CLAUSE>:clauses[]=@,
   <DEF_VIA_ORIGIN_CLAUSE>:clauses[]=@,
   <DEF_VIA_OFFSET_CLAUSE>:clauses[]=@,
+  // PATTERNNAME first — longer prefix of PATTERN.
+  <DEF_VIA_PATTERNNAME_CLAUSE>:clauses[]=@,
   <DEF_VIA_PATTERN_CLAUSE>:clauses[]=@,
   <DEF_VIA_RECT_CLAUSE>:clauses[]=@,
   <DEF_VIA_POLYGON_CLAUSE>:clauses[]=@
@@ -1963,6 +2000,16 @@ DEF_VIA_OFFSET_CLAUSE: sequence dict {
 }
 DEF_VIA_PATTERN_CLAUSE: sequence dict {
   "+" space, "PATTERN":type="Pattern" space,
+  identifier:name=@ space
+}
+// Some flows (OpenROAD parser_test) emit `+ PATTERNNAME
+// viaGenName` instead of `+ PATTERN cutPattern` for
+// via-generator pattern references. Modeled as a sibling
+// VIA-clause alt (added directly to the parent VIA clause
+// Choice) rather than a sub-Choice — keeps save-side dispatch
+// simple by giving each parent alt a single type discriminator.
+DEF_VIA_PATTERNNAME_CLAUSE: sequence dict {
+  "+" space, "PATTERNNAME":type="PatternName" space,
   identifier:name=@ space
 }
 
@@ -2211,8 +2258,17 @@ DEF_COMP_PLACED_CLAUSE: sequence dict {
   <PAREN_POINT>,
   identifier:orient=@ space
 }
+// Spec form is just `+ UNPLACED` with no args, but some tools
+// emit `+ UNPLACED ( x y ) orient` (treating UNPLACED as a
+// fourth placement-status keyword with optional coords). Accept
+// both — coords + orient are optional.
 DEF_COMP_UNPLACED_CLAUSE: sequence dict {
-  "+" space, "UNPLACED":type="Unplaced" space
+  "+" space, "UNPLACED":type="Unplaced" space,
+  ?<DEF_COMP_UNPLACED_COORDS>
+}
+DEF_COMP_UNPLACED_COORDS: sequence {
+  <PAREN_POINT>,
+  identifier:orient=@ space
 }
 
 // `+ HALO [SOFT] left bottom right top` — placement halo
@@ -2252,8 +2308,15 @@ DEF_COMP_MASKSHIFT_CLAUSE: sequence dict {
   identifier:layer_masks=@ space
 }
 
+// Per LEF/DEF 5.8 §"Components" — `+ PROPERTY {name value}...`
+// One PROPERTY clause may carry multiple name+value pairs:
+// `+ PROPERTY RE 1.1 IN 2`. Captured as a `pairs[]` list so
+// every pair is preserved in source order.
 DEF_COMP_PROPERTY_CLAUSE: sequence dict {
   "+" space, "PROPERTY":type="Property" space,
+  repeat+ <DEF_COMP_PROPERTY_PAIR>:pairs[]=@
+}
+DEF_COMP_PROPERTY_PAIR: sequence dict {
   identifier:prop_name=@ space,
   <PROPERTY_VALUE>:prop_value=@ space
 }
@@ -2510,9 +2573,15 @@ DEF_PINPROPERTIES_LIST: sequence array { repeat <DEF_PINPROPERTY_ENTRY> }
 
 // Two entry forms: `COMPONENT compName pinName` or `PIN pinName`.
 // Distinct `type` discriminator per form for save dispatch.
+// Third entry form: bare `- compName pinName + PROPERTY ...`
+// (no COMPONENT keyword). Some test DEFs (klayout testdata
+// parser_test) emit this shortened form. Spec only allows
+// COMPONENT and PIN, but this form drops the keyword. Tried
+// LAST so the keyword forms win when their keywords match.
 DEF_PINPROPERTY_ENTRY: choice {
   <DEF_PINPROPERTY_COMPONENT_ENTRY>,
-  <DEF_PINPROPERTY_PIN_ENTRY>
+  <DEF_PINPROPERTY_PIN_ENTRY>,
+  <DEF_PINPROPERTY_BARE_ENTRY>
 }
 
 DEF_PINPROPERTY_COMPONENT_ENTRY: sequence dict {
@@ -2525,6 +2594,16 @@ DEF_PINPROPERTY_COMPONENT_ENTRY: sequence dict {
 DEF_PINPROPERTY_PIN_ENTRY: sequence dict {
   "-" space, "PIN":type="Pin" space,
   identifier:pin=@ space,
+  repeat <DEF_PINPROPERTY_CLAUSE>:properties[]=@,
+  ";" newline
+}
+
+// Bare comp+pin form. NO leading keyword — just identifier-
+// identifier. Distinct `type="BareComponentPin"` for save
+// dispatch.
+DEF_PINPROPERTY_BARE_ENTRY: sequence dict {
+  "-" space, "":type="BareComponentPin",
+  identifier:component=@ space, identifier:pin=@ space,
   repeat <DEF_PINPROPERTY_CLAUSE>:properties[]=@,
   ";" newline
 }
@@ -2620,7 +2699,7 @@ DEF_BLOCKAGE_POLYGON: sequence dict {
   <DEF_BLOCKAGE_POLYGON_POINTS>:points=@
 }
 DEF_BLOCKAGE_POLYGON_POINTS: sequence array {
-  repeat+ <POINT_DICT>
+  repeat+ <WILD_POINT_DICT>
 }
 // `- PLACEMENT [+ SOFT | + PARTIAL maxDensity | + PUSHDOWN |
 //   + COMPONENT name] RECT ( pt pt )+ ;` — placement-blockage
@@ -2830,20 +2909,45 @@ DEF_NET_PATH_ELEM: choice {
   <DEF_NET_PATH_POINT>:path[]=@,
   <DEF_NET_PATH_VIA>:path[]=@,
   <DEF_NET_PATH_NEW_WIDTH>:path[]=@,
+  <DEF_NET_PATH_VIRTUAL>:path[]=@,
+  <DEF_NET_PATH_PARENS_RECT>:path[]=@,
   <DEF_NET_PATH_BARE_VIA>:path[]=@
 }
 
-// `NEW layerName width [+ SHAPE | + MASK | + NONDEFAULTRULE]`
-// — continuation segment with explicit width (SPECIALNETS form).
-// Followed by more path elements (Points / Vias / bare Vias)
-// that share this segment's layer/width. Modeled as a single
-// path element here; downstream consumers reconstruct segments
-// by walking the path list and grouping on NEW boundaries.
+// `VIRTUAL ( x y )` — virtual-pin marker inside a NETS routing
+// path per LEF/DEF 5.8 §"Nets". Used by tools to indicate that
+// the next path segment touches a logical (non-physical) pin.
+DEF_NET_PATH_VIRTUAL: sequence dict {
+  "VIRTUAL":type="Virtual" space,
+  <PAREN_POINT>
+}
+
+// `RECT ( x1 y1 x2 y2 )` — single-parens 4-number rectangle as
+// a NETS routing-path element. Distinct from the
+// double-paren shape rectangle (`( pt ) ( pt )`); OpenROAD
+// emits this form for via-cut RECT shapes embedded in
+// routing paths.
+DEF_NET_PATH_PARENS_RECT: sequence dict {
+  "RECT":type="PathRect" space,
+  "(" space,
+  <DEF_NET_COORD>:x1=@ space, <DEF_NET_COORD>:y1=@ space,
+  <DEF_NET_COORD>:x2=@ space, <DEF_NET_COORD>:y2=@ space,
+  ")" space
+}
+
+// `NEW layerName [width] [+ SHAPE | + MASK | + NONDEFAULTRULE]`
+// — continuation segment. SPECIALNETS NEW carries an explicit
+// width (after the layer name); NETS NEW omits it (width is
+// inherited from the NDR or tech LEF). Width is optional here
+// to accept both forms; downstream consumers branch on
+// `width is None`.
 DEF_NET_PATH_NEW_WIDTH: sequence dict {
   "NEW":type="New" space,
-  identifier:layer=@ space, int:width=@ space,
+  identifier:layer=@ space,
+  ?<DEF_NET_PATH_NEW_WIDTH_INT>,
   repeat <DEF_NET_ROUTE_QUAL>
 }
+DEF_NET_PATH_NEW_WIDTH_INT: sequence { int:width=@ space }
 
 // Bare via reference (just an identifier, no `VIA` keyword).
 // Per LEF/DEF 5.8 the routing path allows this shorthand;
@@ -2948,6 +3052,9 @@ DEF_SPECIALNET_CLAUSE: choice {
   <DEF_SPECIALNET_WEIGHT>:clauses[]=@,
   <DEF_SPECIALNET_PROPERTY>:clauses[]=@,
   <DEF_SPECIALNET_ROUTED>:clauses[]=@,
+  <DEF_SPECIALNET_FIXED>:clauses[]=@,
+  <DEF_SPECIALNET_COVER>:clauses[]=@,
+  <DEF_SPECIALNET_SHIELD>:clauses[]=@,
   <DEF_SPECIALNET_BODY_RECT>:clauses[]=@,
   <DEF_SPECIALNET_BODY_POLYGON>:clauses[]=@,
   <DEF_SPECIALNET_BODY_VIA_PLACEMENT>:clauses[]=@
@@ -3015,11 +3122,38 @@ DEF_SPECIALNET_PROPERTY: sequence dict {
 // routing body is a unified list of elements via per-alt
 // `:body[]=@` list-append — qualifiers, path points/vias,
 // shape elements all land in `body[]` in source order.
+// Four separate routing-clause rules — Routed / FixedRoute /
+// CoverRoute / Shield. Originally these shared a single rule
+// with an inner Choice over the keyword; the inner Choice
+// hid the type discriminator from save-side dispatch (the
+// parent's Choice couldn't tell which types this rule
+// handles), causing entry-level `+ RECT` clauses to dispatch
+// here by mistake. Each route keyword now has its own rule
+// with a direct `:type=...` discriminator, so the parent
+// Choice can dispatch cleanly.
+//
+// `repeat` (not `repeat+`) — some DEFs emit a bare `+ FIXED ;`
+// status marker with no geometry body.
 DEF_SPECIALNET_ROUTED: sequence dict {
-  "+" space,
-  <DEF_SPECIALNET_ROUTE_KW>,
+  "+" space, "ROUTED":type="Routed" space,
   ?<DEF_SPECIALNET_ROUTE_LAYER_WIDTH>,
-  repeat+ <DEF_SPECIALNET_ROUTE_ELEMENT>
+  repeat <DEF_SPECIALNET_ROUTE_ELEMENT>
+}
+DEF_SPECIALNET_FIXED: sequence dict {
+  "+" space, "FIXED":type="FixedRoute" space,
+  ?<DEF_SPECIALNET_ROUTE_LAYER_WIDTH>,
+  repeat <DEF_SPECIALNET_ROUTE_ELEMENT>
+}
+DEF_SPECIALNET_COVER: sequence dict {
+  "+" space, "COVER":type="CoverRoute" space,
+  ?<DEF_SPECIALNET_ROUTE_LAYER_WIDTH>,
+  repeat <DEF_SPECIALNET_ROUTE_ELEMENT>
+}
+DEF_SPECIALNET_SHIELD: sequence dict {
+  "+" space, "SHIELD":type="Shield" space,
+  identifier:shield_net=@ space,
+  ?<DEF_SPECIALNET_ROUTE_LAYER_WIDTH>,
+  repeat <DEF_SPECIALNET_ROUTE_ELEMENT>
 }
 
 // Optional `layer width` pair after the route keyword.
@@ -3085,26 +3219,10 @@ DEF_SPECIALNET_BODY_POLYGON_POINTS: sequence array {
 DEF_SPECIALNET_BODY_POLYGON_POINT: sequence dict {
   "(" space, <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space, ")" space
 }
-// SHIELD takes an extra `shieldNet` name; ROUTED / FIXED / COVER
-// don't. Modelled as a Choice over four typed sub-rules.
-DEF_SPECIALNET_ROUTE_KW: choice {
-  <DEF_SPECIALNET_ROUTE_SHIELD>,
-  <DEF_SPECIALNET_ROUTE_ROUTED>,
-  <DEF_SPECIALNET_ROUTE_FIXED>,
-  <DEF_SPECIALNET_ROUTE_COVER>
-}
-DEF_SPECIALNET_ROUTE_ROUTED: sequence {
-  "ROUTED":type="Routed" space
-}
-DEF_SPECIALNET_ROUTE_FIXED: sequence {
-  "FIXED":type="FixedRoute" space
-}
-DEF_SPECIALNET_ROUTE_COVER: sequence {
-  "COVER":type="CoverRoute" space
-}
-DEF_SPECIALNET_ROUTE_SHIELD: sequence {
-  "SHIELD":type="Shield" space, identifier:shield_net=@ space
-}
+// (Retired: DEF_SPECIALNET_ROUTE_KW and its 4 sub-rules.
+// Replaced by 4 top-level rules DEF_SPECIALNET_ROUTED /
+// _FIXED / _COVER / _SHIELD above — each with its own direct
+// type discriminator visible to save-side dispatch.)
 
 // --- NETS ------------------------------------------------------------------
 
