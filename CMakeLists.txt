@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(rawast
+    # CMake's project(VERSION ...) only accepts numeric components
+    # (up to 4 dot-separated integers), so it can't carry PEP 440
+    # pre-release suffixes. The actual user-visible version lives in
+    # pyproject.toml (Python wheel) and include/rawast/version.hpp
+    # (C++ string `rawast::VERSION`); both may carry an `aN` / `bN`
+    # / `rcN` tier the CMake VERSION here cannot.
     VERSION 0.1.0
     DESCRIPTION "Data-driven predictive PEG parser engine and .jast container format"
     LANGUAGES CXX
