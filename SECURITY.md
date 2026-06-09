@@ -11,11 +11,21 @@ engine are in scope for security reports.
 If you believe you have found a security vulnerability:
 
 - **Please do not** open a public GitHub issue with the details.
-- Email the maintainer at **s.rabykin@gmail.com** with the subject
-  prefix `[rawast security]`. Include a minimal reproducer (grammar +
-  input file) and a description of the impact.
-- You will receive an acknowledgment within seven days. A coordinated
-  fix and disclosure window will be agreed in the reply.
+- **Preferred channel — GitHub private security advisory.** Go to
+  [https://github.com/edacommons/rawast/security/advisories/new](https://github.com/edacommons/rawast/security/advisories/new)
+  and file a private report. The conversation thread is end-to-end
+  private until you and the maintainer agree to publish the advisory.
+  This route integrates with the GitHub Security Advisories database
+  (and CVE assignment via GitHub when warranted) so downstream
+  consumers using `dependabot`, OSV, or similar tooling pick the
+  advisory up automatically once published.
+- **Fallback — email.** If GitHub isn't an option for any reason,
+  email the maintainer at **s.rabykin@gmail.com** with the subject
+  prefix `[rawast security]`. Include a minimal reproducer (grammar
+  + input file) and a description of the impact.
+- Either channel: you will receive an acknowledgment within seven
+  days. A coordinated fix and disclosure window will be agreed in
+  the reply.
 
 ## Scope
 
