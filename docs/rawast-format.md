@@ -499,7 +499,7 @@ Semantics worth knowing:
 
 The same primitive is what enables multi-OBS per MACRO, multi-
 PROPERTY-per-PIN, multi-FOREIGN-per-MACRO, and any other
-spec-allowed multi-instance pattern in `lefdef.rawast` / `def.rawast`.
+spec-allowed multi-instance pattern in `lefdef.rawast`.
 
 ### 4.5a-1 Raw consume — `*`
 

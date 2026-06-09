@@ -6,7 +6,7 @@ readers for LEF, DEF, GDSII, Liberty, and every other format the field
 uses — and every one of them re-parses the same files. rawast inverts
 that: **one engine, grammars as data files, and a binary container
 that distributes parsed data so downstream consumers never re-parse
-text at all.** Ships as a C++20 library with Python bindings.
+text at all.** Ships as a C++17 library with Python bindings.
 
 The parser is one engine; the grammar is **data** — a JSON / `.rawast`
 file you load at runtime. The engine reads text or bytes and produces
@@ -41,7 +41,7 @@ rawast is the C++ rewrite of an earlier Python prototype (2023–2025)
 that validated the data-driven grammar approach, the
 catcher-based value-tree mechanism, and the bidirectional walk. The
 current implementation is the productionisation of those ideas as a
-maintained C++20 codebase; most of the commit history here reflects the
+maintained C++17 codebase; most of the commit history here reflects the
 rewrite phase. Design decisions and the architecture they came from
 are documented in `docs/` and in the prototype's history.
 
@@ -219,10 +219,25 @@ See `docs/rawast-format.md` for the language spec. The roadmap to 1.0:
 
 ## Quickstart (Python)
 
-`pip install` compiles the C++ engine via scikit-build-core under the
-hood — you need a **C++20 compiler** (GCC 11+, Clang 14+, or Apple
-Clang 14+) and **CMake** (3.20+) available on your `PATH` first. No
-separate `cmake` step is required for Python use.
+rawast is on PyPI. Installation compiles the C++ engine from source
+(no pre-built wheels yet) — you need a **C++17 compiler** (GCC 7+,
+Clang 5+, Apple Clang 9+, or MSVC 2017+) and **CMake** (3.20+)
+available on your `PATH`. The compile takes ~15–20 seconds on a
+modern laptop.
+
+```sh
+python -m venv .venv && source .venv/bin/activate
+pip install --pre rawast              # while still in alpha; drop --pre after 0.1.0 ships
+```
+
+For development against the repo (editable install, runs from
+source):
+
+```sh
+git clone https://github.com/edacommons/rawast.git && cd rawast
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[test]"
+```
 
 All Python build dependencies (`scikit-build-core`, `nanobind`) and
 C++ dependencies (`tl::expected`; `doctest` only for the C++ test
@@ -230,17 +245,19 @@ build) are pulled automatically by pip and CMake. rawast itself has
 **no runtime Python dependencies** — `import rawast` works cleanly
 with zero extra packages installed.
 
+CLI overview:
+
 ```sh
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
 rawast --help
 rawast lint     grammars/gdsii.rawast
 rawast parse    grammars/json.json file.json
 rawast parse    grammars/lefdef.rawast file.lef --profile --profile-top=20    # top-20 rules by inclusive parse time
 rawast profile  grammars/lefdef.rawast --from-file lef_list.txt --by time     # corpus-wide profile aggregation
-rawast docs     grammars/gdsii.rawast      # EBNF-flavoured Markdown reference (grammar input syntax)
-rawast schema   grammars/gdsii.rawast      # value-tree-shape Markdown reference (dict / array / choice — what a producer tool builds before save())
-rawast pydantic grammars/lefdef.rawast        # generate Pydantic v2 models matching the grammar's parse/save dict shape exactly
+rawast docs     grammars/gdsii.rawast                # EBNF-flavoured Markdown reference (grammar input syntax)
+rawast schema   grammars/gdsii.rawast                # value-tree-shape Markdown reference (dict / array / choice)
+rawast pydantic grammars/lefdef.rawast > models.py   # Pydantic v2 models matching the grammar's parse/save dict shape
+rawast pycode   grammars/lefdef.rawast file.lef \
+                --start LEF --models-module models   # Python source that constructs the parsed file as a typed model
 ```
 
 The generated Pydantic module is round-trip-faithful: a parsed
@@ -391,11 +408,18 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Requires a C++20-capable compiler:
+Requires a C++17-capable compiler:
 
-- GCC 11 or newer
-- Clang 14 or newer
-- Apple Clang 14 or newer
+- GCC 7 or newer
+- Clang 5 or newer
+- Apple Clang 9 or newer
+- MSVC 2017 (15.7+) or newer
+
+Wide toolchain bar = wide install-from-source reach. The only
+C++20-era feature the engine briefly used was a defaulted spaceship
+operator on `NodeId`; expanded to the six explicit comparisons
+under C++17 in commit `45d920c` so manylinux2014 wheels (CentOS 7
+baseline, gcc 9) work without bumping the runtime requirement.
 
 Dependencies (fetched automatically by CMake):
 
