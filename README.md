@@ -1,6 +1,8 @@
 # rawast
 
-**A universal bidirectional grammar-driven engine for structured text and binary formats.** Every EDA tool, today, reimplements its own readers for LEF, DEF, GDSII, Liberty, and every other format the field uses — and every one of them re-parses the same files. rawast inverts that: **one engine, grammars as data files, and a binary container that distributes parsed data so downstream consumers never re-parse text at all.** Ships as a C++17 library with Python bindings.
+Most parsers do too much. They build a semantic model of the file when all you need is its **structure** — scopes, lists, fields. The meaning belongs to the application reading the parsed data, not to the parser itself. But the lex+yacc tradition forces both: tokenize first, then reconstruct everything with a state machine. Covering a full format that way is enormous work — and almost never finished.
+
+**rawast formalizes the structure-first approach as a universal bidirectional grammar-driven engine for structured text and binary formats.** Every EDA tool today reimplements its own readers for LEF, DEF, GDSII, Liberty, and every other format the field uses — every one re-parsing the same files. rawast inverts that: **one engine, grammars as data files, and a binary container that distributes parsed data so downstream consumers never re-parse text at all.** Ships as a C++17 library with Python bindings.
 
 The parser is one engine; the grammar is **data** — a JSON / `.rawast` file you load at runtime. The engine reads text or bytes and produces a JSON-shaped value tree (arrays, dicts, scalars). One engine reads any format, no recompile. The output is queryable without a format-specific API.
 
