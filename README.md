@@ -65,6 +65,7 @@ Full reference: [`docs/CLI.md`](docs/CLI.md).
 | [`docs/FEATURES.md`](docs/FEATURES.md) | All engine capabilities — parsing, save, profiling, Pydantic + pycode, perf wins |
 | [`docs/CLI.md`](docs/CLI.md) | Every CLI command, every flag, with examples |
 | [`docs/EXAMPLES.md`](docs/EXAMPLES.md) | Worked examples per capability — parse / save, cross-format, Pydantic + pycode, Tcl recursion, GDSII binary, linting, profiling |
+| [`docs/AGENTS.md`](docs/AGENTS.md) | Using rawast with LLM tools and agents — why structured AST beats text-pattern matching, what an agent should read to author a grammar, prompt structure |
 | [`docs/GRAMMARS.md`](docs/GRAMMARS.md) | Shipped grammars (GDSII / LEF / DEF / Tcl / JSON / rawast meta) with corpus numbers |
 | [`docs/BUILD.md`](docs/BUILD.md) | Building from source — Python, C++ library, sdist |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Engine internals — parser groups, `use:`, ignore policy, subparse, the bidirectional walk |

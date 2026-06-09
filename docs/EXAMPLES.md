@@ -265,6 +265,7 @@ The profile counters are shared between the parse engine and the linter, so what
 
 - [`FEATURES.md`](FEATURES.md) — what each example exercises
 - [`CLI.md`](CLI.md) — full command reference
+- [`AGENTS.md`](AGENTS.md) — using rawast with LLM tools and agents
 - [`GRAMMARS.md`](GRAMMARS.md) — bundled grammars by short name + corpus details
 - [`rawast-format.md`](rawast-format.md) — `.rawast` grammar language reference
 - [`../examples/`](../examples/) — runnable scripts (currently `json_edit.py`; more being added)

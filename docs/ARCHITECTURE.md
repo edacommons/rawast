@@ -135,6 +135,7 @@ See [`FEATURES.md`](FEATURES.md) for the numbers. See `src/grammar.cpp` and `src
 ## See also
 
 - [`rawast-format.md`](rawast-format.md) — `.rawast` grammar language reference
+- [`AGENTS.md`](AGENTS.md) — using rawast with LLM tools and agents (this doc + `rawast-format.md` are the required reading for an agent authoring grammars)
 - [`FEATURES.md`](FEATURES.md) — user-facing features
 - [`GRAMMARS.md`](GRAMMARS.md) — shipped grammars
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — how to contribute
