@@ -126,12 +126,12 @@ are documented in `docs/` and in the prototype's history.
     every spec sub-statement including DENSITY, MUSTJOIN, EEQ,
     FIXEDMASK, and the full ANTENNA*-family list capture (incl.
     LEF 5.4-era deprecated antenna forms). Parses 507 / 507
-    real LEFs across seven PDK / open-platform sources; on a
+    real LEFs across six PDK / open-platform sources; on a
     263-file local PDK subset (Sky130 / asap7 / gf130bcd /
-    ihp-sg13g2 / NanGate / gf180 / 74hc_pcb) `parse → save →
-    reparse` is **263 / 263 structurally equivalent**, in
-    addition to a synthetic spec-coverage fixture
-    (`lef_spec_coverage.lef`) that exercises every spec clause.
+    ihp-sg13g2 / NanGate / gf180) `parse → save → reparse` is
+    **263 / 263 structurally equivalent**, in addition to a
+    synthetic spec-coverage fixture (`lef_spec_coverage.lef`)
+    that exercises every spec clause.
 
     **DEF side** — every documented LEF/DEF 5.8 §"DEF File"
     section (TECHNOLOGY / HISTORY / PROPERTYDEFINITIONS / UNITS
