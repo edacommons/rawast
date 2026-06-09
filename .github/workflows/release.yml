@@ -55,15 +55,24 @@ jobs:
 
       - name: Verify sdist contents
         # Cheap sanity check: tarball must contain CMakeLists.txt,
-        # pyproject.toml, and the canonical grammars/ directory. Saves
-        # a wasted publish if scikit-build's exclude rules ever drop
-        # too much.
+        # pyproject.toml, the canonical grammars/ directory, and the
+        # C++ engine source. Saves a wasted publish if scikit-build's
+        # exclude rules ever drop too much.
+        #
+        # Extract the listing ONCE into a variable rather than piping
+        # `tar | grep -q` four times. `grep -q` exits on first match,
+        # which closes its stdin and gives `tar` a SIGPIPE on every
+        # subsequent write — under `set -o pipefail` that propagates
+        # as a pipeline failure and the step fails with `tar: stdout:
+        # write error` even though the file we were looking for is
+        # right there. Sourcing the listing first sidesteps the race.
         run: |
           set -euo pipefail
-          tar tzf dist/*.tar.gz | grep -q "CMakeLists.txt$"
-          tar tzf dist/*.tar.gz | grep -q "pyproject.toml$"
-          tar tzf dist/*.tar.gz | grep -q "grammars/lefdef.rawast$"
-          tar tzf dist/*.tar.gz | grep -q "src/grammar.cpp$"
+          LISTING=$(tar tzf dist/*.tar.gz)
+          echo "$LISTING" | grep -q "CMakeLists.txt$"
+          echo "$LISTING" | grep -q "pyproject.toml$"
+          echo "$LISTING" | grep -q "grammars/lefdef.rawast$"
+          echo "$LISTING" | grep -q "src/grammar.cpp$"
           echo "sdist manifest OK"
 
       - name: Upload sdist as workflow artifact
