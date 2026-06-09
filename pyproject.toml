@@ -51,6 +51,29 @@ minimum-version = "0.8"
 cmake.version = ">=3.20"
 cmake.build-type = "Release"
 wheel.packages = ["python/rawast"]
+# Trim the sdist. Defaults pull in everything tracked; these
+# patterns drop files that aren't needed by a `pip install
+# rawast-X.Y.Z.tar.gz` build (dev-only metadata, CI workflows,
+# the dereferenced `python/rawast/grammars` symlink dup).
+sdist.exclude = [
+    # uv development lock — not a runtime dependency, just a
+    # convenience for the maintainer's editable install.
+    "uv.lock",
+    # CI / repo metadata that an end-user installing from sdist
+    # doesn't need (the GitHub Actions workflows assume the full
+    # repo clone, not the unpacked sdist).
+    ".github",
+    # `python/rawast/grammars` is a symlink to `grammars/` in the
+    # repo (lets the editable install resolve `grammar_path(...)`
+    # against the live grammar tree). scikit-build-core
+    # dereferences it when packing the sdist, producing a 150KB
+    # duplicate of the grammar files. CMake's `install(DIRECTORY
+    # ${CMAKE_SOURCE_DIR}/grammars/ DESTINATION rawast/grammars
+    # ...)` rule copies them into the wheel at build time, so
+    # the sdist genuinely doesn't need them under
+    # python/rawast/grammars/.
+    "python/rawast/grammars",
+]
 
 [tool.scikit-build.cmake.define]
 RAWAST_BUILD_TESTS = "OFF"
