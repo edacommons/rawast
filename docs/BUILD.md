@@ -88,15 +88,15 @@ ctest --test-dir build-debug --output-on-failure
 
 ## Cross-platform notes
 
-| Platform | Tested in CI | Known issues |
+| Platform | Status | Where exercised |
 |---|---|---|
-| Linux x86_64 | ✓ (ubuntu-latest) | none |
-| macOS arm64 | ✓ (macos-latest) | none |
-| Linux aarch64 | not yet | should work; not yet exercised |
-| macOS x86_64 | not yet | should work; not yet exercised |
-| Windows | not yet | MSVC 2017+ should work in principle; not yet exercised |
+| Linux x86_64 | ✓ verified | CI (`ubuntu-latest`) on every push |
+| macOS arm64 | ✓ verified | CI (`macos-latest`, Apple Silicon since macOS 14) on every push |
+| macOS x86_64 | ✓ verified | Maintainer's daily development environment (Intel MacBook Pro) |
+| Linux aarch64 | not yet exercised | Should work; no CI runner, no maintainer hardware yet |
+| Windows | not yet exercised | MSVC 2017+ should work in principle; no CI runner yet |
 
-The CI matrix covers `ubuntu-latest + macos-latest` × `Debug + Release` for C++, plus `ubuntu-latest + macos-latest` × `Python 3.10 + 3.12` for the Python tests. Windows support is a roadmap item (see [`ROADMAP.md`](ROADMAP.md)).
+The CI matrix covers `ubuntu-latest + macos-latest` × `Debug + Release` for C++, plus `ubuntu-latest + macos-latest` × `Python 3.10 + 3.12` for the Python tests. macOS x86_64 isn't in CI (GitHub's `macos-latest` is arm64 since macOS 14), but it's the maintainer's daily dev environment, so the C++ build and Python bindings get exercised on every local change before each push. Windows support is a roadmap item (see [`ROADMAP.md`](ROADMAP.md)).
 
 ## Building the sdist (release engineering)
 
