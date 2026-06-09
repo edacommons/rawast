@@ -49,6 +49,7 @@ Plus 3,132 real production files across GDSII / LEF / DEF / Tcl parsing 100% end
 
 ## See also
 
+- [`EXAMPLES.md`](EXAMPLES.md) — worked examples per capability
 - [`GRAMMARS.md`](GRAMMARS.md) — shipped grammars + corpus details
 - [`CLI.md`](CLI.md) — full CLI reference with examples
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — engine internals: parser groups, `use:`, ignore policy

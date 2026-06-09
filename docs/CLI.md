@@ -175,6 +175,7 @@ Standard. `--version` prints the engine version (matches `rawast.__version__` an
 
 ## See also
 
+- [`EXAMPLES.md`](EXAMPLES.md) — worked Python + CLI examples per capability
 - [`FEATURES.md`](FEATURES.md) — what each command exposes
 - [`GRAMMARS.md`](GRAMMARS.md) — bundled grammars by short name
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — parser groups, `use:`, ignore policy

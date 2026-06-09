@@ -102,6 +102,7 @@ Required reading for grammar authors: [`rawast-format.md`](rawast-format.md) and
 
 ## See also
 
+- [`EXAMPLES.md`](EXAMPLES.md) — worked examples per grammar
 - [`rawast-format.md`](rawast-format.md) — `.rawast` grammar language reference
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — parser groups, ignore policy, subparse
 - [`CLI.md`](CLI.md) — running the bundled grammars
