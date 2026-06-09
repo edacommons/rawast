@@ -2556,7 +2556,7 @@ DEF_PIN_UNPLACED_CLAUSE: sequence dict {
 // up commit when a real DEF in the corpus uses the form.)
 
 // ===========================================================================
-// === DEF Phase 7 — PINPROPERTIES + BLOCKAGES + SLOTS =======================
+// === PINPROPERTIES + BLOCKAGES + SLOTS =======================
 // ===========================================================================
 
 // `PINPROPERTIES num ; - {COMPONENT compName pinName | PIN pinName}
@@ -2764,7 +2764,7 @@ DEF_SLOT_POLYGON_POINTS: sequence array {
   repeat+ <POINT_DICT>
 }
 // ===========================================================================
-// === DEF Phase 8 — FILLS ===================================================
+// === FILLS ===================================================
 // ===========================================================================
 
 // `FILLS num ; - {LAYER name | VIA name} [+ MASK n] [+ OPC]
@@ -2852,7 +2852,7 @@ DEF_FILL_VIA_POINT: sequence dict {
 }
 
 // ===========================================================================
-// === DEF Phase 9 — SPECIALNETS + NETS =====================================
+// === SPECIALNETS + NETS =====================================
 // ===========================================================================
 //
 // The two connectivity sections of a DEF file. SPECIALNETS holds
@@ -3125,23 +3125,18 @@ DEF_SPECIALNET_PROPERTY: sequence dict {
   identifier:prop_name=@ space, <PROPERTY_VALUE>:prop_value=@ space
 }
 
-// SPECIALNET routing clause — `+ {ROUTED|FIXED|COVER|SHIELD
-// shieldNet} [layer width] [+ qualifier] (element)+`. The
-// layer/width pair is OPTIONAL: real DEFs emit ROUTED clauses
-// that carry only RECT / POLYGON / VIA shape elements with no
-// initial layer (each shape supplies its own layer). The
-// routing body is a unified list of elements via per-alt
-// `:body[]=@` list-append — qualifiers, path points/vias,
-// shape elements all land in `body[]` in source order.
-// Four separate routing-clause rules — Routed / FixedRoute /
-// CoverRoute / Shield. Originally these shared a single rule
-// with an inner Choice over the keyword; the inner Choice
-// hid the type discriminator from save-side dispatch (the
-// parent's Choice couldn't tell which types this rule
-// handles), causing entry-level `+ RECT` clauses to dispatch
-// here by mistake. Each route keyword now has its own rule
-// with a direct `:type=...` discriminator, so the parent
-// Choice can dispatch cleanly.
+// SPECIALNET routing clauses — `+ {ROUTED|FIXED|COVER|SHIELD
+// shieldNet} [layer width] [+ qualifier] (element)+`. One rule
+// per keyword (Routed / FixedRoute / CoverRoute / Shield) so
+// each carries its own `:type=...` discriminator visible to
+// save-side dispatch.
+//
+// The layer/width pair is OPTIONAL: real DEFs emit ROUTED
+// clauses that carry only RECT / POLYGON / VIA shape elements
+// with no initial layer (each shape supplies its own layer).
+// The routing body is a unified list of elements via per-alt
+// `:body[]=@` list-append — qualifiers, path points/vias, shape
+// elements all land in `body[]` in source order.
 //
 // `repeat` (not `repeat+`) — some DEFs emit a bare `+ FIXED ;`
 // status marker with no geometry body.
@@ -3230,10 +3225,6 @@ DEF_SPECIALNET_BODY_POLYGON_POINTS: sequence array {
 DEF_SPECIALNET_BODY_POLYGON_POINT: sequence dict {
   "(" space, <DEF_NET_COORD>:x=@ space, <DEF_NET_COORD>:y=@ space, ")" space
 }
-// (Retired: DEF_SPECIALNET_ROUTE_KW and its 4 sub-rules.
-// Replaced by 4 top-level rules DEF_SPECIALNET_ROUTED /
-// _FIXED / _COVER / _SHIELD above — each with its own direct
-// type discriminator visible to save-side dispatch.)
 
 // --- NETS ------------------------------------------------------------------
 
@@ -3326,15 +3317,10 @@ DEF_NET_PROPERTY: sequence dict {
 }
 
 // NET routing clauses — `+ {ROUTED|FIXED|COVER|NOSHIELD} layer
-// [+ qualifiers] (path elements)+`. Note: NET routes don't have
-// an explicit width (inherited from NDR or tech LEF).
-//
-// Same pattern as DEF_SPECIALNET_ROUTED/_FIXED/_COVER/_SHIELD:
-// four separate sibling rules with direct `:type=...`
-// discriminators, NOT a nested Choice keyword. Save-side
-// dispatch can introspect the type discriminator on each rule;
-// the lint catches the nested-Choice anti-pattern and flagged
-// the previous shape here.
+// [+ qualifiers] (path elements)+`. One rule per keyword so the
+// `:type=...` discriminator on each is visible to save-side
+// dispatch. NET routes don't carry an explicit width — it's
+// inherited from the NDR or tech LEF.
 DEF_NET_ROUTED: sequence dict {
   "+" space, "ROUTED":type="Routed" space,
   identifier:layer=@ space,
@@ -3361,7 +3347,7 @@ DEF_NET_NOSHIELD: sequence dict {
 }
 
 // ===========================================================================
-// === DEF Phase 10 — SCANCHAINS + GROUPS ===================================
+// === SCANCHAINS + GROUPS ===================================
 // ===========================================================================
 //
 // Final DEF phase. BEGINEXT/ENDEXT lives at the top of the
