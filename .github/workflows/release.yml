@@ -1,0 +1,108 @@
+# Release workflow: build the sdist on a git tag and publish it to PyPI
+# via OIDC trusted publishing (no API keys / secrets stored in the repo).
+#
+# **Trigger.** A tag matching `v*` (e.g. `v0.1.0`, `v0.2.0-rc1`). Push it
+# with `git tag -a v0.1.0 -m "..." && git push --tags`. The workflow does
+# NOT auto-publish on every main push — explicit tag is the gate.
+#
+# **What it builds.** Only the source distribution (sdist) for now. Users
+# install via `pip install rawast` and pip compiles the C++20→17 extension
+# locally against their toolchain. Pre-built wheels (cibuildwheel) can
+# follow as a separate workflow when there's enough adoption to justify
+# the matrix.
+#
+# **Trusted publishing setup (one-time, on PyPI).** Before the first
+# release run, log in to https://pypi.org → project / pending project
+# → "Publishing" → "Add a new publisher" → GitHub Actions:
+#   * PyPI Project Name: rawast
+#   * Owner:             edacommons
+#   * Repository:        rawast
+#   * Workflow:          release.yml
+#   * Environment:       pypi
+# No API token is generated; PyPI accepts OIDC claims from the workflow
+# matching the configured publisher. See
+# https://docs.pypi.org/trusted-publishers/ for the full reference.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build
+
+      - name: Build sdist
+        # `--sdist` only — no wheel. scikit-build-core runs in PEP 517
+        # build-isolation mode (it pulls scikit-build-core and nanobind
+        # into a fresh venv before invoking cmake), so the host runner
+        # only needs `build`.
+        run: python -m build --sdist
+
+      - name: Verify sdist contents
+        # Cheap sanity check: tarball must contain CMakeLists.txt,
+        # pyproject.toml, and the canonical grammars/ directory. Saves
+        # a wasted publish if scikit-build's exclude rules ever drop
+        # too much.
+        run: |
+          set -euo pipefail
+          tar tzf dist/*.tar.gz | grep -q "CMakeLists.txt$"
+          tar tzf dist/*.tar.gz | grep -q "pyproject.toml$"
+          tar tzf dist/*.tar.gz | grep -q "grammars/lefdef.rawast$"
+          tar tzf dist/*.tar.gz | grep -q "src/grammar.cpp$"
+          echo "sdist manifest OK"
+
+      - name: Upload sdist as workflow artifact
+        # Stash a copy alongside the workflow run so the publish job can
+        # download it (artifacts are how data crosses job boundaries on
+        # GitHub Actions). Also useful for manual inspection / debugging
+        # if PyPI upload fails downstream.
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          retention-days: 14
+
+  publish:
+    name: Publish to PyPI
+    needs: build-sdist
+    runs-on: ubuntu-latest
+    environment:
+      # Bind to a named environment on the repo so OIDC tokens carry
+      # the `environment: pypi` claim. Trusted-publisher config on
+      # PyPI must match this name.
+      name: pypi
+      url: https://pypi.org/p/rawast
+    permissions:
+      # `id-token: write` is the OIDC token request permission —
+      # required for trusted publishing. No PyPI API token in repo
+      # secrets means no key to rotate or accidentally leak.
+      id-token: write
+    steps:
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish to PyPI via OIDC
+        # The official PyPA action handles the OIDC dance: request a
+        # token from GitHub's identity provider, exchange it with PyPI
+        # for a short-lived upload credential, run `twine upload`.
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
