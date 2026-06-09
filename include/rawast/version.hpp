@@ -14,6 +14,6 @@ inline constexpr int VERSION_PATCH = 0;
 // callers that want to compare versions numerically and don't
 // model alpha/beta/rc tiers. Use the VERSION string when you
 // need the full identifier.
-inline constexpr std::string_view VERSION = "0.1.0a2";
+inline constexpr std::string_view VERSION = "0.1.0";
 
 } // namespace rawast
