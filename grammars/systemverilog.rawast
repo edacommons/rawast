@@ -1,0 +1,876 @@
+// systemverilog.rawast — SystemVerilog grammar (Verilog 2001 synthesizable
+// subset as the foundation; SV-1800 extensions added incrementally).
+//
+// Scope of this first pass:
+//
+//   • Module declarations: header, parameter port list, port list
+//     (both ANSI and non-ANSI styles), module items, endmodule.
+//   • Module items: net/reg/logic/integer declarations, parameter
+//     declarations, continuous assigns (`assign`), procedural blocks
+//     (`always`, `always_ff`, `always_comb`, `always_latch`, `initial`),
+//     module instantiations, generate blocks (loop/if/case),
+//     task and function declarations.
+//   • Statements: blocking and non-blocking assignment, if/else,
+//     case/casex/casez, begin/end blocks (with labels), for/while/
+//     repeat/forever loops, disable, wait, system task calls.
+//   • Event control: `@(posedge clk or negedge rst_n)`, `@*`, named
+//     events, delay control `#5`.
+//   • Expressions: full ~13-level precedence chain — conditional →
+//     logical-or → logical-and → bitwise-or → bitwise-xor → bitwise-and
+//     → equality → relational → shift → add/sub → mul/div/mod → power →
+//     unary → primary.
+//   • Primaries: numbers (every SV literal form via sv_number),
+//     identifiers, hierarchical references, bit/part selects,
+//     concatenation, replication, parens, function calls, system
+//     task/function calls.
+//
+// NOT in this first pass (separate issues / future grammar files):
+//
+//   • Preprocessor (`define, `ifdef, `include) — separate phase.
+//   • Classes, interfaces, modports, packages — SystemVerilog OOP.
+//   • SVA assertions and properties — via subparse from SV grammar.
+//   • Constraints, randomization, covergroups — testbench features.
+//   • Specify blocks, UDP declarations, `defparam`.
+//   • Typedef and user-defined types — needs symbol-table tracking;
+//     today, declarations must use built-in keywords (wire/reg/logic).
+//
+// Design choices:
+//
+//   • Strict keywords (single-quote `'token'`) throughout — prevents
+//     keyword/identifier collisions like `always` matching `always_inst`.
+//   • Direct `{type, ...}` IR emission via bindings; no post-parse
+//     lowering step.
+//   • Math operator chains (`a + b - c + d`) require parentheses for
+//     3+ operands. PEG can't left-fold; this design choice trades
+//     ergonomic source for grammar simplicity. Real SV code rarely
+//     hits this — comparisons and arithmetic almost always bracket.
+//   • Both ANSI-style and Verilog-95-style port lists supported. The
+//     Choice between them triggers an informational LL(k) warning;
+//     accept (it's intentional fall-through).
+
+use: std, sv
+
+start: <SOURCE_TEXT>
+
+// ─── File level ─────────────────────────────────────────────────────────
+
+// Top-level ignore: whitespace + both comment styles. SV LRM §5.4
+// permits both `//` and `/* */`; the std parsers handle both.
+SOURCE_TEXT ignore whitespace line_comment block_comment: sequence dict {
+  repeat <DESCRIPTION>:descriptions[]=@
+}
+
+DESCRIPTION: choice {
+  <MODULE_DECL>
+  // future: <UDP_DECL>, <CONFIG_DECL>, <PACKAGE_DECL>, <INTERFACE_DECL>
+}
+
+// ─── Module declaration ─────────────────────────────────────────────────
+
+MODULE_DECL: sequence dict {
+  <MODULE_KEYWORD>:keyword=@:type="module",
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<PORT_LIST>:ports=@,
+  ";",
+  repeat <MODULE_ITEM>:items[]=@,
+  'endmodule'
+}
+
+// SV adds `program` and `macromodule` as module-equivalent keywords;
+// keep them under one rule so the same item grammar applies.
+MODULE_KEYWORD: choice {
+  'module':@, 'macromodule':@, 'program':@
+}
+
+// `#(parameter A = 4, parameter B = 8)`
+PARAM_PORT_LIST: sequence dict {
+  "#", "(",
+  repeat+ <PARAM_DECL>:params[]=@ separator ",",
+  ")"
+}
+
+PARAM_DECL: sequence dict {
+  'parameter':@:type="param",
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
+}
+
+// Port list — Choice between ANSI-style and Verilog-95-style. The
+// LL(k) lint flags this as informational; accept as intentional.
+PORT_LIST: choice {
+  <PORT_LIST_ANSI>,
+  <PORT_LIST_NONANSI>
+}
+
+PORT_LIST_ANSI: sequence dict {
+  "(":style="ansi",
+  repeat <PORT_DECL_ANSI>:ports[]=@ separator ",",
+  ")"
+}
+
+PORT_LIST_NONANSI: sequence dict {
+  "(":style="nonansi",
+  repeat sv_identifier:port_names[]=@ separator ",",
+  ")"
+}
+
+// ANSI-style port: direction + optional type + optional range + name.
+PORT_DECL_ANSI: sequence dict {
+  <PORT_DIRECTION>:direction=@,
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
+}
+
+PORT_DIRECTION: choice {
+  'input':@, 'output':@, 'inout':@, 'ref':@
+}
+
+// `[7:0]` — packed dimension (in bit position).
+RANGE: sequence dict {
+  "[", <EXPR>:msb=@, ":", <EXPR>:lsb=@, "]"
+}
+
+// `[0:15] [0:7]` — unpacked dimensions for arrays/memories.
+UNPACKED_DIMENSIONS: sequence array {
+  repeat+ <RANGE>
+}
+
+// Built-in net/variable types. User-defined types (typedef) deferred.
+TYPE_SPEC: choice {
+  'wire':@,  'reg':@,    'logic':@,   'bit':@,
+  'integer':@, 'int':@,  'real':@,    'time':@,
+  'shortint':@, 'longint':@, 'byte':@,
+  'tri':@,   'tri0':@,   'tri1':@,    'wand':@, 'wor':@,
+  'supply0':@, 'supply1':@
+}
+
+// ─── Module items ───────────────────────────────────────────────────────
+
+MODULE_ITEM: choice {
+  <PORT_DECL_STMT>,
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_STMT>,
+  <CONT_ASSIGN>,
+  <ALWAYS_BLOCK>,
+  <INITIAL_BLOCK>,
+  <FINAL_BLOCK>,
+  <GENERATE_BLOCK>,
+  <TASK_DECL>,
+  <FUNCTION_DECL>,
+  <MODULE_INSTANTIATION>
+  // future: <SPECIFY_BLOCK>, <DEFPARAM_STMT>, <BIND_STMT>
+}
+
+// Verilog-95 / non-ANSI port declaration: a port direction followed by
+// optional type/range and one or more port names — used as a module
+// item to fill in the declaration for ports listed by name in the
+// header. Example:
+//   module foo (a, b);
+//     input wire a;
+//     output reg b;
+//   endmodule
+PORT_DECL_STMT: sequence dict {
+  <PORT_DIRECTION>:direction=@:type="port_decl",
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<RANGE>:range=@,
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ";"
+}
+
+NET_DECL: sequence dict {
+  <NET_KIND>:kind=@:type="net_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<RANGE>:range=@,
+  repeat+ <NET_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+NET_KIND: choice {
+  'wire':@,    'logic':@,   'tri':@,    'tri0':@, 'tri1':@,
+  'wand':@,    'wor':@,     'supply0':@,'supply1':@
+}
+
+NET_SIGNING: choice { 'signed':@, 'unsigned':@ }
+
+NET_NAME: sequence dict {
+  sv_identifier:name=@,
+  ?<NET_INIT>
+}
+
+// Optional initializer on a net (e.g. `wire x = a & b;`). Non-
+// container sequence: its `initial` binding flows up into the
+// caller's dict.
+NET_INIT: sequence { "=", <EXPR>:initial=@ }
+
+REG_DECL: sequence dict {
+  <REG_KIND>:kind=@:type="reg_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<RANGE>:range=@,
+  repeat+ <REG_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+REG_KIND: choice {
+  'reg':@, 'logic':@, 'bit':@
+}
+
+REG_NAME: sequence dict {
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:packed=@,
+  ?<NET_INIT>
+}
+
+INTEGER_DECL: sequence dict {
+  <INTEGER_KIND>:kind=@:type="integer_decl",
+  repeat+ <REG_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+INTEGER_KIND: choice {
+  'integer':@,  'int':@,     'shortint':@,
+  'longint':@,  'byte':@,    'real':@,
+  'time':@,     'realtime':@
+}
+
+PARAM_DECL_STMT: sequence dict {
+  <PARAM_DECL>,
+  ";"
+}
+
+LOCALPARAM_DECL_STMT: sequence dict {
+  'localparam':@:type="localparam",
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@,
+  ";"
+}
+
+// ─── Continuous assignment ──────────────────────────────────────────────
+
+CONT_ASSIGN: sequence dict {
+  'assign':@:type="cont_assign",
+  ?<DELAY>:delay=@,
+  repeat+ <ASSIGNMENT_PAIR>:assignments[]=@ separator ",",
+  ";"
+}
+
+ASSIGNMENT_PAIR: sequence dict {
+  <LVALUE>:lhs=@, "=", <EXPR>:rhs=@
+}
+
+LVALUE: sequence dict {
+  sv_identifier:name=@,
+  ?<RANGE_OR_INDEX>:select=@
+}
+
+// `[N]` (bit-select) or `[N:M]` (part-select). The Choice is between
+// a single expression (bit) and a range (part).
+RANGE_OR_INDEX: choice {
+  <RANGE>,
+  <BIT_SELECT>
+}
+
+BIT_SELECT: sequence dict {
+  "[", <EXPR>:index=@, "]"
+}
+
+DELAY: sequence dict {
+  "#",
+  choice {
+    <EXPR>:value=@,
+    sequence { "(", <EXPR>:value=@, ")" }
+  }
+}
+
+// ─── Always / initial / final ───────────────────────────────────────────
+
+ALWAYS_BLOCK: sequence dict {
+  <ALWAYS_KEYWORD>:kind=@:type="always",
+  ?<EVENT_CONTROL>:sensitivity=@,
+  <STATEMENT>:body=@
+}
+
+// SV adds `always_ff`, `always_comb`, `always_latch` with intended
+// behavior hints that synthesis tools enforce; treat them like
+// `always` with a kind discriminator.
+ALWAYS_KEYWORD: choice {
+  'always_ff':@,    'always_comb':@,
+  'always_latch':@, 'always':@
+}
+
+INITIAL_BLOCK: sequence dict {
+  'initial':@:type="initial",
+  <STATEMENT>:body=@
+}
+
+FINAL_BLOCK: sequence dict {
+  'final':@:type="final",
+  <STATEMENT>:body=@
+}
+
+// ─── Event control ──────────────────────────────────────────────────────
+
+EVENT_CONTROL: sequence dict {
+  "@",
+  choice {
+    sequence { "*":wildcard=true },
+    sequence { "(", "*":wildcard=true, ")" },
+    sequence { "(", <EVENT_EXPR>:events=@, ")" }
+  }
+}
+
+EVENT_EXPR: sequence array {
+  repeat+ <EVENT_PRIMARY> separator <EVENT_SEP>
+}
+
+EVENT_PRIMARY: sequence dict {
+  ?<EDGE>:edge=@,
+  <EXPR>:signal=@
+}
+
+EDGE: choice { 'posedge':@, 'negedge':@, 'edge':@ }
+
+EVENT_SEP: choice { ",":@, 'or':@ }
+
+// ─── Module instantiation ───────────────────────────────────────────────
+
+MODULE_INSTANTIATION: sequence dict {
+  sv_identifier:module_name=@:type="instance",
+  ?<PARAM_OVERRIDE>:params=@,
+  repeat+ <INSTANCE>:instances[]=@ separator ",",
+  ";"
+}
+
+PARAM_OVERRIDE: sequence dict {
+  "#", "(",
+  repeat+ <PARAM_BINDING>:bindings[]=@ separator ",",
+  ")"
+}
+
+PARAM_BINDING: choice {
+  <PARAM_BINDING_NAMED>,
+  <PARAM_BINDING_POSITIONAL>
+}
+
+PARAM_BINDING_NAMED: sequence dict {
+  ".", sv_identifier:name=@:style="named",
+  "(", <EXPR>:value=@, ")"
+}
+
+PARAM_BINDING_POSITIONAL: sequence dict {
+  <EXPR>:value=@:style="positional"
+}
+
+INSTANCE: sequence dict {
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:array=@,
+  "(",
+  repeat <PORT_BINDING>:port_bindings[]=@ separator ",",
+  ")"
+}
+
+PORT_BINDING: choice {
+  <PORT_BINDING_NAMED>,
+  <PORT_BINDING_POSITIONAL>
+}
+
+PORT_BINDING_NAMED: sequence dict {
+  ".", sv_identifier:port=@:style="named",
+  "(", ?<EXPR>:signal=@, ")"
+}
+
+PORT_BINDING_POSITIONAL: sequence dict {
+  <EXPR>:signal=@:style="positional"
+}
+
+// ─── Generate ───────────────────────────────────────────────────────────
+
+GENERATE_BLOCK: sequence dict {
+  'generate':@:type="generate",
+  repeat <GENERATE_ITEM>:items[]=@,
+  'endgenerate'
+}
+
+GENERATE_ITEM: choice {
+  <GENVAR_DECL>,
+  <GEN_FOR>,
+  <GEN_IF>,
+  <GEN_CASE>,
+  <MODULE_ITEM>
+}
+
+GENVAR_DECL: sequence dict {
+  'genvar':@:type="genvar",
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ";"
+}
+
+GEN_FOR: sequence dict {
+  'for':@:type="gen_for",
+  "(",
+  <ASSIGNMENT_PAIR>:init=@, ";",
+  <EXPR>:cond=@, ";",
+  <ASSIGNMENT_PAIR>:step=@,
+  ")",
+  <GEN_BLOCK>:body=@
+}
+
+GEN_IF: sequence dict {
+  'if':@:type="gen_if",
+  "(", <EXPR>:cond=@, ")",
+  <GEN_BLOCK>:then=@,
+  ?<GEN_ELSE>
+}
+
+// Non-container sub-rule; its `else` binding flows up to the caller's
+// dict (the GEN_IF rule).
+GEN_ELSE: sequence { 'else', <GEN_BLOCK>:else=@ }
+
+GEN_CASE: sequence dict {
+  'case':@:type="gen_case",
+  "(", <EXPR>:selector=@, ")",
+  repeat+ <GEN_CASE_ITEM>:items[]=@,
+  'endcase'
+}
+
+GEN_CASE_ITEM: sequence dict {
+  choice {
+    sequence { 'default':default=true, ?":" },
+    sequence {
+      repeat+ <EXPR>:labels[]=@ separator ",",
+      ":"
+    }
+  },
+  <GEN_BLOCK>:body=@
+}
+
+// A generate block — either a labelled begin/end group or a single
+// generate item (a single module item, typically an instantiation).
+GEN_BLOCK: choice {
+  <GEN_NAMED_BLOCK>,
+  <MODULE_ITEM>
+}
+
+GEN_NAMED_BLOCK: sequence dict {
+  'begin':@:type="gen_block", ?<BLOCK_LABEL>,
+  repeat <GENERATE_ITEM>:items[]=@,
+  'end':@
+}
+
+// ─── Tasks and functions ────────────────────────────────────────────────
+
+TASK_DECL: sequence dict {
+  'task':@:type="task",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<TASK_PORT_LIST>:ports=@,
+  ";",
+  repeat <TASK_ITEM>:items[]=@,
+  'endtask'
+}
+
+FUNCTION_DECL: sequence dict {
+  'function':@:type="function",
+  ?<LIFETIME>:lifetime=@,
+  ?<FUNCTION_RETURN>:return_type=@,
+  sv_identifier:name=@,
+  ?<TASK_PORT_LIST>:ports=@,
+  ";",
+  repeat <TASK_ITEM>:items[]=@,
+  'endfunction'
+}
+
+LIFETIME: choice { 'automatic':@, 'static':@ }
+
+FUNCTION_RETURN: choice {
+  <TYPE_SPEC>,
+  sequence dict {
+    ?<RANGE>:range=@,
+    ?<NET_SIGNING>:signing=@
+  }
+}
+
+TASK_PORT_LIST: sequence dict {
+  "(",
+  repeat <TASK_PORT>:ports[]=@ separator ",",
+  ")"
+}
+
+TASK_PORT: sequence dict {
+  ?<PORT_DIRECTION>:direction=@,
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@
+}
+
+TASK_ITEM: choice {
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <STATEMENT>
+}
+
+// ─── Statements ─────────────────────────────────────────────────────────
+
+STATEMENT: choice {
+  <BLOCK_STMT>,
+  <IF_STMT>,
+  <CASE_STMT>,
+  <FOR_STMT>,
+  <WHILE_STMT>,
+  <REPEAT_STMT>,
+  <FOREVER_STMT>,
+  <NONBLOCKING_ASSIGN>,
+  <BLOCKING_ASSIGN>,
+  <PROC_CONT_ASSIGN>,
+  <SYSTEM_TASK_CALL>,
+  <TASK_CALL>,
+  <DISABLE_STMT>,
+  <WAIT_STMT>,
+  <DELAY_OR_EVENT_STMT>,
+  <NULL_STMT>
+}
+
+NULL_STMT: sequence dict { ";":type="null_stmt" }
+
+BLOCK_STMT: sequence dict {
+  'begin':@:type="block",
+  ?<BLOCK_LABEL>,
+  repeat <BLOCK_ITEM>:items[]=@,
+  'end':@
+}
+
+// Non-container; the `label` binding flows up to the parent dict.
+BLOCK_LABEL: sequence { ":", sv_identifier:label=@ }
+
+BLOCK_ITEM: choice {
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <STATEMENT>
+}
+
+IF_STMT: sequence dict {
+  'if':@:type="if",
+  "(", <EXPR>:cond=@, ")",
+  <STATEMENT>:then=@,
+  ?<ELSE_CLAUSE>
+}
+
+// Non-container sub-rule; its `else` binding flows up to the caller's
+// dict (the IF_STMT rule).
+ELSE_CLAUSE: sequence { 'else', <STATEMENT>:else=@ }
+
+CASE_STMT: sequence dict {
+  <CASE_KIND>:kind=@:type="case",
+  "(", <EXPR>:selector=@, ")",
+  repeat+ <CASE_ITEM>:items[]=@,
+  'endcase'
+}
+
+CASE_KIND: choice {
+  'casex':@, 'casez':@, 'case':@
+}
+
+CASE_ITEM: sequence dict {
+  choice {
+    sequence { 'default':default=true, ?":" },
+    sequence {
+      repeat+ <EXPR>:labels[]=@ separator ",",
+      ":"
+    }
+  },
+  <STATEMENT>:body=@
+}
+
+FOR_STMT: sequence dict {
+  'for':@:type="for",
+  "(",
+  <ASSIGNMENT_PAIR>:init=@, ";",
+  <EXPR>:cond=@, ";",
+  <ASSIGNMENT_PAIR>:step=@,
+  ")",
+  <STATEMENT>:body=@
+}
+
+WHILE_STMT: sequence dict {
+  'while':@:type="while",
+  "(", <EXPR>:cond=@, ")",
+  <STATEMENT>:body=@
+}
+
+REPEAT_STMT: sequence dict {
+  'repeat':@:type="repeat",
+  "(", <EXPR>:count=@, ")",
+  <STATEMENT>:body=@
+}
+
+FOREVER_STMT: sequence dict {
+  'forever':@:type="forever",
+  <STATEMENT>:body=@
+}
+
+BLOCKING_ASSIGN: sequence dict {
+  <LVALUE>:lhs=@:type="blocking_assign",
+  "=",
+  ?<DELAY_OR_EVENT>:delay=@,
+  <EXPR>:rhs=@,
+  ";"
+}
+
+NONBLOCKING_ASSIGN: sequence dict {
+  <LVALUE>:lhs=@:type="nonblocking_assign",
+  "<=",
+  ?<DELAY_OR_EVENT>:delay=@,
+  <EXPR>:rhs=@,
+  ";"
+}
+
+PROC_CONT_ASSIGN: sequence dict {
+  'assign':@, <LVALUE>:lhs=@, "=", <EXPR>:rhs=@, ";":type="proc_assign"
+}
+
+DELAY_OR_EVENT: choice { <DELAY>, <EVENT_CONTROL> }
+
+DELAY_OR_EVENT_STMT: sequence dict {
+  <DELAY_OR_EVENT>:control=@:type="delay_event_stmt",
+  <STATEMENT>:body=@
+}
+
+// `$display(...)`, `$finish`, `$strobe(...)`, etc. The leading
+// identifier always starts with `$` (sv_identifier returns it with
+// the `$` retained), so the grammar dispatches on the leading byte
+// implicitly via Choice ordering.
+SYSTEM_TASK_CALL: sequence dict {
+  sv_identifier:name=@:type="system_task",
+  ?<TASK_ARG_LIST>:args=@,
+  ";"
+}
+
+// Regular task call: `task_name(args);` — identifier without `$`.
+TASK_CALL: sequence dict {
+  sv_identifier:name=@:type="task_call",
+  <TASK_ARG_LIST>:args=@,
+  ";"
+}
+
+TASK_ARG_LIST: sequence dict {
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")"
+}
+
+DISABLE_STMT: sequence dict {
+  'disable':@, sv_identifier:target=@, ";":type="disable"
+}
+
+WAIT_STMT: sequence dict {
+  'wait':@, "(", <EXPR>:cond=@, ")":type="wait",
+  <STATEMENT>:body=@
+}
+
+// ─── Expressions ────────────────────────────────────────────────────────
+//
+// 13 precedence levels, low to high:
+//
+//   EXPR             conditional (ternary)
+//   LOR              || logical or
+//   LAND             && logical and
+//   BOR              |  bitwise or
+//   BXOR             ^  bitwise xor (~^, ^~)
+//   BAND             &  bitwise and
+//   EQUALITY         == != === !== ==? !=?
+//   RELATIONAL       <  <= >  >=  inside (out of scope)
+//   SHIFT            << >> <<< >>>
+//   ADD              +  -
+//   MUL              *  /  %
+//   POWER            **
+//   UNARY            + - ! ~ & | ^ ~& ~| ~^ ^~
+//   PRIMARY
+//
+// For each level, the right-hand alternative is the pass-through (the
+// next-higher-precedence level), which is what the engine picks when
+// no operator is found at this level.
+//
+// Math chains (+/-, */// %, shifts) at 3+ operands need parens — see
+// the design-choice comment at the top of this file. The grammar
+// emits `{op, args:[lhs, rhs]}` only for exactly two operands.
+
+EXPR: choice { <TERNARY>, <LOR> }
+
+TERNARY: sequence dict {
+  <LOR>:args[]=@, "?", <EXPR>:args[]=@, ":", <EXPR>:args[]=@:op="?:"
+}
+
+LOR: choice { <LOR_BINOP>, <LAND> }
+LOR_BINOP: sequence dict {
+  <LAND>:args[]=@, "||", <LAND>:args[]=@:op="||"
+}
+
+LAND: choice { <LAND_BINOP>, <BOR> }
+LAND_BINOP: sequence dict {
+  <BOR>:args[]=@, "&&", <BOR>:args[]=@:op="&&"
+}
+
+BOR: choice { <BOR_BINOP>, <BXOR> }
+BOR_BINOP: sequence dict {
+  <BXOR>:args[]=@, "|", <BXOR>:args[]=@:op="|"
+}
+
+BXOR: choice { <BXOR_BINOP>, <BAND> }
+BXOR_BINOP: sequence dict {
+  <BAND>:args[]=@, <BXOR_OP>:op=@, <BAND>:args[]=@
+}
+
+BXOR_OP: choice { "^~":@, "~^":@, "^":@ }
+
+BAND: choice { <BAND_BINOP>, <EQUALITY> }
+BAND_BINOP: sequence dict {
+  <EQUALITY>:args[]=@, "&", <EQUALITY>:args[]=@:op="&"
+}
+
+EQUALITY: choice { <EQUALITY_BINOP>, <RELATIONAL> }
+EQUALITY_BINOP: sequence dict {
+  <RELATIONAL>:args[]=@, <EQUALITY_OP>:op=@, <RELATIONAL>:args[]=@
+}
+
+// Longest-first so `===` wins over `==` and `!==` wins over `!=`.
+EQUALITY_OP: choice {
+  "===":@, "!==":@, "==?":@, "!=?":@, "==":@, "!=":@
+}
+
+RELATIONAL: choice { <RELATIONAL_BINOP>, <SHIFT> }
+RELATIONAL_BINOP: sequence dict {
+  <SHIFT>:args[]=@, <RELATIONAL_OP>:op=@, <SHIFT>:args[]=@
+}
+
+RELATIONAL_OP: choice {
+  "<=":@, ">=":@, "<":@, ">":@
+}
+
+SHIFT: choice { <SHIFT_BINOP>, <ADD> }
+SHIFT_BINOP: sequence dict {
+  <ADD>:args[]=@, <SHIFT_OP>:op=@, <ADD>:args[]=@
+}
+
+// Arithmetic shifts (<<<, >>>) before logical shifts so longer wins.
+SHIFT_OP: choice {
+  "<<<":@, ">>>":@, "<<":@, ">>":@
+}
+
+ADD: choice { <ADD_BINOP>, <MUL> }
+ADD_BINOP: sequence dict {
+  <MUL>:args[]=@, <ADD_OP>:op=@, <MUL>:args[]=@
+}
+
+ADD_OP: choice { "+":@, "-":@ }
+
+MUL: choice { <MUL_BINOP>, <POWER> }
+MUL_BINOP: sequence dict {
+  <POWER>:args[]=@, <MUL_OP>:op=@, <POWER>:args[]=@
+}
+
+MUL_OP: choice { "*":@, "/":@, "%":@ }
+
+POWER: choice { <POWER_BINOP>, <UNARY> }
+POWER_BINOP: sequence dict {
+  <UNARY>:args[]=@, "**", <UNARY>:args[]=@:op="**"
+}
+
+UNARY: choice { <UNARY_OP_EXPR>, <PRIMARY> }
+UNARY_OP_EXPR: sequence dict {
+  <UNARY_OP>:op=@, <PRIMARY>:args[]=@
+}
+
+UNARY_OP: choice {
+  "~&":@, "~|":@, "~^":@, "^~":@,
+  "+":@, "-":@, "!":@, "~":@,
+  "&":@, "|":@, "^":@
+}
+
+// ─── Primaries ──────────────────────────────────────────────────────────
+
+PRIMARY: choice {
+  <PAREN_EXPR>,
+  <SYSTEM_FUNC_CALL>,
+  <FUNC_CALL>,
+  <CONCAT_OR_REPLICATION>,
+  <NUMBER_PRIMARY>,
+  <STRING_PRIMARY>,
+  <HIER_REF>
+}
+
+PAREN_EXPR: sequence { "(", <EXPR>, ")" }
+
+// Concatenation `{a, b, c}` OR replication `{N{expr}}`. Distinguished
+// by the first item: if it's followed by `{` then it's replication,
+// otherwise concatenation.
+CONCAT_OR_REPLICATION: choice {
+  <REPLICATION>,
+  <CONCAT>
+}
+
+CONCAT: sequence dict {
+  "{":type="concat",
+  repeat+ <EXPR>:elements[]=@ separator ",",
+  "}"
+}
+
+REPLICATION: sequence dict {
+  "{":type="replication",
+  <EXPR>:count=@,
+  "{",
+  repeat+ <EXPR>:elements[]=@ separator ",",
+  "}",
+  "}"
+}
+
+NUMBER_PRIMARY: sequence dict {
+  sv_number:number=@:type="number"
+}
+
+STRING_PRIMARY: sequence dict {
+  string:value=@:type="string"
+}
+
+// Function call: `name(arg, ...)`. Distinguished from a plain
+// hierarchical reference by the presence of `(` immediately after.
+FUNC_CALL: sequence dict {
+  sv_identifier:name=@:type="func_call",
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")"
+}
+
+// System function call: `$name(arg, ...)` — same shape as task call
+// but used in expression context.
+SYSTEM_FUNC_CALL: sequence dict {
+  sv_identifier:name=@:type="system_func",
+  ?<SYSTEM_FUNC_ARGS>:args=@
+}
+
+SYSTEM_FUNC_ARGS: sequence dict {
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")"
+}
+
+// Hierarchical reference: identifier, optionally with `.subident`
+// chains, optionally with bit/part selects at the end.
+HIER_REF: sequence dict {
+  sv_identifier:name=@:type="ref",
+  repeat <HIER_PART>:path[]=@,
+  ?<RANGE_OR_INDEX>:select=@
+}
+
+HIER_PART: sequence dict {
+  ".", sv_identifier:field=@
+}

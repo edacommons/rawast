@@ -11,6 +11,7 @@ Six grammars ship with the engine, addressable in Python by short name (`Grammar
 | `gdsii` | `grammars/gdsii.rawast` | GDSII binary IC layout | 1,171 files | shipped |
 | `lefdef` | `grammars/lefdef.rawast` | LEF + DEF 5.8 (unified) | 770 files | shipped |
 | `tcl` | `grammars/tcl.rawast` | Tcl Tier-1 structural | 1,440 files | shipped |
+| `sv` | `grammars/systemverilog.rawast` | SystemVerilog (V2001 synthesizable subset) | 11 tests | shipped (V2001 subset; SV-2017 extensions incremental) |
 
 ## `json` — strict JSON
 
@@ -83,6 +84,25 @@ Uses the `subparse=` and rule-local-ignore primitives:
 
 **Parser group:** `tcl` — Tcl terminals modelled on Dodekalogue rules. `hspace`, `newline`, `comment`, `brace_group`, `quoted_string`, `bracket_sub`, `bare_word`, `expand_marker`, `var_name`, `escape`, `literal_run`. The `$arr(idx)` array-index body is captured via the grammar-level `*` primitive, not a custom `until_paren` terminal.
 
+## `sv` — SystemVerilog (V2001 synthesizable subset)
+
+`grammars/systemverilog.rawast`. First-cut SystemVerilog grammar covering the IEEE 1800-2017 synthesizable subset that's compatible with IEEE 1364-2001 Verilog: modules, ports (ANSI + Verilog-95 styles), declarations (net/reg/integer/parameter), continuous assignments, procedural blocks (`always`, `always_ff`, `always_comb`, `always_latch`, `initial`, `final`), all statement kinds (blocking/non-blocking assign, if/else, case/casex/casez, for/while/repeat/forever), module instantiations (named + positional bindings), generate blocks (loop/if/case), tasks and functions, and a 13-level expression precedence chain.
+
+Emits a direct `{type, ...}` IR via grammar bindings — no post-parse lowering step. Examples: `{type: "module", name: ..., ports: ..., items: [...]}`, `{type: "always", kind: "always_ff", sensitivity: ..., body: ...}`, `{op: "+", args: [lhs, rhs]}` for arithmetic.
+
+**Parser group:** `sv` — only two SV-specific terminals (the rest comes from `std`):
+* `sv_identifier` — simple `[a-zA-Z_][a-zA-Z_0-9$]*`, escaped `\<chars-until-whitespace>`, and system `$<simple-identifier>` forms.
+* `sv_number` — every Verilog numeric literal form: unsized integer (`42`, `1_000_000`), sized based (`8'hFF`, `4'b0101`), signed (`8'sh80`), x/z/`?` digits (`4'bxxxx`, `8'h??`), reals (`42.5`, `1.5e10`), time literals (`42ns`).
+
+Strings and comments use the `std` group's `string`, `line_comment`, and `block_comment` parsers — same surface forms as SV LRM §5.4 and §5.9.
+
+**Known limitations (this round):**
+* No preprocessor (`` `define ``, `` `include ``, `` `ifdef ``) — out of scope; a separate phase / grammar will handle it.
+* User-defined types (`typedef`) not supported — declarations must use built-in keywords (`wire`, `reg`, `logic`, etc.). Requires symbol-table tracking via mid-parse callbacks.
+* Concatenation `{a, b}` triggers exponential backtracking through the 13-level expression chain when distinguishing concat from replication. The grammar is correct but the engine needs packrat-style memoization to handle it efficiently in the worst case.
+* `g.lint()` similarly hangs on the expression chain — the LL(k) depth-4 check explodes combinatorially across 13 nested Choice/Sequence pairs. Parse works fine; lint optimization is a separate issue.
+* No classes, interfaces, packages, SVA, constraints, covergroups — all SV-2017 features beyond V2001. Each is a focused incremental addition on top of the foundation.
+
 ## Round-trip claims, summarised
 
 | Grammar | Parse | Round-trip | Equivalence type |
@@ -91,6 +111,7 @@ Uses the `subparse=` and rule-local-ignore primitives:
 | LEF | 507 / 507 | 263 / 263 | structurally equivalent (text format, canonicalized output) |
 | DEF | 436 / 436 | 435 / 435 | structurally equivalent (text format, canonicalized output) |
 | Tcl | 1,440 / 1,440 | — | parse-only (round-trip not yet measured) |
+| SystemVerilog | 11 / 11 (test suite; corpus not yet measured) | — | parse-only (first round) |
 
 **"Structurally equivalent"** means `parse → save → reparse` yields the same value tree. The output bytes may differ from the input in whitespace, comment positions, or clause ordering where the grammar makes the form irrelevant. **"Byte-equivalent"** means the output bytes match the input exactly.
 
