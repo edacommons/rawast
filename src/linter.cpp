@@ -420,7 +420,6 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
         NodeId choice_id{i};
         const Node& n = g.node(choice_id);
         if (n.kind != NodeKind::Choice) continue;
-        if (n.backtrack)               continue;   // opted in; skip
         if (n.children.size() < 2)     continue;   // nothing to collide
 
         // For each alternative, compute its first-set; collect token
@@ -478,16 +477,16 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
                 "Choice has shared first-token \"" + tok + "\" across " +
                 std::to_string(issue.alternatives.size()) +
                 " alternatives whose key-paths remain indistinguishable up to "
-                "LL(" + std::to_string(kMaxDepth) + ") lookahead. The engine "
-                "handles this correctly via alt-failure recovery (every Choice "
-                "frame is backtracked at runtime — partial alt matches restore "
-                "input cursor and the next alt is tried). The lint flags it as "
-                "a heads-up because the analysis can't prove disjointness "
-                "statically. Either set `backtrack: true` on the Choice to "
-                "mark this fall-through pattern as intentional (silences this "
-                "warning; runtime behaviour is unchanged), or restructure the "
-                "grammar so the alternatives diverge within LL(" +
-                std::to_string(kMaxDepth) + ") lookahead. "
+                "LL(" + std::to_string(kMaxDepth) + ") lookahead. This is "
+                "informational, not an error — the engine handles it correctly "
+                "via alt-failure recovery (every Choice frame is backtracked "
+                "at runtime; partial alt matches restore input cursor and the "
+                "next alt is tried). The warning surfaces the pattern so you "
+                "can decide: restructure the grammar so alternatives diverge "
+                "within LL(" + std::to_string(kMaxDepth) + ") lookahead "
+                "(eliminates the alt-failure cost), or accept the pattern as "
+                "intentional fall-through (the lint output documents it for "
+                "future readers). "
                 "(Choices that share the first token but diverge at a later "
                 "Key — e.g. `\"+\", \"FIXED\"` vs `\"+\", \"ROUTED\"` — are not "
                 "flagged: the LL(k) check sees through to the diverging Key.)";
@@ -504,15 +503,10 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
     // longest-match-by-source-order discipline), or write the
     // shadowing Key as `'short'` (strict, word-bounded). Either form
     // makes the dispatch correct.
-    //
-    // backtrack:true Choices are exempt — the engine will explore
-    // alternatives until one succeeds, so prefix shadowing only costs
-    // backtracking work, not correctness.
     for (std::size_t i = 0; i < g.node_count(); ++i) {
         NodeId choice_id{i};
         const Node& n = g.node(choice_id);
         if (n.kind != NodeKind::Choice) continue;
-        if (n.backtrack)               continue;
         if (n.children.size() < 2)     continue;
 
         std::vector<std::set<FirstKey>> alt_keys(n.children.size());
@@ -547,8 +541,7 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
                             std::to_string(a) + "; "
                             "(2) reorder so alternative " + std::to_string(b) +
                             " comes before alternative " + std::to_string(a) +
-                            "; (3) set `backtrack: true` on the Choice if "
-                            "the prefix overlap is intentional.";
+                            ".";
                         issues.push_back(std::move(issue));
                     }
                 }

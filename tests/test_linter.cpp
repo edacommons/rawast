@@ -69,7 +69,7 @@ TEST_CASE("Linter: Choice with identical alternatives is flagged") {
     CHECK(issues[0].choice_node == top);
     CHECK(issues[0].token == "K:+");
     CHECK(issues[0].alternatives.size() == 2);
-    CHECK(issues[0].description.find("backtrack") != std::string::npos);
+    CHECK(issues[0].description.find("informational") != std::string::npos);
 }
 
 TEST_CASE("Linter: shared first-Key with diverging second-Key is NOT flagged") {
@@ -144,9 +144,12 @@ TEST_CASE("Linter: prefix-collision resolved when the shorter Key is strict") {
     CHECK(issues.empty());
 }
 
-TEST_CASE("Linter: prefix-collision exempt when Choice has backtrack:true") {
-    // Backtracking explores alternatives; prefix shadowing then only
-    // costs backtracking work, not correctness. Lint should stay quiet.
+TEST_CASE("Linter: prefix-collision flagged regardless of backtrack flag") {
+    // The lint no longer treats `backtrack: true` as a silencer — the
+    // runtime always backtracks Choice frames, so the flag has no
+    // runtime effect on Choice anyway. The prefix-collision warning is
+    // informational design feedback; setting backtrack:true doesn't
+    // suppress it.
     Grammar g;
     NodeId top = g.new_choice();
     g.register_rule("STMT", top);
@@ -161,7 +164,7 @@ TEST_CASE("Linter: prefix-collision exempt when Choice has backtrack:true") {
     g.set_top(g.new_ref("STMT"));
 
     auto issues = lint_grammar(g);
-    CHECK(issues.empty());
+    CHECK(issues.size() == 1);
 }
 
 TEST_CASE("Linter: same-length distinct Keys are not a prefix collision") {
@@ -179,11 +182,17 @@ TEST_CASE("Linter: same-length distinct Keys are not a prefix collision") {
     CHECK(issues.empty());
 }
 
-TEST_CASE("Linter: Choice with backtrack:true is silently allowed") {
+TEST_CASE("Linter: LL(k) check is independent of the backtrack flag") {
+    // The `backtrack: true` attribute used to silence LL(k) warnings;
+    // it no longer does (the engine always backtracks Choice frames at
+    // runtime, so the attribute had no parse-side meaning on Choice).
+    // The LL(k) check now reports purely on structural divergence within
+    // its lookahead window. With FOO vs BAR at depth 2, the alts
+    // disambiguate — no warning regardless of backtrack flag.
     Grammar g;
     NodeId top = g.new_choice();
     g.register_rule("TOP", top);
-    g.set_backtrack(top);   // opt in to backtracking
+    g.set_backtrack(top);
 
     NodeId alt1 = g.add_sequence(top);
     g.add_key(alt1, "+");

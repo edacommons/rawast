@@ -751,15 +751,16 @@ alternative attempt is wrapped in input-cursor `mark()` / `reject()` —
 if an alternative partially matches and then fails, the input position
 is restored and the next alternative is tried from the same position.
 This is standard PEG ordered-choice semantics and applies to every
-Choice node by default; the `backtrack: true` attribute on a Choice
-(if explicitly set) is retained as a *grammar-author annotation* that
-the linter uses to suppress LL(k)-ambiguity warnings on intentional
-shared-prefix patterns. It does not gate runtime behaviour.
+Choice node by default; there is no opt-in attribute and no opt-out.
 
-Alternatives with overlapping first-token signatures still parse
-correctly via the alt-failure recovery above, but the linter flags
-them as a heads-up unless `backtrack: true` is set on the Choice.
-See the `Grammar::lint()` machinery and `docs/AGENTS.md`.
+Alternatives with overlapping first-token signatures parse correctly
+via the alt-failure recovery above. The linter emits informational
+warnings on such Choices when the LL(k) lookahead can't prove
+disjointness within bounded depth — see `Grammar::lint()` and
+`docs/AGENTS.md`. The warnings are design feedback (the alt-failure
+cost is real, even if small), not bugs. There is no flag to suppress
+them; either restructure the alternatives to diverge earlier, or
+accept the warning as a permanent design note.
 
 ### 4.8 Repeat — `repeat expression [separator expression]`
 

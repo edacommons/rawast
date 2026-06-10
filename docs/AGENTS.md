@@ -194,30 +194,18 @@ But this trade is rarely worth it — the linter (LL(k) lookahead) won't flag th
 
 **Heuristic**: write the cleanest grammar shape first. If profiling shows a hot spot in an alt-failure path, refactor that specific Choice. Don't preemptively contort the grammar.
 
-### Silencing the lint on intentional shared-prefix Choices
+### The LL(k) lint warning on shared-prefix Choices is informational
 
 The lint's LL(k) check flags Choices where two alternatives share a leading rule that can't be disambiguated by first-token analysis within bounded depth. The OR / OR_MULTI pattern above is a typical example — both branches start with `<AND>`, and the lint can't prove they diverge within its lookahead window because `<AND>` can begin with a generic Parse (identifier, number).
 
-**Important — this is a lint annotation, NOT a runtime control.** The rawast engine *always* backtracks Choice frames at runtime: every alternative attempt is wrapped in input-cursor `mark()` / `reject()`, so partial alt-failure cleanly restores position and tries the next alt. The shared-prefix pattern parses correctly without any `backtrack: true` setting. The lint just can't see that statically, so it flags as a heads-up.
+**This is informational, not an error.** The rawast engine *always* backtracks Choice frames at runtime: every alternative attempt is wrapped in input-cursor `mark()` / `reject()`, so partial alt-failure cleanly restores position and tries the next alt. The shared-prefix pattern parses correctly. The lint just can't see that statically, so it surfaces the pattern so you can decide whether it's intentional.
 
-To silence the lint on a Choice that uses an intentional fall-through pattern, set `backtrack: true` on the Choice. Today the DSL doesn't have syntax for this attribute (tracked as issue #4); the workaround is to set it on the dict at load time before passing to `Grammar.from_dict()`:
+Two reasonable responses:
 
-```python
-import rawast
+- **Restructure** the grammar so the alternatives diverge within LL(k) lookahead. Eliminates the alt-failure cost (which is small but real) and silences the warning. Often not possible if you need the direct `{op, args}` emission — the alt-failure pattern is what makes single-vs-multi-operand work cleanly.
+- **Accept** the warning as a permanent design note in the lint output. The grammar produces correct output; the warning documents that the fall-through pattern is intentional. No Python loader hook, no special silencing flag — just `rawast lint` shows a few informational warnings on these specific Choices.
 
-def _load(grammar_path: str, backtrack_rules: tuple[str, ...]) -> rawast.Grammar:
-    meta = rawast.Grammar("rawast")
-    dict_form = meta.parse_file(grammar_path)
-    for rule in backtrack_rules:
-        dict_form[rule]["backtrack"] = True
-    return rawast.Grammar.from_dict(dict_form)
-
-grammar = _load("constraint.rawast", backtrack_rules=("OR", "AND", "RELATION"))
-```
-
-This is a **loader-time lint annotation**, not AST post-processing. The grammar still emits the host's IR shape directly via bindings; the dict gets one flag per Choice rule before construction. The lint output goes clean; the parse behaviour is identical with or without it. When DSL syntax for `backtrack` lands (issue #4), this loader hook collapses to nothing.
-
-The honest framing: this is the one piece of "Python around a rawast grammar" that isn't an anti-pattern. It's a *grammar annotation* saying "this fall-through pattern is intentional, don't warn me." Skip the loader hook entirely if you don't mind a few lint warnings — the grammar still produces correct output either way.
+The lint does not provide a per-Choice silencer. There is no `// lint: ignore` comment, no `silence_lint: true` attribute. Past versions used a `backtrack: true` flag on Choice to suppress these warnings; that path was removed because the flag was misleading (the engine already always backtracks Choices at runtime, so the attribute had no runtime meaning). The lint output is now honestly informational: take the design feedback or restructure, but don't suppress it.
 
 ## How an agent uses the parsed AST
 
