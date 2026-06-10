@@ -179,6 +179,23 @@ public:
     Parser* parser(const std::string& name) const;
     const std::vector<Parser*>& ignore() const noexcept { return ignore_; }
 
+    // Grammar-wide ignore parser names, in insertion order. Used by
+    // `to_value` to round-trip the ignore configuration.
+    const std::vector<std::string>& ignore_names() const noexcept {
+        return ignore_names_;
+    }
+
+    // Per-rule ignore overrides, keyed by rule name. Used by `to_value`.
+    const std::map<std::string, std::vector<std::string>>& rule_ignore_names() const noexcept {
+        return rule_ignore_names_;
+    }
+
+    // Inferred parser-group names from registered dotted aliases.
+    // Walks the parser registry looking for "X.Y" entries; "X" becomes
+    // a group name. Used by `to_value` to reconstruct the `use:`
+    // directive. Returns sorted, deduplicated names.
+    std::vector<std::string> parser_groups() const;
+
     // --- Driver: read direction ----------------------------------------
 
     // Parse an input stream against this grammar. On success returns the

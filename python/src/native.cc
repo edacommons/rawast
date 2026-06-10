@@ -17,6 +17,7 @@
 #include <rawast/parsers_lefdef.hpp>
 #include <rawast/parsers_tcl.hpp>
 #include <rawast/parsers_registry.hpp>
+#include <rawast/to_value.hpp>
 
 #include <fstream>
 #include <memory>
@@ -335,6 +336,20 @@ NB_MODULE(_native, m) {
             "file produces when parsed through Grammar() — the built-in "
             "JSONC grammar — or Grammar(\"rawast\") — the .rawast "
             "meta-grammar). Inverse of `meta.parse_file(grammar_file)`.")
+
+        .def("to_dict",
+            [](const rawast::Grammar& g) -> nb::object {
+                auto v = rawast::to_value(g);
+                if (!v) return nb::none();
+                return value_to_python(v);
+            },
+            "Walk this Grammar and return its dict representation — the "
+            "inverse of `from_dict`. The returned dict can be passed back "
+            "through `Grammar.from_dict(...)` to reconstruct an equivalent "
+            "Grammar (the host must register the same parser groups via "
+            "`use:` in the dict, or pre-register parsers on the receiving "
+            "Grammar instance). Useful for inspection, debugging, and the "
+            "planned `rawast cppgen` codegen path.")
 
         .def_static("json_format_builtin",
             []() {

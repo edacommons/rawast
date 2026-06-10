@@ -53,6 +53,7 @@ add_library(rawast STATIC
     src/grammar.cpp
     src/save_stack.cpp
     src/loader.cpp
+    src/to_value.cpp
     src/linter.cpp
     src/profile.cpp
     src/parsers_gdsii.cpp

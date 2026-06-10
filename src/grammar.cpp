@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <ostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -548,6 +549,21 @@ NodeId Grammar::rule_id(const std::string& name) const noexcept {
 Parser* Grammar::parser(const std::string& name) const {
     auto it = parsers_.find(name);
     return it == parsers_.end() ? nullptr : it->second.get();
+}
+
+std::vector<std::string> Grammar::parser_groups() const {
+    // Every parser registered via apply_parser_group is registered TWICE
+    // in parsers_: once under the bare name (e.g. "int") and once under
+    // the dotted "group.bare" alias (e.g. "std.int"). The presence of the
+    // dotted form is the only signal that the parser belongs to a group;
+    // ad-hoc parsers registered without a group don't get dotted aliases.
+    std::set<std::string> groups;
+    for (const auto& [name, _ignored] : parsers_) {
+        auto dot = name.find('.');
+        if (dot == std::string::npos) continue;
+        groups.insert(name.substr(0, dot));
+    }
+    return {groups.begin(), groups.end()};
 }
 
 // -------------------------------------------------------------------------

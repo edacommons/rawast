@@ -119,6 +119,45 @@ def test_from_dict_compiles_runtime_grammar():
     assert g.lint() == []
 
 
+def test_to_dict_round_trips_loaded_grammar():
+    """Walk a loaded Grammar back to dict form, rebuild from it, verify
+    the round-tripped Grammar lints clean and parses the same input.
+
+    The load-bearing invariant for `rawast cppgen` (issue #2) and the
+    `.jast` writer (M2): `to_dict()` is the inverse of `from_dict()`.
+    """
+    g1 = rawast.Grammar("json")
+    d = g1.to_dict()
+    assert isinstance(d, dict)
+    assert "start" in d
+    assert d["start"]   # non-empty start rule name
+
+    g2 = rawast.Grammar.from_dict(d)
+    assert g2.lint() == []
+    assert g1.parse_string('{"a": 1}') == g2.parse_string('{"a": 1}')
+
+
+def test_to_dict_preserves_repeat_plus_n():
+    """The repeat+N quantifier (0.1.2) round-trips through to_dict."""
+    meta = rawast.Grammar("rawast")
+    src = (
+        "use: std\n"
+        "start: <X>\n"
+        "X: sequence { repeat+3 int:nums[]=@ separator \",\" }\n"
+    )
+    import tempfile, os
+    with tempfile.NamedTemporaryFile("w", suffix=".rawast", delete=False) as f:
+        f.write(src)
+        path = f.name
+    try:
+        dict_form = meta.parse_file(path)
+        g = rawast.Grammar.from_dict(dict_form)
+        round_tripped = g.to_dict()
+        assert round_tripped["X"]["value"][0]["min"] == 3
+    finally:
+        os.unlink(path)
+
+
 def test_from_dict_transformation():
     """The 'grammars are data' story: load → transform → rebuild."""
     meta = rawast.Grammar("rawast")
