@@ -52,6 +52,24 @@ public:
     ParseResult parse(StreamReader& sr) override;
 };
 
+// Zero or more horizontal whitespace bytes (space, tab). CRUCIALLY
+// does NOT consume newlines — newlines are preserved for the outer
+// rule to handle. Always succeeds (may match zero bytes).
+//
+// Used by line-aware grammars whose rules have to treat newlines as
+// structural terminators while still tolerating spaces/tabs between
+// tokens. The standard `whitespace` parser would swallow the newline
+// and break line-awareness.
+//
+// On save, emits a single space — the original spacing isn't
+// recoverable (0+), and a single space is the canonical safe choice.
+class LinespaceParser final : public Parser {
+public:
+    LinespaceParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Identifier in the C-family sense: starts with letter or underscore,
 // continues with letter / digit / underscore. Produces a StringValue
 // holding the matched identifier text.

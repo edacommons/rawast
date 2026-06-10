@@ -314,6 +314,27 @@ ParseResult WhitespaceParser::parse(StreamReader& sr) {
     return make_string(std::move(spaces));
 }
 
+// LinespaceParser ---------------------------------------------------------
+
+LinespaceParser::LinespaceParser() : Parser("linespace") {}
+
+ParseResult LinespaceParser::parse(StreamReader& sr) {
+    // 0+ horizontal whitespace; always succeeds. No mark needed —
+    // we only ever advance the cursor over space/tab; the rule
+    // can't fail or partially consume.
+    while (auto c = sr.peek()) {
+        if (*c != ' ' && *c != '\t') break;
+        sr.get();
+    }
+    return make_string("");
+}
+
+SaveResult LinespaceParser::unparse(const Value&) const {
+    // Original spacing isn't recoverable from a 0+ match — emit a
+    // single space as the round-trip-safe canonical choice.
+    return std::string(" ");
+}
+
 // DoubleQuoteStringParser -------------------------------------------------
 
 DoubleQuoteStringParser::DoubleQuoteStringParser() : Parser("string") {}
@@ -621,6 +642,7 @@ void register_std_parser_group() {
         {"string",              [] { return std::make_unique<DoubleQuoteStringParser>(); }},
         {"single_quote_string", [] { return std::make_unique<SingleQuoteStringParser>(); }},
         {"whitespace",     [] { return std::make_unique<WhitespaceParser>(); }},
+        {"linespace",      [] { return std::make_unique<LinespaceParser>(); }},
         {"line_comment",   [] { return std::make_unique<LineCommentParser>(); }},
         {"block_comment",  [] { return std::make_unique<BlockCommentParser>(); }},
     };

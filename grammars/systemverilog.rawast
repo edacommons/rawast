@@ -1043,16 +1043,18 @@ DIRECTIVE: choice {
 // Body extends to the next un-escaped newline. We capture as raw
 // text via `*` up to the literal `\n` — the host can post-process
 // backslash-continued lines if needed.
-// `define NAME — for now, only the directive name is captured.
-// The body would need a `*` raw-consume terminated by a newline,
-// but the current `*` implementation requires the terminator to
-// be a literal Key (not a Parse like `newline`). Capturing the
-// body line-accurately is engine work — see TODO in the
-// preprocessor section. The host can find the next newline in
-// the source by position and extract the body externally.
-DEFINE: sequence dict {
+// `define NAME body — `ignore:` (empty) keeps the rule line-aware
+// (the usual whitespace ignore policy would skip newlines too,
+// causing the body to swallow the next line). Horizontal whitespace
+// between the keyword/name/body is consumed via `linespace` (from
+// std). The body extends to the next un-escaped newline, with
+// `\` line-continuation handled by sv_line_text.
+DEFINE ignore: sequence dict {
   "`define",
-  sv_identifier:name=@:type="define"
+  linespace,
+  sv_identifier:name=@:type="define",
+  linespace,
+  sv_line_text:body=@
 }
 
 UNDEF: sequence dict {

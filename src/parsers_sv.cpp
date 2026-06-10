@@ -189,6 +189,48 @@ SaveResult SvBasedDigitsParser::unparse(const Value& v) const {
         "SvBasedDigitsParser::unparse expects StringValue"});
 }
 
+// --- SvLineTextParser ---------------------------------------------------
+
+SvLineTextParser::SvLineTextParser() : Parser("sv_line_text") {}
+
+ParseResult SvLineTextParser::parse(StreamReader& sr) {
+    sr.mark();
+    std::string out;
+    bool prev_backslash = false;
+    while (auto c = sr.peek()) {
+        if (*c == '\n') {
+            if (prev_backslash) {
+                // Line continuation: include the newline, keep going.
+                out.push_back(*c);
+                sr.get();
+                prev_backslash = false;
+                continue;
+            }
+            // Real end of line — leave the newline unconsumed so the
+            // outer rule's ignore policy can handle it on the next
+            // iteration.
+            break;
+        }
+        prev_backslash = (*c == '\\');
+        out.push_back(*c);
+        sr.get();
+    }
+    sr.accept();
+    // Trim trailing horizontal whitespace. Don't trim newlines kept
+    // from line continuations — those carry semantic structure.
+    while (!out.empty()
+           && (out.back() == ' ' || out.back() == '\t')) {
+        out.pop_back();
+    }
+    return make_string(std::move(out));
+}
+
+SaveResult SvLineTextParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvLineTextParser::unparse expects StringValue"});
+}
+
 // --- Group registration -------------------------------------------------
 
 namespace {
@@ -206,6 +248,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_based_digits", []() {
             return std::make_unique<SvBasedDigitsParser>();
+        }},
+        ParserSpec{"sv_line_text", []() {
+            return std::make_unique<SvLineTextParser>();
         }},
     };
     return g;

@@ -60,6 +60,25 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// Consume a line of text, terminating at the next un-escaped newline.
+// Handles the standard `\` line-continuation: a backslash IMMEDIATELY
+// before a newline causes the parser to include both and keep going,
+// allowing multi-line `define` bodies.
+//
+// Trailing horizontal whitespace is trimmed. The terminating newline
+// is NOT consumed — left in the stream for the outer rule's ignore
+// policy to handle on the next iteration.
+//
+// Used together with `std.linespace` for the body of `define
+// directives where rawast's `*` raw-consume can't be applied (it
+// requires a literal Key terminator, not a Parse like `newline`).
+class SvLineTextParser final : public Parser {
+public:
+    SvLineTextParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Note: SystemVerilog strings and comments are handled by the `std`
 // group's existing parsers:
 //
