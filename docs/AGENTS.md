@@ -71,6 +71,13 @@ Your output is a single .rawast file. Conventions:
   that mustn't consume into identifiers (e.g. `'not'`, `'END'`, `'MACRO'`).
   Use double-quote `"..."` for punctuation, openers, or intentional
   prefix captures (e.g. `"LEF58_":@`). See `docs/rawast-format.md` §4.2a.
+- **Emit the application's IR shape directly via bindings — do NOT plan
+  to post-process the AST in code.** The binding mechanism
+  (`:field=@`, `:field[]=@`, `:field=const`) is how the grammar produces
+  the shape the host wants. If the host wants `{op, args}`, the grammar
+  should emit `{op, args}`. Reach for the binding mechanism early; writing
+  a "lower" / "normalize" step in code is the anti-pattern. See the
+  "Design the grammar to emit your application's IR" section below.
 - Add a comment with the spec section number for each non-trivial rule.
 
 Before emitting, mentally walk the grammar through:
@@ -83,6 +90,109 @@ Output ONLY the .rawast text. No commentary outside it.
 ```
 
 The lint discipline is what separates a first-pass grammar that works from one that fails mysteriously at save time. An agent that knows the patterns up-front produces cleaner grammars in fewer iterations.
+
+## Design the grammar to emit your application's IR, not a "raw" parse tree
+
+A common anti-pattern when agents author rawast grammars: write the grammar to produce a "structural" parse tree (`{or: [a, b, c]}`, `{left, ops: [{op, rhs}, ...]}`, etc.) and then write a Python `lower()` function that walks that tree and reshapes it into the application's IR (`{op, args}`). This treats rawast as a tokenizer + tree builder, with semantics post-processed in code.
+
+**This leaves real power unused.** The binding mechanism (`:name=@`, `:name[]=@`, `:name=const`) does semantic work. If you reach for it during grammar design, the grammar can emit your IR directly — no post-processing step.
+
+### Concrete example
+
+A constraint expression language with `or` / `and` / comparisons / arithmetic, where the application wants a uniform IR of `{op: str, args: [node, ...]}`.
+
+**The shallow / wrong way:**
+
+```
+OR ignore whitespace: sequence dict {
+  repeat+ <AND>:or[]=@ separator 'or'
+}
+```
+
+Grammar emits `{or: [a, b, c]}`. Then `lower()` in Python walks this and produces `{op: "or", args: [a, b, c]}`. Two files, two surfaces to keep in sync.
+
+**The grammar-does-the-work way:**
+
+```
+OR: choice {
+  <OR_MULTI>,
+  <AND>             // pass-through when only one operand
+}
+
+OR_MULTI: sequence dict {
+  <AND>:args[]=@,
+  'or':op="or",     // constant emit attached to the separator Key
+  <AND>:args[]=@,
+  repeat <OR_REST>
+}
+
+OR_REST: sequence { 'or', <AND>:args[]=@ }
+```
+
+Same engine, same parser invocation, but `parse_string("a or b or c")` directly returns:
+
+```python
+{"op": "or", "args": [{"ref": "a"}, {"ref": "b"}, {"ref": "c"}]}
+```
+
+No `lower()` function. The Choice between "multi" and "single pass-through" handles the single-operand case (where wrapping in `{op: "or", args: [a]}` would be wrong); the `'or':op="or"` Key emits the operation discriminator alongside matching the literal.
+
+### The patterns
+
+| Application-IR shape | Grammar pattern |
+|---|---|
+| `{op: "X", args: [a, b]}` (binary) | `<LHS>:args[]=@, "X":op="X", <RHS>:args[]=@` |
+| `{op: "X", args: [arg]}` (unary) | `"X":op="X", <ARG>:args[]=@` |
+| `{op: "X", args: [a, b, c, ...]}` (n-ary associative) | `choice` between a multi-form (≥2 args with `'X':op="X"` separator pattern) and pass-through of the single operand |
+| `{type: "X", field1, field2, ...}` (typed struct) | `"X":type="X", <FIELD1>:field1=@, <FIELD2>:field2=@` |
+| `{kind: "X", value}` (tagged variant) | `"X":kind="X", <VALUE>:value=@` |
+| `{ref: "name"}` (leaf reference) | `qualified_identifier:ref=@` |
+| `{num: 42}` (leaf scalar) | `int:num=@` (or `float:num=@`) |
+
+### The honest limitation
+
+PEG can't natively left-recurse. For genuinely left-associative chains (`a - b - c` must mean `(a - b) - c`, not `a - (b - c)` — different result for non-associative `-`), the grammar can't emit a left-folded `{op, args}` shape in one pass. Three options when you hit this:
+
+- **Accept a `{left, ops: [...]}` shape for these specific operators.** The compiler walks them differently from the binary `{op, args}` cases. Document the shape; the compiler handles two AST shapes instead of one.
+- **Emit parallel arrays** — `{args: [a, b, c, d], ops: ["+", "-", "+"]}`. The compiler folds left in a few lines; this is pattern-matching operator semantics, not "lowering" structural shape.
+- **Require parentheses** — `a - b - c` becomes a syntax error; the user writes `(a - b) - c`. Grammar emits clean binary `{op, args}` everywhere; one user-facing constraint.
+
+Most application languages can use the parenthesize-required approach for the rare cases. Don't write a full `lower()` function unless you've ruled out these three.
+
+### Sanity check before adding any post-processor
+
+If you find yourself writing code that walks the parsed AST and produces a different-shaped AST, ask: **what binding could the grammar have used to emit the right shape directly?** Most of the time the answer is "`:field=const` constant + `:args[]=@` list-append on the operand Refs" — and the grammar gets a few lines cleaner while losing an entire post-processing module.
+
+The grammar IS the schema for the application's IR. Use it.
+
+### A common reluctance: "won't `choice` with shared prefixes backtrack and be slow?"
+
+Agents are often hesitant to write `choice` patterns where two alternatives share a leading rule — like the OR / OR_MULTI pattern above, where both branches start with `<AND>`. The fear is "this will backtrack and be O(2^n) like the bad PEG examples."
+
+**It won't.** rawast's PEG handles alt-failure by restoring the input cursor and trying the next alternative — *linear in the depth of the failed alt*, not exponential. For the OR_MULTI / AND pattern:
+
+- Single operand `a`: tries OR_MULTI, parses `<AND>` once, fails on the required `'or'`, falls back to the bare `<AND>` alternative, parses `<AND>` once more. `<AND>` is parsed twice. That's the worst case.
+- Two operands `a or b`: tries OR_MULTI, parses `<AND>` once, matches `'or'`, parses `<AND>` again. Success on the first attempt. `<AND>` parsed twice total — once per operand.
+- Three operands: parsed three times total. Linear in operand count.
+
+There is NO exponential blowup because the engine commits to the first successful alt and never re-evaluates higher-level alternatives after a child succeeds. The repeated `<AND>` work in the single-operand case is bounded — it's one extra parse of the child rule, not an arbitrary cascade.
+
+If `<AND>` itself has heavy sub-rules that are expensive to re-parse, the bounded duplicate matters more. In that case factor common prefixes out into a leading sequence:
+
+```
+OR: sequence dict {
+  <AND>:args[]=@,
+  ?<OR_TAIL>
+}
+OR_TAIL: sequence dict {
+  'or':op="or",
+  repeat+ <AND>:args[]=@ separator 'or'
+}
+```
+
+But this trade is rarely worth it — the linter (LL(k) lookahead) won't flag the shared-prefix Choice as ambiguous because the alternatives diverge at the next token (`'or'` vs end-of-input). The engine handles it cleanly; the alt-failure cost is small and bounded.
+
+**Heuristic**: write the cleanest grammar shape first. If profiling shows a hot spot in an alt-failure path, refactor that specific Choice. Don't preemptively contort the grammar.
 
 ## How an agent uses the parsed AST
 
