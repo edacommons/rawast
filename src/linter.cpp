@@ -571,6 +571,137 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
         }
     }
 
+    // Shared-leading-Ref check (exponential-precedence-chain trap).
+    //
+    // Detects the classic PEG mistake of writing
+    //
+    //   LEVEL: choice { <LEVEL_BINOP>, <NEXT> }
+    //   LEVEL_BINOP: sequence dict { <NEXT>:lhs=@, OP, <NEXT>:rhs=@ }
+    //
+    // for a precedence chain. Two alternatives both start by parsing
+    // <NEXT>; when LEVEL_BINOP fails on the missing OP, PEG backtracks
+    // and parses <NEXT> AGAIN as the passthrough. That's 2× the work
+    // per level. With 14 chained levels (typical for C-like expression
+    // grammars): 2^14 work per call, and nesting compounds it —
+    // `(a)` becomes 2^28 = 268M frames for a single expression.
+    //
+    // The standard PEG cure is to factor the shared prefix out:
+    //
+    //   LEVEL: sequence dict {
+    //     <NEXT>:lhs=@,
+    //     repeat <LEVEL_TAIL>:tail[]=@
+    //   }
+    //   LEVEL_TAIL: sequence dict { <OP>:op=@, <NEXT>:rhs=@ }
+    //
+    // <NEXT> is parsed once; the repeat looks for `OP NEXT` greedily.
+    // Linear in operand count.
+    //
+    // What this pass detects: a Choice where two or more alternatives,
+    // when entered, will invoke the SAME named rule first. `first` here
+    // means "the leftmost child of the alt that consumes input, skipping
+    // Value-kind name markers and constants". The "shared leading ref"
+    // is the resolved Ref target.
+    //
+    // What it doesn't detect:
+    // * Choices where both alts start with the same Key/Parse literal —
+    //   those are typically cheap to re-match, and the LL(k) ambiguity
+    //   pass already covers them.
+    // * Choices where alts share a leading Ref but the surrounding
+    //   structure is rare to backtrack from (no required items after
+    //   the shared Ref in the BINOP-style alt).
+    {
+        auto leading_invoked_rule = [&](NodeId alt) -> NodeId {
+            // Walk through Refs and Sequences, tracking the last rule
+            // (Sequence/Choice body) entered before reaching a terminal
+            // (Key/Parse/Repeat/Raw). The returned NodeId is the
+            // DEEPEST rule that gets entered before any input is
+            // consumed — that's the rule re-parsed when an earlier
+            // Choice alternative fails its trailing items.
+            NodeId cur = alt;
+            NodeId last_rule;
+            for (int depth = 0; depth < 64; ++depth) {
+                const Node& n = g.node(cur);
+                if (n.kind == NodeKind::Ref) {
+                    cur = g.resolve_ref(cur);
+                    continue;
+                }
+                if (n.kind == NodeKind::Sequence) {
+                    last_rule = cur;
+                    NodeId first;
+                    bool found = false;
+                    for (NodeId child : n.children) {
+                        if (g.node(child).kind == NodeKind::Value) continue;
+                        first = child;
+                        found = true;
+                        break;
+                    }
+                    if (!found) return last_rule;
+                    cur = first;
+                    continue;
+                }
+                if (n.kind == NodeKind::Choice) {
+                    // Reached a Choice — can't determine a single
+                    // leading rule (each alt has its own). Stop here;
+                    // the Choice itself is the "leading rule" for
+                    // shared-prefix detection.
+                    last_rule = cur;
+                    return last_rule;
+                }
+                // Key / Parse / Repeat / Raw: terminal-side. Return
+                // the deepest rule we entered on the way down.
+                return last_rule;
+            }
+            return last_rule;
+        };
+
+        for (std::size_t i = 0; i < g.node_count(); ++i) {
+            NodeId choice_id{i};
+            const Node& n = g.node(choice_id);
+            if (n.kind != NodeKind::Choice) continue;
+            if (n.children.size() < 2)     continue;
+
+            // Group alternatives by their leading-invoked rule.
+            std::map<std::size_t, std::vector<std::size_t>> by_leading;
+            for (std::size_t a = 0; a < n.children.size(); ++a) {
+                NodeId lead = leading_invoked_rule(n.children[a]);
+                if (!lead.valid()) continue;
+                by_leading[lead.value()].push_back(a);
+            }
+
+            for (const auto& [lead_id, alts] : by_leading) {
+                if (alts.size() < 2) continue;
+
+                std::string alts_str;
+                for (std::size_t a : alts) {
+                    if (!alts_str.empty()) alts_str += ", ";
+                    alts_str += std::to_string(a);
+                }
+                const std::string lead_name = name_of(NodeId{lead_id});
+
+                LintIssue issue;
+                issue.choice_node = choice_id;
+                issue.token = "R:" + lead_name;
+                issue.alternatives.assign(alts.begin(), alts.end());
+                issue.description =
+                    "shared-leading-ref [" + name_of(choice_id) + "]: "
+                    "alternatives (" + alts_str + ") all begin by invoking "
+                    "rule `" + lead_name + "`. PEG re-parses `" + lead_name +
+                    "` when an earlier alternative fails its trailing items, "
+                    "doubling work per level. In a precedence chain this "
+                    "compounds to 2^N per nesting level (single set of "
+                    "parens → millions of frames). Refactor to the "
+                    "`NEXT (OP NEXT)*` pattern: "
+                    "`LEVEL: sequence dict { <" + lead_name + ">:lhs=@, "
+                    "repeat <LEVEL_TAIL>:tail[]=@ }` where "
+                    "`LEVEL_TAIL: sequence dict { <OP>:op=@, <" + lead_name +
+                    ">:rhs=@ }`. Parses `" + lead_name + "` once, then loops "
+                    "for `OP " + lead_name + "` greedily — linear in operand "
+                    "count. See docs/AGENTS.md.";
+                issues.push_back(std::move(issue));
+            }
+        }
+    }
+
     // Wildcard-rule-with-nested-Choice-type-emit anti-pattern.
     //
     // Save-side Choice dispatch picks an alternative by examining

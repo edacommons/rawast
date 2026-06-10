@@ -44,7 +44,7 @@ What rawast can do today. Most features were validated against a 3,132-file prod
 
 253 tests in two layers:
 
-- **216 C++ doctest** covering the engine, loader, JSON round-trip, GDSII round-trip, linter (LL(k), prefix-collision, wildcard-Choice anti-pattern, raw-consume), pretty-print, strict-key parse+save, `repeat+N` quantifier, the `use:` directive, subparse, per-rule ignore, list-append binding, the data-shape schema generator.
+- **237 C++ doctest** covering the engine, loader, JSON round-trip, GDSII round-trip, linter (LL(k) ambiguity, prefix-collision, shared-leading-ref exponential trap, wildcard-Choice anti-pattern, raw-consume), pretty-print, strict-key parse+save, `repeat+N` quantifier, the `use:` directive, subparse, per-rule ignore, list-append binding, the data-shape schema generator.
 - **45 Python pytest** covering Pydantic generator round-trip on a synthetic full-LEF-spec fixture plus four real Sky130 PDK files (the HD tech LEF, an OpenRAM SRAM, the `top_xres4v2` IO pad, and a multi-ANTENNA HD cell).
 
 Plus 3,132 real production files across GDSII / LEF / DEF / Tcl parsing 100% end-to-end, of which a 1,013-file LEF + GDSII subset additionally `parse → save → reparse`s to a structurally equivalent value tree (1,013 / 1,013).

@@ -402,3 +402,84 @@ TEST_CASE("Linter: the bundled .rawast grammar has only intentional informationa
         FAIL("Unexpected lint issue in .rawast grammar: " << issue.description);
     }
 }
+
+TEST_CASE("Linter: shared-leading-ref flags exponential precedence pattern") {
+    // The classic PEG trap: `choice { LEVEL_BINOP, NEXT }` where the
+    // BINOP form starts with a Ref to NEXT and has required items after.
+    // When the operator fails, NEXT is re-parsed. With chained levels,
+    // this compounds to 2^N work per call.
+    //
+    // The lint should flag this pattern at grammar-load time so authors
+    // restructure to the linear `NEXT (OP NEXT)*` form before paying the
+    // performance cost in production.
+    Grammar g;
+    g.register_parser(std::make_unique<IdentifierParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.add_ignore("whitespace");
+
+    // ADD with the buggy pattern:
+    //   ADD: choice { ADD_BINOP, PRIMARY }
+    //   ADD_BINOP: sequence { PRIMARY, "+", PRIMARY }
+    //
+    // Both alts begin by parsing PRIMARY.
+    NodeId primary = g.new_sequence();
+    g.add_parse(primary, "identifier");
+    g.register_rule("PRIMARY", primary);
+
+    NodeId add_binop = g.new_sequence();
+    g.add_ref(add_binop, "PRIMARY");
+    g.add_key(add_binop, "+");
+    g.add_ref(add_binop, "PRIMARY");
+    g.register_rule("ADD_BINOP", add_binop);
+
+    NodeId add = g.new_choice();
+    g.add_ref(add, "ADD_BINOP");
+    g.add_ref(add, "PRIMARY");
+    g.register_rule("ADD", add);
+    g.set_top(g.new_ref("ADD"));
+
+    auto issues = lint_grammar(g);
+    bool found = false;
+    for (const auto& issue : issues) {
+        if (issue.description.find("shared-leading-ref [ADD]") != std::string::npos
+            && issue.description.find("PRIMARY") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK_MESSAGE(found, "Expected shared-leading-ref warning on ADD invoking PRIMARY");
+}
+
+TEST_CASE("Linter: shared-leading-ref does NOT flag the linear pattern") {
+    // The fixed pattern `LEVEL := NEXT (OP NEXT)*` uses Sequence
+    // (not Choice) at the top level, so the lint has nothing to check.
+    Grammar g;
+    g.register_parser(std::make_unique<IdentifierParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.add_ignore("whitespace");
+
+    NodeId primary = g.new_sequence();
+    g.add_parse(primary, "identifier");
+    g.register_rule("PRIMARY", primary);
+
+    NodeId add_tail = g.new_sequence();
+    g.add_key(add_tail, "+");
+    g.add_ref(add_tail, "PRIMARY");
+    g.register_rule("ADD_TAIL", add_tail);
+
+    NodeId tail_repeat = g.new_repeat();
+    g.add_ref(tail_repeat, "ADD_TAIL");
+
+    NodeId add = g.new_sequence();
+    g.set_container(add, Container::Dict);
+    g.add_ref(add, "PRIMARY");
+    g.node(add).children.push_back(tail_repeat);
+    g.register_rule("ADD", add);
+    g.set_top(g.new_ref("ADD"));
+
+    auto issues = lint_grammar(g);
+    for (const auto& issue : issues) {
+        CHECK_MESSAGE(issue.description.find("shared-leading-ref") == std::string::npos,
+                      "Linear pattern should not be flagged: " << issue.description);
+    }
+}

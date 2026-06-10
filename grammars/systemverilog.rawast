@@ -528,8 +528,7 @@ STATEMENT: choice {
   <WHILE_STMT>,
   <REPEAT_STMT>,
   <FOREVER_STMT>,
-  <NONBLOCKING_ASSIGN>,
-  <BLOCKING_ASSIGN>,
+  <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
   <SYSTEM_TASK_CALL>,
   <TASK_CALL>,
@@ -618,20 +617,22 @@ FOREVER_STMT: sequence dict {
   <STATEMENT>:body=@
 }
 
-BLOCKING_ASSIGN: sequence dict {
-  <LVALUE>:lhs=@:type="blocking_assign",
-  "=",
+// Single rule covering both blocking (`=`) and non-blocking (`<=`)
+// assignments. Combining them avoids re-parsing LVALUE when the
+// engine falls through from one alt to the other in the STATEMENT
+// Choice (the shared-leading-ref lint catches this).
+ASSIGN_STMT: sequence dict {
+  <LVALUE>:lhs=@,
+  <ASSIGN_OP>:type=@,
   ?<DELAY_OR_EVENT>:delay=@,
   <EXPR>:rhs=@,
   ";"
 }
 
-NONBLOCKING_ASSIGN: sequence dict {
-  <LVALUE>:lhs=@:type="nonblocking_assign",
-  "<=",
-  ?<DELAY_OR_EVENT>:delay=@,
-  <EXPR>:rhs=@,
-  ";"
+// Longest-first so `<=` wins over `<` and `=` is checked last.
+ASSIGN_OP: choice {
+  "<=":"nonblocking_assign",
+  "=":"blocking_assign"
 }
 
 PROC_CONT_ASSIGN: sequence dict {
@@ -728,10 +729,21 @@ WAIT_STMT: sequence dict {
 // encoded structurally in the tail list order; host applies a
 // left-fold pass if it needs nested `{op, args}` form.
 
-EXPR: choice { <TERNARY>, <LOR> }
+// EXPR also uses the linear pattern: parse LOR once, then optionally
+// try the ternary `? : ` tail. If "?" isn't present, LOR is the
+// result. No re-parse. (The `choice {<TERNARY>, <LOR>}` form would
+// parse LOR twice when there's no ternary — the shared-leading-ref
+// lint pass detects this.)
+EXPR: sequence dict {
+  <LOR>:lhs=@,
+  ?<TERNARY_REST>
+}
 
-TERNARY: sequence dict {
-  <LOR>:cond=@:op="?:", "?", <EXPR>:then=@, ":", <EXPR>:else=@
+TERNARY_REST: sequence dict {
+  "?":op="?:",
+  <EXPR>:then=@,
+  ":",
+  <EXPR>:else=@
 }
 
 LOR: sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
