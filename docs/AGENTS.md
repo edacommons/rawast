@@ -311,7 +311,6 @@ That's it. `BASED_DIGITS` returns an array of single characters; the host joins 
 ### Tips and caveats
 
 * **Order matters in the outer Choice.** A `BASED_NUM` rule must come before plain `INTEGER_NUM` in a Choice, because `8'hFF` shares its leading `8` with the integer form. PEG's alt-failure recovery picks the right one but only if you list the more-specific match first.
-* **Watch interactions with deeply nested precedence chains.** When a sub-rule with its own `dict` container is invoked via `<Ref>:field=@` binding from inside a long precedence chain (13-level expression grammar etc.), the inner dict can fail to propagate as a captured value. If your grammar shows correct behaviour for simple test cases but the wrapping field disappears in deep contexts, hoist the rule into the outer dict scope OR use a Parse terminal whose result is a single value the binding can capture cleanly.
 * **The lint flags some Choice patterns as informational.** A long character-set Choice (`"0":@, "1":@, …`) has many alternatives with disjoint first tokens, so it parses correctly and is lint-clean. Don't worry about it.
 * **Strict keys preserve case sensitivity.** `"A":@` matches only `A`, not `a`. For case-insensitive matching, add both alternatives explicitly. (Verilog accepts `8'hff` and `8'hFF`; the Choice lists both letter cases.)
 
