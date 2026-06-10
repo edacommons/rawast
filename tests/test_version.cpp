@@ -6,9 +6,14 @@
 #include <string_view>
 
 TEST_CASE("version header constants are present and well-formed") {
-    CHECK(rawast::VERSION_MAJOR == 0);
-    CHECK(rawast::VERSION_MINOR == 1);
-    CHECK(rawast::VERSION_PATCH == 0);
+    // Numeric constants are checked for sanity (non-negative) rather
+    // than against specific values; the latter would force a test edit
+    // on every release. The structural invariant — VERSION string must
+    // start with `<MAJOR>.<MINOR>.<PATCH>` from the constants — is what
+    // we actually want to enforce.
+    CHECK(rawast::VERSION_MAJOR >= 0);
+    CHECK(rawast::VERSION_MINOR >= 0);
+    CHECK(rawast::VERSION_PATCH >= 0);
 
     // VERSION is the full PEP 440-style identifier, which may carry
     // a pre-release suffix (`aN` / `bN` / `rcN`). It must always
