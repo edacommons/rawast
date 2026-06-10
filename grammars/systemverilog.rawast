@@ -922,12 +922,19 @@ TIME_UNIT: choice {
   'fs':@, 'ps':@, 'ns':@, 'us':@, 'ms':@, 's':@
 }
 
+// REAL_NUM and INTEGER_NUM do NOT use the macro-or-X wraps. Their
+// CONTENT must be a real terminal (float/int) — a bare `` `MACRO ``
+// at expression position should reach MACRO_USE in PRIMARY, NOT be
+// classified as a "real number" or "integer" whose value happens
+// to be a macro. The macro wraps live in BASED_NUM (size) and
+// TIME_LIT (value) because in those rules a *required* follow-up
+// token (`'b/'d/'h` or a time unit) disambiguates.
 REAL_NUM: sequence dict {
-  <FLOAT_OR_MACRO>:value=@:kind="real"
+  float:value=@:kind="real"
 }
 
 INTEGER_NUM: sequence dict {
-  <INT_OR_MACRO>:value=@:kind="integer"
+  int:value=@:kind="integer"
 }
 
 STRING_PRIMARY: sequence dict {
@@ -989,20 +996,20 @@ HIER_PART: sequence dict {
 
 // Use-site: `IDENT (with optional `(args)` for function-like
 // macros). `ignore:` keeps the backtick tight against the name.
-// The args list is captured as raw text via `*` up to the first
-// `)` — nested parens inside the args (`` `M(f(a))`) are NOT
-// handled, the first `)` terminates the capture. Note: function-
-// like macro support is a TODO; the host can re-parse the args
-// text after macro expansion.
+// The args list is captured as an array of strings — each arg is
+// matched by `sv_balanced_arg` (a depth-tracking parser that scans
+// up to the next top-level `,` or `)`, with nested `(...)`
+// properly balanced). So `` `FOO(g(a, b), c) `` yields two args:
+// `g(a, b)` and ` c`.
 MACRO_USE ignore: sequence dict {
   "`",
   sv_identifier:name=@:type="macro_use",
   ?<MACRO_CALL_ARGS>:args=@
 }
 
-MACRO_CALL_ARGS: sequence dict {
+MACRO_CALL_ARGS: sequence array {
   "(",
-  *:text=@,
+  repeat sv_balanced_arg separator ",",
   ")"
 }
 

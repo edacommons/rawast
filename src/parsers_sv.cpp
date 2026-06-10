@@ -189,6 +189,34 @@ SaveResult SvBasedDigitsParser::unparse(const Value& v) const {
         "SvBasedDigitsParser::unparse expects StringValue"});
 }
 
+// --- SvBalancedArgParser ------------------------------------------------
+
+SvBalancedArgParser::SvBalancedArgParser()
+    : Parser("sv_balanced_arg") {}
+
+ParseResult SvBalancedArgParser::parse(StreamReader& sr) {
+    sr.mark();
+    std::string out;
+    int depth = 0;
+    while (auto c = sr.peek()) {
+        // At depth 0, `,` and `)` end this argument. Inside nested
+        // `()` (depth > 0), they're regular content.
+        if (depth == 0 && (*c == ',' || *c == ')')) break;
+        if (*c == '(')      ++depth;
+        else if (*c == ')') --depth;
+        out.push_back(*c);
+        sr.get();
+    }
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult SvBalancedArgParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvBalancedArgParser::unparse expects StringValue"});
+}
+
 // --- SvLineTextParser ---------------------------------------------------
 
 SvLineTextParser::SvLineTextParser() : Parser("sv_line_text") {}
@@ -251,6 +279,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_line_text", []() {
             return std::make_unique<SvLineTextParser>();
+        }},
+        ParserSpec{"sv_balanced_arg", []() {
+            return std::make_unique<SvBalancedArgParser>();
         }},
     };
     return g;
