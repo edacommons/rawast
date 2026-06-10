@@ -38,36 +38,24 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
-// SystemVerilog numeric literal parser. Recognises all forms per §5.7:
+// SystemVerilog based-number digit-run parser. Consumes the digit
+// portion that follows a base specifier in a sized or unsized based
+// literal — the `FF` of `8'hFF`, the `0101` of `4'b0101`, the `xxxx`
+// of `4'bxxxx`, the `??` of `8'h??`. Accepts any of `[0-9a-fA-FxXzZ?]`
+// plus underscores (LRM permits x/z/`?` in any base; validity per
+// actual base is the host's concern). Underscores are stripped on
+// the way in.
 //
-//   unsized integer       42, 1_000_000 (underscores allowed except as
-//                         first/last char; they're discarded)
+// This is the ONLY genuinely Verilog-specific number-lexing concern;
+// everything else (plain int, real, time literal) composes naturally
+// from `std.int` / `std.float` + grammar Choice. See the BASED_NUM
+// rule in `grammars/systemverilog.rawast`.
 //
-//   sized based integer   8'hFF, 4'b0101, 16'd42, 32'o777
-//                         signed forms: 8'shFF, 4'sb01
-//                         x/z digits:    4'bxxxx, 8'h?? (? = z)
-//
-//   unsized based integer 'h42 (default 32-bit width per LRM)
-//
-//   real number           42.5, 1.5e10, 1.5E-3, 1e10
-//
-//   time literal          42ns, 1.5us, 100ps (number + time unit)
-//
-// Returns a DictValue with a `kind` discriminator:
-//
-//   {"kind": "integer", "value": <int64>}
-//   {"kind": "real",    "value": <double>}
-//   {"kind": "based",   "size": <int|null>, "signed": <bool>,
-//                       "base": "b"|"o"|"d"|"h", "value": "<digit-string>"}
-//   {"kind": "time",    "value": <double>, "unit": "s"|"ms"|"us"|"ns"|"ps"|"fs"}
-//
-// The digit string for "based" is kept as text (rather than converted
-// to int) because: (a) x/z digits aren't representable as integers,
-// (b) widths up to 2^31 bits are legal per LRM and can overflow int64.
-// The host can convert to bit-pattern when needed.
-class SvNumberParser final : public Parser {
+// Returns a StringValue holding the digit run with underscores
+// removed (so `8'h1_0_0_0` parses to `"1000"`).
+class SvBasedDigitsParser final : public Parser {
 public:
-    SvNumberParser();
+    SvBasedDigitsParser();
     ParseResult parse(StreamReader& sr) override;
     SaveResult  unparse(const Value& value) const override;
 };

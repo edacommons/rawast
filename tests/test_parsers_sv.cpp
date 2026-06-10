@@ -97,186 +97,73 @@ TEST_CASE("sv: identifier — unparse round-trip") {
 }
 
 // ============================================================
-// SvNumberParser
+// SvBasedDigitsParser
 // ============================================================
+//
+// Consumes only the digit-run portion of based literals. Plain int,
+// real, time literals, and based-number structure all live in the
+// grammar composing std parsers + this digit-run helper. See
+// `grammars/systemverilog.rawast` NUMBER rule and the Python
+// integration tests for end-to-end coverage.
 
-TEST_CASE("sv: number — unsized integer") {
-    SvNumberParser p;
-    auto v = try_parse(p, "42");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    REQUIRE(d);
-    auto kind = std::dynamic_pointer_cast<StringValue>(d->data().at("kind"));
-    REQUIRE(kind);
-    CHECK(kind->data() == "integer");
-    auto val = std::dynamic_pointer_cast<IntValue>(d->data().at("value"));
-    REQUIRE(val);
-    CHECK(val->data() == 42);
+TEST_CASE("sv: based_digits — hex digit run") {
+    SvBasedDigitsParser p;
+    CHECK(parse_as_string(p, "FF")       == "FF");
+    CHECK(parse_as_string(p, "deadbeef") == "deadbeef");
+    CHECK(parse_as_string(p, "0123ABCD") == "0123ABCD");
 }
 
-TEST_CASE("sv: number — integer with underscores") {
-    SvNumberParser p;
-    auto v = try_parse(p, "1_000_000");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    auto val = std::dynamic_pointer_cast<IntValue>(d->data().at("value"));
-    REQUIRE(val);
-    CHECK(val->data() == 1000000);
+TEST_CASE("sv: based_digits — binary digit run") {
+    SvBasedDigitsParser p;
+    CHECK(parse_as_string(p, "1010")     == "1010");
+    CHECK(parse_as_string(p, "0000")     == "0000");
 }
 
-TEST_CASE("sv: number — sized hex") {
-    SvNumberParser p;
-    auto v = try_parse(p, "8'hFF");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    auto kind = std::dynamic_pointer_cast<StringValue>(d->data().at("kind"));
-    CHECK(kind->data() == "based");
-    auto size = std::dynamic_pointer_cast<IntValue>(d->data().at("size"));
-    CHECK(size->data() == 8);
-    auto sgn = std::dynamic_pointer_cast<BoolValue>(d->data().at("signed"));
-    CHECK(sgn->data() == false);
-    auto base = std::dynamic_pointer_cast<StringValue>(d->data().at("base"));
-    CHECK(base->data() == "h");
-    auto digits = std::dynamic_pointer_cast<StringValue>(d->data().at("value"));
-    CHECK(digits->data() == "FF");
+TEST_CASE("sv: based_digits — x, z, ? unknown digits") {
+    SvBasedDigitsParser p;
+    CHECK(parse_as_string(p, "xxxx")     == "xxxx");
+    CHECK(parse_as_string(p, "zzzz")     == "zzzz");
+    CHECK(parse_as_string(p, "ZZZZ")     == "ZZZZ");
+    CHECK(parse_as_string(p, "????")     == "????");
+    CHECK(parse_as_string(p, "x0z1?F")   == "x0z1?F");
 }
 
-TEST_CASE("sv: number — sized binary with underscores") {
-    SvNumberParser p;
-    auto v = try_parse(p, "8'b1010_1010");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    auto digits = std::dynamic_pointer_cast<StringValue>(d->data().at("value"));
-    CHECK(digits->data() == "10101010");
+TEST_CASE("sv: based_digits — underscores stripped") {
+    SvBasedDigitsParser p;
+    CHECK(parse_as_string(p, "1_0_0_0") == "1000");
+    CHECK(parse_as_string(p, "DEAD_BEEF") == "DEADBEEF");
+    CHECK(parse_as_string(p, "1__2___3") == "123");
 }
 
-TEST_CASE("sv: number — signed sized") {
-    SvNumberParser p;
-    auto v = try_parse(p, "8'sh80");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    auto sgn = std::dynamic_pointer_cast<BoolValue>(d->data().at("signed"));
-    CHECK(sgn->data() == true);
-    auto base = std::dynamic_pointer_cast<StringValue>(d->data().at("base"));
-    CHECK(base->data() == "h");
-}
-
-TEST_CASE("sv: number — unsized based") {
-    SvNumberParser p;
-    auto v = try_parse(p, "'h42");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    auto size = d->data().at("size");
-    CHECK(size == null_value());
-    auto digits = std::dynamic_pointer_cast<StringValue>(d->data().at("value"));
-    CHECK(digits->data() == "42");
-}
-
-TEST_CASE("sv: number — x and z digits") {
-    SvNumberParser p;
-    auto v1 = try_parse(p, "4'bxxxx");
-    REQUIRE(v1);
-    auto d1 = std::dynamic_pointer_cast<DictValue>(v1);
-    auto digits1 = std::dynamic_pointer_cast<StringValue>(d1->data().at("value"));
-    CHECK(digits1->data() == "xxxx");
-
-    auto v2 = try_parse(p, "8'h??");
-    REQUIRE(v2);
-    auto d2 = std::dynamic_pointer_cast<DictValue>(v2);
-    auto digits2 = std::dynamic_pointer_cast<StringValue>(d2->data().at("value"));
-    CHECK(digits2->data() == "??");
-}
-
-TEST_CASE("sv: number — real literal") {
-    SvNumberParser p;
-    auto v = try_parse(p, "42.5");
-    REQUIRE(v);
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
-    auto kind = std::dynamic_pointer_cast<StringValue>(d->data().at("kind"));
-    CHECK(kind->data() == "real");
-    auto val = std::dynamic_pointer_cast<RealValue>(d->data().at("value"));
-    CHECK(val->data() == doctest::Approx(42.5));
-}
-
-TEST_CASE("sv: number — real with exponent") {
-    SvNumberParser p;
-    auto v1 = try_parse(p, "1.5e10");
-    REQUIRE(v1);
-    auto d1 = std::dynamic_pointer_cast<DictValue>(v1);
-    auto val1 = std::dynamic_pointer_cast<RealValue>(d1->data().at("value"));
-    CHECK(val1->data() == doctest::Approx(1.5e10));
-
-    auto v2 = try_parse(p, "1.5E-3");
-    REQUIRE(v2);
-    auto d2 = std::dynamic_pointer_cast<DictValue>(v2);
-    auto val2 = std::dynamic_pointer_cast<RealValue>(d2->data().at("value"));
-    CHECK(val2->data() == doctest::Approx(1.5e-3));
-}
-
-TEST_CASE("sv: number — time literal") {
-    SvNumberParser p;
-    auto v1 = try_parse(p, "42ns");
-    REQUIRE(v1);
-    auto d1 = std::dynamic_pointer_cast<DictValue>(v1);
-    auto kind1 = std::dynamic_pointer_cast<StringValue>(d1->data().at("kind"));
-    CHECK(kind1->data() == "time");
-    auto unit1 = std::dynamic_pointer_cast<StringValue>(d1->data().at("unit"));
-    CHECK(unit1->data() == "ns");
-
-    auto v2 = try_parse(p, "1.5us");
-    REQUIRE(v2);
-    auto d2 = std::dynamic_pointer_cast<DictValue>(v2);
-    auto unit2 = std::dynamic_pointer_cast<StringValue>(d2->data().at("unit"));
-    CHECK(unit2->data() == "us");
-}
-
-TEST_CASE("sv: number — integer followed by identifier") {
-    // Verify the parser doesn't accidentally swallow the identifier
-    // that follows an unsigned integer (e.g. `42x` is `42` then `x`,
-    // not a malformed time literal).
-    SvNumberParser p;
-    std::istringstream is("42x");
+TEST_CASE("sv: based_digits — stops at non-digit-non-underscore") {
+    SvBasedDigitsParser p;
+    std::istringstream is("FFGH");
     StreamReader sr{is};
     auto r = p.parse(sr);
     REQUIRE(r);
-    // The 'x' should still be on the stream — peek returns 'x'.
-    CHECK(sr.peek().value_or('?') == 'x');
+    auto sv = std::dynamic_pointer_cast<StringValue>(*r);
+    REQUIRE(sv);
+    CHECK(sv->data() == "FF");
+    CHECK(sr.peek().value_or('?') == 'G');
 }
 
-TEST_CASE("sv: number — unparse round-trip") {
-    SvNumberParser p;
-    // Integer.
-    auto i = std::make_shared<DictValue>();
-    i->data()["kind"]  = make_string("integer");
-    i->data()["value"] = make_int(42);
-    auto u_i = p.unparse(*i);
-    REQUIRE(u_i);
-    CHECK(*u_i == "42");
+TEST_CASE("sv: based_digits — rejects empty input") {
+    SvBasedDigitsParser p;
+    CHECK(try_parse(p, "")  == nullptr);
+    CHECK(try_parse(p, "G") == nullptr);   // G is not a valid digit
+    CHECK(try_parse(p, "_") == nullptr);   // bare underscore — no digits
+}
 
-    // Based.
-    auto b = std::make_shared<DictValue>();
-    b->data()["kind"]   = make_string("based");
-    b->data()["size"]   = make_int(8);
-    b->data()["signed"] = false_value();
-    b->data()["base"]   = make_string("h");
-    b->data()["value"]  = make_string("FF");
-    auto u_b = p.unparse(*b);
-    REQUIRE(u_b);
-    CHECK(*u_b == "8'hFF");
-
-    // Signed based.
-    auto bs = std::make_shared<DictValue>();
-    bs->data()["kind"]   = make_string("based");
-    bs->data()["size"]   = make_int(8);
-    bs->data()["signed"] = true_value();
-    bs->data()["base"]   = make_string("h");
-    bs->data()["value"]  = make_string("80");
-    auto u_bs = p.unparse(*bs);
-    REQUIRE(u_bs);
-    CHECK(*u_bs == "8'sh80");
+TEST_CASE("sv: based_digits — unparse round-trip") {
+    SvBasedDigitsParser p;
+    auto u1 = p.unparse(*make_string("FF"));
+    REQUIRE(u1);
+    CHECK(*u1 == "FF");
+    auto u2 = p.unparse(*make_string("xxxx"));
+    REQUIRE(u2);
+    CHECK(*u2 == "xxxx");
 }
 
 // Strings and comments are covered by std.string / std.line_comment /
-// std.block_comment (see test_parsers.cpp); the SV grammar uses
-// those terminals directly via `use: std, sv`. No SV-specific tests
-// needed for those forms.
+// std.block_comment (see test_parsers.cpp); plain integers and reals
+// use std.int / std.float. No SV-specific tests needed for those forms.

@@ -833,8 +833,62 @@ REPLICATION: sequence dict {
   "}"
 }
 
+// Number primary — Choice composition over the four numeric kinds.
+// The custom `sv_based_digits` parser handles only the digit run of
+// based literals (the genuinely Verilog-specific lexical concern);
+// everything else uses std parsers + grammar-level matching.
+//
+// Order matters in NUMBER's Choice: BASED tried first because `8'hFF`
+// shares the leading integer with plain `42`; TIME_LIT before INTEGER
+// for the same reason (`42ns` shares its `42` with `42` alone).
 NUMBER_PRIMARY: sequence dict {
-  sv_number:number=@:type="number"
+  <NUMBER>:number=@:type="number"
+}
+
+NUMBER: choice {
+  <BASED_NUM>,
+  <TIME_LIT>,
+  <REAL_NUM>,
+  <INTEGER_NUM>
+}
+
+// `ignore:` (empty list) disables whitespace skipping for this rule's
+// body so `8'hFF` parses as a single token — no spaces allowed between
+// size, `'`, base, or digit run.
+BASED_NUM ignore: sequence dict {
+  ?int:size=@,
+  "'":kind="based",
+  ?<SIGNED_FLAG>:signed=true,
+  <BASE_CHAR>:base=@,
+  sv_based_digits:value=@
+}
+
+SIGNED_FLAG: choice { "s":@, "S":@ }
+
+BASE_CHAR: choice {
+  "b":@, "B":@, "o":@, "O":@,
+  "d":@, "D":@, "h":@, "H":@
+}
+
+// Time literal — `42ns`, `1.5us`. Tight matching via `ignore:` so the
+// number and unit aren't separable by whitespace.
+// LIMITATION: uses std.int so doesn't accept underscores in the
+// numeric prefix (`1_000ns` won't match here, but `1000ns` will).
+TIME_LIT ignore: sequence dict {
+  int:value=@:kind="time",
+  <TIME_UNIT>:unit=@
+}
+
+TIME_UNIT: choice {
+  'fs':@, 'ps':@, 'ns':@, 'us':@, 'ms':@, 's':@
+}
+
+REAL_NUM: sequence dict {
+  float:value=@:kind="real"
+}
+
+INTEGER_NUM: sequence dict {
+  int:value=@:kind="integer"
 }
 
 STRING_PRIMARY: sequence dict {
