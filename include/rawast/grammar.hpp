@@ -67,6 +67,11 @@ public:
     void set_separator(NodeId parent, NodeId sep);
     void set_backtrack(NodeId id);
     void set_fixed_schema(NodeId id);
+    // Key-only: opt the KeyParser into word-boundary strict matching at
+    // parse time. The literal still matches byte-by-byte; the strict
+    // flag additionally requires the byte after the match to be non-word
+    // or EOF. See `Node.strict` in node.hpp. No-op for non-Key nodes.
+    void set_strict(NodeId id);
     void set_min(NodeId id, std::uint32_t m);  // Repeat-only: minimum iteration count.
 
     // Save-side pretty-print modifiers; see Node fields for semantics.

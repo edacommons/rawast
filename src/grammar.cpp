@@ -376,6 +376,10 @@ void Grammar::set_fixed_schema(NodeId id) {
     nodes_[id.value()].fixed_schema = true;
 }
 
+void Grammar::set_strict(NodeId id) {
+    nodes_[id.value()].strict = true;
+}
+
 void Grammar::set_min(NodeId id, std::uint32_t m) {
     nodes_[id.value()].min = m;
 }

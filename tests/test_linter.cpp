@@ -65,6 +65,90 @@ TEST_CASE("Linter: Choice with two alternatives sharing initial Key is flagged")
     CHECK(issues[0].description.find("backtrack") != std::string::npos);
 }
 
+// Prefix-collision (strict-key shadowing) -------------------------------
+
+TEST_CASE("Linter: prefix-collision in Choice is flagged") {
+    // Classic case: alternative 0's Key "not" is a non-strict prefix
+    // of alternative 1's Key "notch". PEG commits to alt 0 on input
+    // "notch", consuming "not" + leaving "ch" as a phantom suffix.
+    Grammar g;
+    NodeId top = g.new_choice();
+    g.register_rule("STMT", top);
+
+    NodeId alt0 = g.add_sequence(top);
+    g.add_key(alt0, "not");
+
+    NodeId alt1 = g.add_sequence(top);
+    g.add_key(alt1, "notch");
+
+    g.set_top(g.new_ref("STMT"));
+
+    auto issues = lint_grammar(g);
+    REQUIRE(issues.size() == 1);
+    CHECK(issues[0].choice_node == top);
+    CHECK(issues[0].token == "K:not");
+    CHECK(issues[0].alternatives.size() == 2);
+    CHECK(issues[0].description.find("\"not\"") != std::string::npos);
+    CHECK(issues[0].description.find("\"notch\"") != std::string::npos);
+    CHECK(issues[0].description.find("'not'") != std::string::npos);
+}
+
+TEST_CASE("Linter: prefix-collision resolved when the shorter Key is strict") {
+    // Same shapes as above, but alternative 0's "not" is strict
+    // (word-bounded). The strict check rejects the "c" after "not"
+    // in "notch", so the collision goes away.
+    Grammar g;
+    NodeId top = g.new_choice();
+    g.register_rule("STMT", top);
+
+    NodeId alt0 = g.add_sequence(top);
+    NodeId k0 = g.add_key(alt0, "not");
+    g.set_strict(k0);
+
+    NodeId alt1 = g.add_sequence(top);
+    g.add_key(alt1, "notch");
+
+    g.set_top(g.new_ref("STMT"));
+
+    auto issues = lint_grammar(g);
+    CHECK(issues.empty());
+}
+
+TEST_CASE("Linter: prefix-collision exempt when Choice has backtrack:true") {
+    // Backtracking explores alternatives; prefix shadowing then only
+    // costs backtracking work, not correctness. Lint should stay quiet.
+    Grammar g;
+    NodeId top = g.new_choice();
+    g.register_rule("STMT", top);
+    g.set_backtrack(top);
+
+    NodeId alt0 = g.add_sequence(top);
+    g.add_key(alt0, "not");
+
+    NodeId alt1 = g.add_sequence(top);
+    g.add_key(alt1, "notch");
+
+    g.set_top(g.new_ref("STMT"));
+
+    auto issues = lint_grammar(g);
+    CHECK(issues.empty());
+}
+
+TEST_CASE("Linter: same-length distinct Keys are not a prefix collision") {
+    // "foo" and "bar" don't collide as prefixes — they should not be
+    // flagged by the prefix lint (LL(1) check also passes since the
+    // first-bytes differ).
+    Grammar g;
+    NodeId top = g.new_choice();
+    g.register_rule("STMT", top);
+    g.add_key(top, "foo");
+    g.add_key(top, "bar");
+    g.set_top(g.new_ref("STMT"));
+
+    auto issues = lint_grammar(g);
+    CHECK(issues.empty());
+}
+
 TEST_CASE("Linter: Choice with backtrack:true is silently allowed") {
     Grammar g;
     NodeId top = g.new_choice();

@@ -127,6 +127,86 @@ FirstSet first_of(const Grammar& g, NodeId id, std::set<std::size_t>& visited) {
     return result;
 }
 
+// A Key reachable as a possible first-token of some grammar fragment,
+// carrying its `strict` flag. Used by the prefix-collision lint pass:
+// a non-strict Key whose text is a strict prefix of another Key's text
+// in the same Choice will silently shadow the longer one (PEG commits
+// to the first match, and byte-prefix matching has no word boundary —
+// the `not` vs `notch` failure mode).
+struct FirstKey {
+    std::string text;
+    bool        strict;
+
+    bool operator<(const FirstKey& o) const {
+        return text < o.text || (text == o.text && strict < o.strict);
+    }
+};
+
+// Collect every Key that could be the first consumer of `id`, with its
+// strict flag preserved. Skips Parse nodes (handled by the LL(1)
+// check) and follows nullable prefixes through Sequence / Choice /
+// Repeat just like first_of.
+void first_keys_of(const Grammar& g, NodeId id,
+                   std::set<std::size_t>& visited,
+                   std::set<FirstKey>& out) {
+    if (!id.valid()) return;
+    NodeId resolved = g.resolve_ref(id);
+    if (!resolved.valid()) return;
+    if (visited.count(resolved.value())) return;
+    visited.insert(resolved.value());
+
+    const Node& n = g.node(resolved);
+    switch (n.kind) {
+    case NodeKind::Key: {
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (sv) out.insert({sv->data(), n.strict});
+        break;
+    }
+    case NodeKind::Choice:
+        for (NodeId alt : n.children) {
+            first_keys_of(g, alt, visited, out);
+        }
+        break;
+    case NodeKind::Sequence: {
+        std::size_t start = (n.has_separator ? 1 : 0);
+        for (std::size_t i = start; i < n.children.size(); ++i) {
+            std::set<std::size_t> sub_visited = visited;
+            first_keys_of(g, n.children[i], sub_visited, out);
+            // Stop unless this child is nullable (Value, Optional).
+            NodeId rc = g.resolve_ref(n.children[i]);
+            if (!rc.valid()) continue;
+            const Node& cn = g.node(rc);
+            bool child_nullable = (cn.kind == NodeKind::Value) || cn.is_optional;
+            if (!child_nullable) break;
+        }
+        break;
+    }
+    case NodeKind::Repeat: {
+        std::size_t item_idx = (n.has_separator ? 1 : 0);
+        if (item_idx < n.children.size()) {
+            std::set<std::size_t> sub_visited = visited;
+            first_keys_of(g, n.children[item_idx], sub_visited, out);
+        }
+        break;
+    }
+    default:
+        // Parse, Value, Raw, Ref — Ref already resolved above; the rest
+        // don't contribute first-Keys.
+        break;
+    }
+
+    visited.erase(resolved.value());
+}
+
+// `prefix` is a (non-empty) strict-prefix of `longer` if all of
+// prefix's bytes match the start of longer and longer is at least one
+// byte more. Same-length strings are not prefixes.
+bool is_strict_prefix(const std::string& prefix, const std::string& longer) {
+    if (prefix.empty()) return false;
+    if (prefix.size() >= longer.size()) return false;
+    return longer.compare(0, prefix.size(), prefix) == 0;
+}
+
 } // namespace
 
 std::vector<LintIssue> lint_grammar(const Grammar& g) {
@@ -166,6 +246,67 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
                 "restructure the grammar so the alternatives have distinct "
                 "initial terminals.";
             issues.push_back(std::move(issue));
+        }
+    }
+
+    // Prefix-collision: a non-strict Key in an earlier alternative of
+    // a Choice shadows a longer Key in a later alternative. PEG
+    // commits to the first match, and byte-prefix Keys have no word
+    // boundary — so `"not"` will silently consume the prefix of
+    // `"notch"` and the longer keyword's branch becomes unreachable.
+    // Fix: either reorder so the longer Key comes first (PEG's
+    // longest-match-by-source-order discipline), or write the
+    // shadowing Key as `'short'` (strict, word-bounded). Either form
+    // makes the dispatch correct.
+    //
+    // backtrack:true Choices are exempt — the engine will explore
+    // alternatives until one succeeds, so prefix shadowing only costs
+    // backtracking work, not correctness.
+    for (std::size_t i = 0; i < g.node_count(); ++i) {
+        NodeId choice_id{i};
+        const Node& n = g.node(choice_id);
+        if (n.kind != NodeKind::Choice) continue;
+        if (n.backtrack)               continue;
+        if (n.children.size() < 2)     continue;
+
+        std::vector<std::set<FirstKey>> alt_keys(n.children.size());
+        for (std::size_t a = 0; a < n.children.size(); ++a) {
+            std::set<std::size_t> v;
+            first_keys_of(g, n.children[a], v, alt_keys[a]);
+        }
+
+        for (std::size_t a = 0; a < alt_keys.size(); ++a) {
+            for (const FirstKey& ka : alt_keys[a]) {
+                if (ka.strict) continue;   // strict keys never shadow
+                for (std::size_t b = a + 1; b < alt_keys.size(); ++b) {
+                    for (const FirstKey& kb : alt_keys[b]) {
+                        if (!is_strict_prefix(ka.text, kb.text)) continue;
+                        LintIssue issue;
+                        issue.choice_node  = choice_id;
+                        issue.token        = "K:" + ka.text;
+                        issue.alternatives = {a, b};
+                        issue.description =
+                            "Key \"" + ka.text + "\" in alternative " +
+                            std::to_string(a) + " is a non-strict prefix of "
+                            "key \"" + kb.text + "\" in alternative " +
+                            std::to_string(b) + ". Because Keys match "
+                            "byte-by-byte with no word boundary and PEG "
+                            "commits to the first alternative that succeeds, "
+                            "input matching \"" + kb.text + "\" will be "
+                            "consumed by alternative " + std::to_string(a) +
+                            "'s \"" + ka.text + "\" instead, leaving the "
+                            "remainder as a phantom suffix. Fix one of: "
+                            "(1) write `'" + ka.text + "'` (single-quote, "
+                            "strict / word-bounded) in alternative " +
+                            std::to_string(a) + "; "
+                            "(2) reorder so alternative " + std::to_string(b) +
+                            " comes before alternative " + std::to_string(a) +
+                            "; (3) set `backtrack: true` on the Choice if "
+                            "the prefix overlap is intentional.";
+                        issues.push_back(std::move(issue));
+                    }
+                }
+            }
         }
     }
 
