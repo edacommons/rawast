@@ -416,15 +416,33 @@ bool key_paths_disjoint(const std::set<KeyPath>& a,
 std::vector<LintIssue> lint_grammar(const Grammar& g) {
     std::vector<LintIssue> issues;
 
+    // Reverse-lookup: NodeId -> rule name (for human-readable messages).
+    // Built once and shared across all lint passes.
+    std::map<std::size_t, std::string> node_to_rule;
+    for (const auto& [name, id] : g.named_rules()) {
+        node_to_rule.emplace(id.value(), name);
+    }
+    auto name_of = [&](NodeId id) -> std::string {
+        auto it = node_to_rule.find(id.value());
+        return it == node_to_rule.end() ? std::string("anonymous-choice")
+                                        : it->second;
+    };
+
+    // LL(k) ambiguity check. For each Choice with shared-first-token
+    // alternatives whose key-paths can't be disambiguated within LL(k)
+    // lookahead, emit ONE issue per Choice listing all the colliding
+    // tokens and alternatives together. The previous one-issue-per-token
+    // form produced redundant output (same long explanation repeated per
+    // token) that overwhelmed users — coalescing per Choice gives one
+    // actionable line per grammar location.
+    constexpr std::size_t kMaxDepth = 4;
     for (std::size_t i = 0; i < g.node_count(); ++i) {
         NodeId choice_id{i};
         const Node& n = g.node(choice_id);
         if (n.kind != NodeKind::Choice) continue;
-        if (n.children.size() < 2)     continue;   // nothing to collide
+        if (n.children.size() < 2)     continue;
 
-        // For each alternative, compute its first-set; collect token
-        // -> [alt indices] mapping. Anything with >1 alternative is
-        // a collision.
+        // Compute first-set per alt; collect token → [alt indices].
         std::map<std::string, std::vector<std::size_t>> token_to_alts;
         for (std::size_t a = 0; a < n.children.size(); ++a) {
             std::set<std::size_t> visited;
@@ -434,64 +452,73 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
             }
         }
 
+        // Cache key-paths per alt (computed at most once per alt).
+        std::map<std::size_t, std::set<KeyPath>> alt_paths;
+        auto paths_for = [&](std::size_t alt_idx) -> const std::set<KeyPath>& {
+            auto it = alt_paths.find(alt_idx);
+            if (it != alt_paths.end()) return it->second;
+            std::set<std::size_t> v;
+            std::set<KeyPath> out;
+            key_paths_of(g, n.children[alt_idx], v, kMaxDepth, {}, out);
+            return alt_paths.emplace(alt_idx, std::move(out)).first->second;
+        };
+
+        // For each token shared by ≥2 alts, run the LL(k) check and
+        // collect the tokens / alts that remain ambiguous for THIS Choice.
+        std::set<std::string> ambiguous_tokens;
+        std::set<std::size_t> ambiguous_alts;
         for (const auto& [tok, alts] : token_to_alts) {
             if (alts.size() <= 1) continue;
-            // LL(k) disambiguation. Compute key-paths for each colliding
-            // alternative and check pairs. The PEG engine restores the
-            // input position on alt failure, so two alts sharing a first
-            // token but diverging at a later Key position are fine:
-            // engine tries alt A, fails on alt A's second Key, falls
-            // back to alt B which matches.
-            //
-            // Depth limit of 4 reflects: most LEF/DEF / similar grammars
-            // disambiguate within 2 keys; 4 leaves headroom for nested
-            // sub-rules without blowing up combinatorially on grammars
-            // with deep Choice trees.
-            constexpr std::size_t kMaxDepth = 4;
-            std::vector<std::set<KeyPath>> alt_paths(alts.size());
-            for (std::size_t i = 0; i < alts.size(); ++i) {
-                std::set<std::size_t> v;
-                key_paths_of(g, n.children[alts[i]], v, kMaxDepth, {},
-                             alt_paths[i]);
-            }
-
-            // Collect alts that remain ambiguous with at least one
-            // other alt (their key-paths overlap).
             std::set<std::size_t> still_ambiguous;
-            for (std::size_t i = 0; i < alts.size(); ++i) {
-                for (std::size_t j = i + 1; j < alts.size(); ++j) {
-                    if (!key_paths_disjoint(alt_paths[i], alt_paths[j])) {
-                        still_ambiguous.insert(alts[i]);
-                        still_ambiguous.insert(alts[j]);
+            for (std::size_t a = 0; a < alts.size(); ++a) {
+                for (std::size_t b = a + 1; b < alts.size(); ++b) {
+                    if (!key_paths_disjoint(paths_for(alts[a]),
+                                            paths_for(alts[b]))) {
+                        still_ambiguous.insert(alts[a]);
+                        still_ambiguous.insert(alts[b]);
                     }
                 }
             }
-            if (still_ambiguous.size() < 2) continue;
-
-            LintIssue issue;
-            issue.choice_node    = choice_id;
-            issue.token          = tok;
-            issue.alternatives.assign(still_ambiguous.begin(),
-                                      still_ambiguous.end());
-            issue.description =
-                "Choice has shared first-token \"" + tok + "\" across " +
-                std::to_string(issue.alternatives.size()) +
-                " alternatives whose key-paths remain indistinguishable up to "
-                "LL(" + std::to_string(kMaxDepth) + ") lookahead. This is "
-                "informational, not an error — the engine handles it correctly "
-                "via alt-failure recovery (every Choice frame is backtracked "
-                "at runtime; partial alt matches restore input cursor and the "
-                "next alt is tried). The warning surfaces the pattern so you "
-                "can decide: restructure the grammar so alternatives diverge "
-                "within LL(" + std::to_string(kMaxDepth) + ") lookahead "
-                "(eliminates the alt-failure cost), or accept the pattern as "
-                "intentional fall-through (the lint output documents it for "
-                "future readers). "
-                "(Choices that share the first token but diverge at a later "
-                "Key — e.g. `\"+\", \"FIXED\"` vs `\"+\", \"ROUTED\"` — are not "
-                "flagged: the LL(k) check sees through to the diverging Key.)";
-            issues.push_back(std::move(issue));
+            if (still_ambiguous.size() >= 2) {
+                ambiguous_tokens.insert(tok);
+                ambiguous_alts.insert(still_ambiguous.begin(),
+                                     still_ambiguous.end());
+            }
         }
+        if (ambiguous_tokens.empty()) continue;
+
+        // Emit one consolidated issue for this Choice.
+        // `tokens_bare`     — comma-separated unquoted (for `issue.token`,
+        //                     keeps "K:foo" addressable by downstream tooling)
+        // `tokens_quoted`   — quoted, brace-listed (for the description text)
+        std::string tokens_bare, tokens_quoted;
+        for (const auto& t : ambiguous_tokens) {
+            if (!tokens_bare.empty()) tokens_bare += ", ";
+            tokens_bare += t;
+            if (!tokens_quoted.empty()) tokens_quoted += ", ";
+            tokens_quoted += "\"" + t + "\"";
+        }
+        std::string alts_str;
+        for (std::size_t a : ambiguous_alts) {
+            if (!alts_str.empty()) alts_str += ", ";
+            alts_str += std::to_string(a);
+        }
+
+        LintIssue issue;
+        issue.choice_node = choice_id;
+        issue.token = tokens_bare;
+        issue.alternatives.assign(ambiguous_alts.begin(),
+                                  ambiguous_alts.end());
+        issue.description =
+            "informational [" + name_of(choice_id) + "]: " +
+            std::to_string(ambiguous_alts.size()) +
+            " alternatives (" + alts_str + ") share first-token(s) {" +
+            tokens_quoted + "} within LL(" + std::to_string(kMaxDepth) +
+            ") lookahead. Engine handles via alt-failure recovery; "
+            "restructure to factor out the shared prefix if the alt-"
+            "failure cost matters, or accept the pattern. "
+            "See docs/AGENTS.md.";
+        issues.push_back(std::move(issue));
     }
 
     // Prefix-collision: a non-strict Key in an earlier alternative of
@@ -526,22 +553,17 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
                         issue.token        = "K:" + ka.text;
                         issue.alternatives = {a, b};
                         issue.description =
-                            "Key \"" + ka.text + "\" in alternative " +
-                            std::to_string(a) + " is a non-strict prefix of "
-                            "key \"" + kb.text + "\" in alternative " +
-                            std::to_string(b) + ". Because Keys match "
-                            "byte-by-byte with no word boundary and PEG "
-                            "commits to the first alternative that succeeds, "
-                            "input matching \"" + kb.text + "\" will be "
-                            "consumed by alternative " + std::to_string(a) +
-                            "'s \"" + ka.text + "\" instead, leaving the "
-                            "remainder as a phantom suffix. Fix one of: "
-                            "(1) write `'" + ka.text + "'` (single-quote, "
-                            "strict / word-bounded) in alternative " +
-                            std::to_string(a) + "; "
-                            "(2) reorder so alternative " + std::to_string(b) +
-                            " comes before alternative " + std::to_string(a) +
-                            ".";
+                            "prefix-collision [" + name_of(choice_id) + "]: "
+                            "non-strict Key \"" + ka.text + "\" in alt " +
+                            std::to_string(a) + " shadows Key \"" + kb.text +
+                            "\" in alt " + std::to_string(b) + " — input "
+                            "matching \"" + kb.text + "\" gets consumed by "
+                            "alt " + std::to_string(a) + "'s prefix-match. "
+                            "Fix: write `'" + ka.text + "'` (single-quote, "
+                            "strict / word-bounded) in alt " +
+                            std::to_string(a) + ", OR reorder so alt " +
+                            std::to_string(b) + " comes before alt " +
+                            std::to_string(a) + ".";
                         issues.push_back(std::move(issue));
                     }
                 }
@@ -688,16 +710,8 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
         return true;
     };
 
-    // Reverse-lookup: NodeId -> rule name (for human-readable lint
-    // messages). Built once.
-    std::map<std::size_t, std::string> node_to_rule;
-    for (const auto& [name, id] : g.named_rules()) {
-        node_to_rule.emplace(id.value(), name);
-    }
-    auto name_of = [&](NodeId id) -> std::string {
-        auto it = node_to_rule.find(id.value());
-        return it == node_to_rule.end() ? std::string("?") : it->second;
-    };
+    // `node_to_rule` and `name_of` already defined at the top of
+    // lint_grammar() for use across all passes.
 
     for (std::size_t i = 0; i < g.node_count(); ++i) {
         NodeId outer_id{i};
