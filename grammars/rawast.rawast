@@ -86,6 +86,7 @@ EXPR: choice {
   <REPEAT_EXPR>,
   <RAW_EXPR>,
   <KEY_EXPR>,
+  <KEY_STRICT_EXPR>,
   <REF>,
   <PARSE_EXPR>
 }
@@ -119,8 +120,26 @@ REPEAT_EXPR: sequence {
 
 SEPARATOR: sequence { "separator", <ITEM>:separator=@ }
 
+// Key literal. Two surface forms with distinct `type` values so save
+// dispatch can route them cleanly through EXPR's Choice:
+//
+//   "END"       — byte-prefix match. `type: "key"` in the dict.
+//                 (current default; consumes "END" even inside "ENDFOO")
+//   'END'       — strict, word-bounded. `type: "strict_key"` in the dict.
+//                 (only matches "END" when the following byte is non-word
+//                 or EOF; correctly rejects the prefix of "ENDFOO")
+//
+// The loader translates both surface types into a `NodeKind::Key` node;
+// the `strict_key` type additionally sets `Node.strict = true`. See
+// `include/rawast/node.hpp` and `src/loader.cpp`.
+
 KEY_EXPR: sequence {
   string:key=@:type="key",
+  ?<KEY_VALUE>
+}
+
+KEY_STRICT_EXPR: sequence {
+  single_quote_string:key=@:type="strict_key",
   ?<KEY_VALUE>
 }
 

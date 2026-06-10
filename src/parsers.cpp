@@ -364,6 +364,54 @@ SaveResult DoubleQuoteStringParser::unparse(const Value& value) const {
     return "\"" + sv->data() + "\"";
 }
 
+// SingleQuoteStringParser -------------------------------------------------
+
+SingleQuoteStringParser::SingleQuoteStringParser() : Parser("single_quote_string") {}
+
+ParseResult SingleQuoteStringParser::parse(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto open = sr.get();
+    if (!open || *open != '\'') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected opening '\\''"});
+    }
+
+    std::string contents;
+    bool escaped = false;
+    while (true) {
+        auto ch = sr.get();
+        if (!ch) {
+            sr.reject();
+            return tl::unexpected(ParseError{start, "unterminated string"});
+        }
+        if (escaped) {
+            contents.push_back(*ch);
+            escaped = false;
+        } else if (*ch == '\\') {
+            contents.push_back(*ch);
+            escaped = true;
+        } else if (*ch == '\'') {
+            break;
+        } else {
+            contents.push_back(*ch);
+        }
+    }
+
+    sr.accept();
+    return make_string(std::move(contents));
+}
+
+SaveResult SingleQuoteStringParser::unparse(const Value& value) const {
+    auto sv = dynamic_cast<const StringValue*>(&value);
+    if (!sv) {
+        return tl::unexpected(SaveError{
+            "SingleQuoteStringParser::unparse expects StringValue"});
+    }
+    return "'" + sv->data() + "'";
+}
+
 // IdentifierParser --------------------------------------------------------
 
 IdentifierParser::IdentifierParser() : Parser("identifier") {}
@@ -570,7 +618,8 @@ void register_std_parser_group() {
         {"identifier",     [] { return std::make_unique<IdentifierParser>(); }},
         {"qualified_identifier",
                            [] { return std::make_unique<QualifiedIdentifierParser>(); }},
-        {"string",         [] { return std::make_unique<DoubleQuoteStringParser>(); }},
+        {"string",              [] { return std::make_unique<DoubleQuoteStringParser>(); }},
+        {"single_quote_string", [] { return std::make_unique<SingleQuoteStringParser>(); }},
         {"whitespace",     [] { return std::make_unique<WhitespaceParser>(); }},
         {"line_comment",   [] { return std::make_unique<LineCommentParser>(); }},
         {"block_comment",  [] { return std::make_unique<BlockCommentParser>(); }},

@@ -181,6 +181,9 @@
         "type": "KEY_EXPR"
       },
       {
+        "type": "KEY_STRICT_EXPR"
+      },
+      {
         "type": "REF"
       },
       {
@@ -356,20 +359,24 @@
       {
         "type": "string",
         "bindings": [
-          {
-            "name": "key",
-            "value": "@"
-          },
-          {
-            "name": "type",
-            "value": "key"
-          }
+          { "name": "key",  "value": "@" },
+          { "name": "type", "value": "key" }
         ]
       },
+      { "type": "KEY_VALUE", "optional": true }
+    ]
+  },
+  "KEY_STRICT_EXPR": {
+    "type": "sequence",
+    "value": [
       {
-        "type": "KEY_VALUE",
-        "optional": true
-      }
+        "type": "single_quote_string",
+        "bindings": [
+          { "name": "key",  "value": "@" },
+          { "name": "type", "value": "strict_key" }
+        ]
+      },
+      { "type": "KEY_VALUE", "optional": true }
     ]
   },
   "CONSTANT": {

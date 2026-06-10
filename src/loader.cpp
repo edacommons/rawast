@@ -777,17 +777,18 @@ populate(Grammar& g, NodeId target, const Value& body) {
         return {};
     }
 
-    if (type == "key") {
+    if (type == "key" || type == "strict_key") {
         n.kind = NodeKind::Key;
         auto key_r = dict_string(*dv, "key");
         if (!key_r) return tl::unexpected(key_r.error());
         n.value = make_string(*key_r);
-        // Word-boundary strict matching. When `"strict": true`, the
-        // KeyParser requires the byte after the matched literal to be a
-        // non-word character (or EOF). DSL form: `'token'` (single-quote
-        // literal). Lets closed-keyword grammars opt into the boundary
-        // check without changing the default byte-prefix behaviour.
-        n.strict = dict_bool(*dv, "strict");
+        // Word-boundary strict matching. The DSL surface forms `"X"` and
+        // `'X'` arrive at the loader as `type: "key"` vs `type: "strict_key"`
+        // respectively — both produce a Key node, with the strict_key
+        // variant additionally setting `Node.strict = true`. JSON-form
+        // grammars can also set `"strict": true` directly on a `"key"`
+        // node, equivalent to using `'X'` in the DSL.
+        n.strict = (type == "strict_key") || dict_bool(*dv, "strict");
         // `"X":@` shorthand — `emit: true` flag means "use the key's own
         // text as the emitted value." Equivalent at runtime to
         // `{key: "X", value: "X"}`.

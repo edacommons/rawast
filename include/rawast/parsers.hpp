@@ -99,6 +99,20 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// `'...'`-delimited string. Mirror of DoubleQuoteStringParser but uses
+// single-quote delimiters; backslash-escape pass-through is the same.
+// Registered in the std group as `single_quote_string` — the name
+// describes the syntactic form, not any usage convention. The rawast
+// meta-grammar uses this parser in KEY_EXPR to recognise single-quote
+// literals as strict (word-bounded) Key nodes, but other grammars can
+// reuse the parser for any purpose that wants a `'...'` string token.
+class SingleQuoteStringParser final : public Parser {
+public:
+    SingleQuoteStringParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // `//` line comment, consumed up to but not including the line terminator
 // (so the trailing newline survives for the line-tracking machinery).
 // Produces a StringValue containing the full comment text including the
