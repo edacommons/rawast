@@ -165,9 +165,9 @@ If you find yourself writing code that walks the parsed AST and produces a diffe
 
 The grammar IS the schema for the application's IR. Use it.
 
-### A common reluctance: "won't `choice` with shared prefixes backtrack and be slow?"
+### A common reluctance: "won't a `choice` with shared prefixes be O(2^n) slow?"
 
-Agents are often hesitant to write `choice` patterns where two alternatives share a leading rule — like the OR / OR_MULTI pattern above, where both branches start with `<AND>`. The fear is "this will backtrack and be O(2^n) like the bad PEG examples."
+Agents are often hesitant to write `choice` patterns where two alternatives share a leading rule — like the OR / OR_MULTI pattern above, where both branches start with `<AND>`. The fear is "this will explode exponentially like the bad PEG examples."
 
 **It won't.** rawast's PEG handles alt-failure by restoring the input cursor and trying the next alternative — *linear in the depth of the failed alt*, not exponential. For the OR_MULTI / AND pattern:
 
@@ -198,14 +198,14 @@ But this trade is rarely worth it — the linter (LL(k) lookahead) won't flag th
 
 The lint's LL(k) check flags Choices where two alternatives share a leading rule that can't be disambiguated by first-token analysis within bounded depth. The OR / OR_MULTI pattern above is a typical example — both branches start with `<AND>`, and the lint can't prove they diverge within its lookahead window because `<AND>` can begin with a generic Parse (identifier, number).
 
-**This is informational, not an error.** The rawast engine *always* backtracks Choice frames at runtime: every alternative attempt is wrapped in input-cursor `mark()` / `reject()`, so partial alt-failure cleanly restores position and tries the next alt. The shared-prefix pattern parses correctly. The lint just can't see that statically, so it surfaces the pattern so you can decide whether it's intentional.
+**This is informational, not an error.** The rawast engine restores input position on every Choice-frame alt failure — each alternative attempt is wrapped in input-cursor `mark()` / `reject()`, so partial alt failures cleanly restore position and the next alt is tried. The shared-prefix pattern parses correctly. The lint just can't see that statically, so it surfaces the pattern so you can decide whether it's intentional.
 
 Two reasonable responses:
 
 - **Restructure** the grammar so the alternatives diverge within LL(k) lookahead. Eliminates the alt-failure cost (which is small but real) and silences the warning. Often not possible if you need the direct `{op, args}` emission — the alt-failure pattern is what makes single-vs-multi-operand work cleanly.
 - **Accept** the warning as a permanent design note in the lint output. The grammar produces correct output; the warning documents that the fall-through pattern is intentional. No Python loader hook, no special silencing flag — just `rawast lint` shows a few informational warnings on these specific Choices.
 
-The lint does not provide a per-Choice silencer. There is no `// lint: ignore` comment, no `silence_lint: true` attribute. Past versions used a `backtrack: true` flag on Choice to suppress these warnings; that path was removed because the flag was misleading (the engine already always backtracks Choices at runtime, so the attribute had no runtime meaning). The lint output is now honestly informational: take the design feedback or restructure, but don't suppress it.
+The lint does not provide a per-Choice silencer. There is no `// lint: ignore` comment, no `silence_lint: true` attribute. The lint output is honestly informational: take the design feedback (restructure to factor out the shared prefix if the cost matters), or accept the warning as a permanent design note documenting the intentional fall-through.
 
 ## How an agent uses the parsed AST
 
