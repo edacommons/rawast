@@ -61,6 +61,8 @@ SOURCE_TEXT ignore whitespace line_comment block_comment: sequence dict {
 }
 
 DESCRIPTION: choice {
+  <DIRECTIVE>,
+  <MACRO_STMT>,
   <MODULE_DECL>
   // future: <UDP_DECL>, <CONFIG_DECL>, <PACKAGE_DECL>, <INTERFACE_DECL>
 }
@@ -152,6 +154,8 @@ TYPE_SPEC: choice {
 // ─── Module items ───────────────────────────────────────────────────────
 
 MODULE_ITEM: choice {
+  <DIRECTIVE>,
+  <MACRO_STMT>,
   <PORT_DECL_STMT>,
   <NET_DECL>,
   <REG_DECL>,
@@ -521,6 +525,8 @@ TASK_ITEM: choice {
 // ─── Statements ─────────────────────────────────────────────────────────
 
 STATEMENT: choice {
+  <DIRECTIVE>,
+  <MACRO_STMT>,
   <BLOCK_STMT>,
   <IF_STMT>,
   <CASE_STMT>,
@@ -536,6 +542,14 @@ STATEMENT: choice {
   <WAIT_STMT>,
   <DELAY_OR_EVENT_STMT>,
   <NULL_STMT>
+}
+
+// Statement-position macro: `MY_ASSERT(req, gnt);`. Same form as a
+// function call but with the `-prefix and an optional trailing `;`
+// (some macros include the semicolon in their body, some don't).
+MACRO_STMT: sequence dict {
+  <MACRO_USE>:macro=@:type="macro_stmt",
+  ?";"
 }
 
 NULL_STMT: sequence dict { ";":type="null_stmt" }
@@ -818,12 +832,17 @@ UNARY_OP: choice {
 
 // ─── Primaries ──────────────────────────────────────────────────────────
 
+// NUMBER_PRIMARY comes BEFORE MACRO_USE so `` `WIDTH'd42 `` is
+// recognized as a based number (with `` `WIDTH `` as the size)
+// rather than as a bare macro followed by orphan `'d42`. BASED_NUM
+// uses INT_OR_MACRO at its size slot, so macros-as-size work.
 PRIMARY: choice {
   <PAREN_EXPR>,
   <SYSTEM_FUNC_CALL>,
   <FUNC_CALL>,
   <CONCAT_OR_REPLICATION>,
   <NUMBER_PRIMARY>,
+  <MACRO_USE>,
   <STRING_PRIMARY>,
   <HIER_REF>
 }
@@ -876,7 +895,7 @@ NUMBER: choice {
 // body so `8'hFF` parses as a single token — no spaces allowed between
 // size, `'`, base, or digit run.
 BASED_NUM ignore: sequence dict {
-  ?int:size=@,
+  ?<INT_OR_MACRO>:size=@,
   "'":kind="based",
   ?<SIGNED_FLAG>:signed=true,
   <BASE_CHAR>:base=@,
@@ -895,7 +914,7 @@ BASE_CHAR: choice {
 // LIMITATION: uses std.int so doesn't accept underscores in the
 // numeric prefix (`1_000ns` won't match here, but `1000ns` will).
 TIME_LIT ignore: sequence dict {
-  int:value=@:kind="time",
+  <INT_OR_MACRO>:value=@:kind="time",
   <TIME_UNIT>:unit=@
 }
 
@@ -904,11 +923,11 @@ TIME_UNIT: choice {
 }
 
 REAL_NUM: sequence dict {
-  float:value=@:kind="real"
+  <FLOAT_OR_MACRO>:value=@:kind="real"
 }
 
 INTEGER_NUM: sequence dict {
-  int:value=@:kind="integer"
+  <INT_OR_MACRO>:value=@:kind="integer"
 }
 
 STRING_PRIMARY: sequence dict {
@@ -947,4 +966,119 @@ HIER_REF: sequence dict {
 
 HIER_PART: sequence dict {
   ".", sv_identifier:field=@
+}
+
+// ─── Preprocessor — recognition only, no expansion ──────────────────────
+//
+// The grammar recognizes preprocessor SYNTAX and emits AST nodes for
+// directives and macro uses. It does NOT expand macros, evaluate
+// `ifdef branches, or follow `include paths — those are the
+// application's concern. This keeps the grammar stateless (no
+// macro table threaded through the parse) and the AST faithful to
+// the source.
+//
+// Limitation: this approach handles macros that appear at SYNTACTIC
+// positions (expression, statement, module-item) and at the specific
+// token-internal positions wrapped below (size of based-number,
+// value of int/real/time literals, certain identifier slots). It
+// does NOT handle truly lexical macros — ones whose expansion fuses
+// with adjacent characters to form a new token (`define FOO bar`
+// followed by `assign x = FOO;` where `FOO` becomes the identifier
+// `bar`, not a macro use). For files using lexical macros, run a
+// preprocessor pass first.
+
+// Use-site: `IDENT (with optional `(args)` for function-like
+// macros). `ignore:` keeps the backtick tight against the name.
+// The args list is captured as raw text via `*` up to the first
+// `)` — nested parens inside the args (`` `M(f(a))`) are NOT
+// handled, the first `)` terminates the capture. Note: function-
+// like macro support is a TODO; the host can re-parse the args
+// text after macro expansion.
+MACRO_USE ignore: sequence dict {
+  "`",
+  sv_identifier:name=@:type="macro_use",
+  ?<MACRO_CALL_ARGS>:args=@
+}
+
+MACRO_CALL_ARGS: sequence dict {
+  "(",
+  *:text=@,
+  ")"
+}
+
+// Choice wraps. Wherever the grammar previously pinned a specific
+// terminal that a macro might substitute for, route through one of
+// these so MACRO_USE is an accepted alternative. The terminal's
+// emitted value (int/string/float) and macro_use AST node are
+// both passable in the same slot — the host distinguishes by
+// checking for `{type: "macro_use"}`.
+INT_OR_MACRO:   choice { <INT_VAL>,    <MACRO_USE> }
+FLOAT_OR_MACRO: choice { <FLOAT_VAL>,  <MACRO_USE> }
+IDENT_OR_MACRO: choice { <IDENT_VAL>,  <MACRO_USE> }
+
+// Non-container wrappers — the parser's value flows through the
+// Sequence and becomes the Choice alternative's emitted value.
+// (rawast's `:@` binding syntax is shorthand for Key alternatives;
+//  for Parse terminals in Choice position, this wrapper form is
+//  the canonical way to forward the parsed value.)
+INT_VAL:   sequence { int }
+FLOAT_VAL: sequence { float }
+IDENT_VAL: sequence { sv_identifier }
+
+// Preprocessor directives that begin with a specific backtick-
+// keyword. These are distinct from macro USES (`` `MACRO_NAME ``) —
+// the keyword prefix (`` `define ``, `` `include ``, etc.) makes
+// them recognizable. Bare macro uses at directive/statement
+// position go through MACRO_STMT instead (which handles the
+// optional trailing `;`).
+DIRECTIVE: choice {
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>
+}
+
+// `define NAME [params] body
+// Body extends to the next un-escaped newline. We capture as raw
+// text via `*` up to the literal `\n` — the host can post-process
+// backslash-continued lines if needed.
+// `define NAME — for now, only the directive name is captured.
+// The body would need a `*` raw-consume terminated by a newline,
+// but the current `*` implementation requires the terminator to
+// be a literal Key (not a Parse like `newline`). Capturing the
+// body line-accurately is engine work — see TODO in the
+// preprocessor section. The host can find the next newline in
+// the source by position and extract the body externally.
+DEFINE: sequence dict {
+  "`define",
+  sv_identifier:name=@:type="define"
+}
+
+UNDEF: sequence dict {
+  "`undef", sv_identifier:name=@:type="undef"
+}
+
+INCLUDE: sequence dict {
+  "`include",
+  string:file=@:type="include"
+}
+
+// `ifdef NAME body `endif (and `ifndef variant). Body captured as
+// raw text up to `` `endif ``. Any `` `else `` inside stays in the
+// body; the host evaluates the condition and re-parses the active
+// branch. Nested `` `ifdef `` is opaque — host's preprocessor
+// handles nesting.
+IFDEF: sequence dict {
+  "`ifdef",
+  sv_identifier:cond=@:type="ifdef",
+  *:body=@,
+  "`endif"
+}
+
+IFNDEF: sequence dict {
+  "`ifndef",
+  sv_identifier:cond=@:type="ifndef",
+  *:body=@,
+  "`endif"
 }
