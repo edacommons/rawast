@@ -1164,7 +1164,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
             if (trace_enabled) trace("  key \"" + sv->data() + "\"");
-            KeyParser p(sv->data());
+            KeyParser p(sv->data(), n.strict);
             auto r = p.parse(sr);
             if (r) {
                 // Key matched. The literal itself is not emitted; any

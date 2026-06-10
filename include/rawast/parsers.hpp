@@ -11,8 +11,9 @@ namespace rawast {
 // the surrounding Node is a structural marker (Key with no value child).
 class KeyParser final : public Parser {
     std::string token_;
+    bool        strict_;
 public:
-    explicit KeyParser(std::string token);
+    explicit KeyParser(std::string token, bool strict = false);
     ParseResult parse(StreamReader& sr) override;
     SaveResult  unparse(const Value& value) const override;
 };

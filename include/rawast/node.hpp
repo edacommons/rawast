@@ -95,6 +95,17 @@ public:
     // by the grammar via `"fixed_schema": true` in JSON form.
     bool fixed_schema  = false;
 
+    // Key-only: word-boundary strict matching. When set on a Key node,
+    // the KeyParser additionally checks that the byte immediately after
+    // the matched literal is NOT a word character (alphanumeric or
+    // underscore) — preventing the classic "not" matching the prefix of
+    // "notch" bug. The boundary check fires only if the last character
+    // of the literal is itself a word character; for punctuation keys
+    // (`+`, `(`, `;`) the flag has no effect since no word continuation
+    // is possible. Set by the grammar via `"strict": true` in JSON form
+    // or `'token'` (single-quote literal) in `.rawast` DSL form.
+    bool strict        = false;
+
     // Carried for Key, Parse, Value kinds.
     //   Key   - StringValue holding the literal token to match.
     //   Parse - StringValue holding the name of the terminal parser to invoke.

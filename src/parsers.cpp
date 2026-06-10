@@ -14,8 +14,21 @@ namespace rawast {
 
 // KeyParser ---------------------------------------------------------------
 
-KeyParser::KeyParser(std::string token)
-    : Parser(token), token_(std::move(token)) {}
+KeyParser::KeyParser(std::string token, bool strict)
+    : Parser(token), token_(std::move(token)), strict_(strict) {}
+
+namespace {
+// Word character: ASCII alphanumeric or underscore. Mirrors the regex `\w`
+// convention. Identifier-suffix bytes (those that could continue a word-
+// like token) — anything outside this set is a word boundary.
+inline bool is_word_char(char c) noexcept {
+    auto u = static_cast<unsigned char>(c);
+    return (u >= '0' && u <= '9') ||
+           (u >= 'A' && u <= 'Z') ||
+           (u >= 'a' && u <= 'z') ||
+            u == '_';
+}
+} // namespace
 
 ParseResult KeyParser::parse(StreamReader& sr) {
     sr.mark();
@@ -29,24 +42,37 @@ ParseResult KeyParser::parse(StreamReader& sr) {
                 start, "expected literal '" + token_ + "'"});
         }
     }
+
+    // Strict mode: word-boundary check. Required only when the last
+    // character of the literal is itself a word character — otherwise
+    // there is no word-continuation issue (e.g. a key like "(" or ";"
+    // doesn't need a boundary check). Saves a peek for the common case
+    // of punctuation keys promoted to strict by an over-eager grammar.
+    if (strict_ && !token_.empty() && is_word_char(token_.back())) {
+        auto next = sr.peek();
+        if (next && is_word_char(*next)) {
+            sr.reject();
+            return tl::unexpected(ParseError{
+                start, "expected literal '" + token_ +
+                       "' as a complete word (followed by non-word char)"});
+        }
+    }
+
     sr.accept();
     return make_string(token_);
 }
-// Word-boundary checking inside KeyParser was prototyped and
-// reverted: it correctly handles whitespace-separated grammars
-// (LEF, DEF, GDSII text, JSON) where each token is meant to be
-// word-bounded, but it breaks grammars that intentionally pack
-// adjacent tokens without whitespace (the doctest cases for
-// shared-prefix Choice resolution use single-char keys `"a"` +
-// `"b"` parsing `"ab"` as two tokens), and it changes the
-// contract for grammars that emit compact save output (the
-// rawast meta-grammar saves `"sequence"` + `"dict"` as
-// `sequencedict` — reparse via word-boundary would reject).
-//
-// Until there's an opt-in flag on the Key node (`set_word_bounded`
-// mutator), closed-keyword Choices that need longer-prefix-first
-// matching (`SPACING` ⊂ `SPACINGTABLE`) must be hand-ordered in
-// the grammar; see LAYER_KEYWORD in lefdef.rawast.
+
+// Historical note. Word-boundary checking inside KeyParser was first
+// prototyped as a global default and reverted because it broke grammars
+// that intentionally pack adjacent tokens without whitespace (single-
+// char keys `"a"` + `"b"` parsing `"ab"`) and changed the contract for
+// grammars that emit compact save output (the rawast meta-grammar
+// saves `"sequence"` + `"dict"` as `sequencedict`). The opt-in form
+// added here — Node.strict, exposed via JSON `"strict": true` and DSL
+// single-quote literal — leaves the default behaviour identical for
+// byte-exact keys while letting closed-keyword grammars (LEF/DEF spec
+// keywords, language reserved words like `not`/`notch`) request word-
+// bounded matching where it's actually needed.
 
 SaveResult KeyParser::unparse(const Value& /*value*/) const {
     // Literal is fixed; the input value (if any) is ignored.

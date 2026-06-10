@@ -45,6 +45,68 @@ TEST_CASE("KeyParser leaves the stream unchanged on failure") {
     CHECK(sr.get() == 't');
 }
 
+TEST_CASE("KeyParser strict mode rejects identifier continuation") {
+    // Default (non-strict): "not" matches the prefix of "notch".
+    {
+        std::istringstream is{"notch"};
+        StreamReader sr{is};
+        KeyParser p{"not", /*strict=*/false};
+        auto r = p.parse(sr);
+        REQUIRE(r);
+        CHECK(sr.get() == 'c');  // "ch" remains in the stream
+    }
+    // Strict: same input fails because "c" is a word continuation.
+    {
+        std::istringstream is{"notch"};
+        StreamReader sr{is};
+        KeyParser p{"not", /*strict=*/true};
+        auto r = p.parse(sr);
+        REQUIRE_FALSE(r);
+        CHECK(sr.get() == 'n');  // stream unchanged on failure
+    }
+}
+
+TEST_CASE("KeyParser strict mode accepts word-bounded match") {
+    // "not foo" — strict accepts because ' ' is a non-word boundary.
+    std::istringstream is{"not foo"};
+    StreamReader sr{is};
+    KeyParser p{"not", /*strict=*/true};
+    auto r = p.parse(sr);
+    REQUIRE(r);
+    CHECK(sr.get() == ' ');  // space remains
+}
+
+TEST_CASE("KeyParser strict mode accepts EOF as boundary") {
+    // "not" with nothing after — strict accepts because EOF terminates the word.
+    std::istringstream is{"not"};
+    StreamReader sr{is};
+    KeyParser p{"not", /*strict=*/true};
+    auto r = p.parse(sr);
+    REQUIRE(r);
+}
+
+TEST_CASE("KeyParser strict mode is a no-op for punctuation keys") {
+    // Last char of "+" is non-word, so strict has no effect — "+5" still
+    // matches the "+" prefix regardless of strict flag. Saves an
+    // unnecessary peek for grammars that promote punctuation to strict.
+    {
+        std::istringstream is{"+5"};
+        StreamReader sr{is};
+        KeyParser p{"+", /*strict=*/false};
+        auto r = p.parse(sr);
+        REQUIRE(r);
+        CHECK(sr.get() == '5');
+    }
+    {
+        std::istringstream is{"+5"};
+        StreamReader sr{is};
+        KeyParser p{"+", /*strict=*/true};
+        auto r = p.parse(sr);
+        REQUIRE(r);
+        CHECK(sr.get() == '5');
+    }
+}
+
 // IntParser ---------------------------------------------------------
 
 TEST_CASE("IntParser parses positive integer") {

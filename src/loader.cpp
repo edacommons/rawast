@@ -782,6 +782,12 @@ populate(Grammar& g, NodeId target, const Value& body) {
         auto key_r = dict_string(*dv, "key");
         if (!key_r) return tl::unexpected(key_r.error());
         n.value = make_string(*key_r);
+        // Word-boundary strict matching. When `"strict": true`, the
+        // KeyParser requires the byte after the matched literal to be a
+        // non-word character (or EOF). DSL form: `'token'` (single-quote
+        // literal). Lets closed-keyword grammars opt into the boundary
+        // check without changing the default byte-prefix behaviour.
+        n.strict = dict_bool(*dv, "strict");
         // `"X":@` shorthand — `emit: true` flag means "use the key's own
         // text as the emitted value." Equivalent at runtime to
         // `{key: "X", value: "X"}`.
