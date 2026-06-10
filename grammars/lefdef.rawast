@@ -169,9 +169,9 @@ USEMINSPACING_CMD: sequence dict {
 //   END SPACING
 
 SPACING_BLOCK: sequence dict {
-  "SPACING":type="Spacing" newline,
+  'SPACING':type="Spacing" newline,
   <SAMENET_RULES>:items=@,
-  "END" space, "SPACING" newline
+  "END" space, 'SPACING' newline
 }
 
 SAMENET_RULES: sequence array { repeat <SAMENET_RULE> }
@@ -607,7 +607,7 @@ MACRO_DENSITY_RECTS: sequence array { repeat+ <MACRO_DENSITY_RECT> }
 // alone — otherwise a `RectShape | DensityRect` union would be
 // ambiguous on the shared discriminator.
 MACRO_DENSITY_RECT: sequence dict {
-  "RECT":type="DensityRect" space,
+  'RECT':type="DensityRect" space,
   <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
   <NUMBER>:x2=@ space, <NUMBER>:y2=@ space,
   <NUMBER>:density=@ space,
@@ -922,7 +922,7 @@ LAYER_GROUP_MOD: choice {
 }
 
 LAYER_GROUP_EXCEPTPGNET:     sequence { "EXCEPTPGNET":except_pg_net=true space }
-LAYER_GROUP_SPACING:         sequence { "SPACING"         space, <NUMBER>:spacing=@           space }
+LAYER_GROUP_SPACING:         sequence { 'SPACING'         space, <NUMBER>:spacing=@           space }
 LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:design_rule_width=@ space }
 // LAYER-level MASK uses the same MASK_MOD rule as per-shape MASK
 // (both emit `mask_num` to the parent — LAYER_GROUP dict in this
@@ -931,7 +931,7 @@ LAYER_GROUP_DESIGNRULEWIDTH: sequence { "DESIGNRULEWIDTH" space, <NUMBER>:design
 // Per-LAYER-group WIDTH statement — sets the default wire width for
 // subsequent shapes (separate from LAYER's MASK / SPACING modifiers).
 LAYER_WIDTH_CMD: sequence {
-  "WIDTH" space, <NUMBER>:width=@ space, ";" newline
+  'WIDTH' space, <NUMBER>:width=@ space, ";" newline
 }
 
 SHAPES: sequence array { repeat <SHAPE> }
@@ -962,7 +962,7 @@ STEP_PATTERN: sequence dict {
 }
 
 RECT_SHAPE: sequence dict {
-  "RECT":type="Rect" space,
+  'RECT':type="Rect" space,
   ?<MASK_MOD>,
   ?<ITERATE_PREFIX>,
   <NUMBER>:x1=@ space, <NUMBER>:y1=@ space,
@@ -1138,7 +1138,7 @@ LAYER_DENSITYCHECKWINDOW_CMD: sequence dict {
 // WIDTH inside LAYER_BLOCK is a single-number sub-clause (not the
 // same as the per-PORT WIDTH statement bound to `default_width`).
 // Distinct name to avoid the LAYER-WIDTH / LAYER_GROUP-WIDTH overlap.
-LAYER_WIDTH_CLAUSE: sequence { "WIDTH" space, <NUMBER>:width=@ space, ";" newline }
+LAYER_WIDTH_CLAUSE: sequence { 'WIDTH' space, <NUMBER>:width=@ space, ";" newline }
 
 // Everything else — SPACING / SPACINGTABLE / RESISTANCE w/qualifier /
 // CAPACITANCE w/qualifier / ANTENNA* / PROPERTY (LEF58_*) / etc. —
@@ -1225,7 +1225,7 @@ LAYER_PAREN_GROUP: sequence array {
 LAYER_KEYWORD: choice {
   // High-frequency (every routing LAYER hits these on Sky130 / NanGate).
   "SPACINGTABLE":@,       // MUST precede SPACING — prefix hazard
-  "SPACING":@,
+  'SPACING':@,
   "RESISTANCE":@,
   "CAPACITANCE":@,
   "ANTENNAMODEL":@,
@@ -1514,7 +1514,7 @@ VIARULE_ENCLOSURE_CMD: sequence dict {
 // SPACING in VIARULE GENERATE is `SPACING x BY y` per spec; the
 // `BY` keyword is a structural separator.
 VIARULE_SPACING_CMD: sequence dict {
-  "SPACING" space, <NUMBER>:x=@ space, "BY" space, <NUMBER>:y=@ space, ";" newline
+  'SPACING' space, <NUMBER>:x=@ space, "BY" space, <NUMBER>:y=@ space, ";" newline
 }
 
 // `WIDTH minWidth TO maxWidth ;` — only valid for the GENERATE
@@ -1524,7 +1524,7 @@ VIARULE_SPACING_CMD: sequence dict {
 // older NanGate variants) ship this form. The `TO` is a
 // structural separator the engine matches and discards.
 VIARULE_WIDTH_RANGE_CMD: sequence dict {
-  "WIDTH" space, <NUMBER>:min=@ space, "TO" space, <NUMBER>:max=@ space, ";" newline
+  'WIDTH' space, <NUMBER>:min=@ space, "TO" space, <NUMBER>:max=@ space, ";" newline
 }
 
 VIARULE_RESISTANCE_CMD: sequence {
@@ -1639,8 +1639,8 @@ NDR_LAYER_PROP: choice {
   <NDR_LAYER_WIREEXT>
 }
 
-NDR_LAYER_WIDTH:       sequence { "WIDTH"       space, <NUMBER>:width=@ space }
-NDR_LAYER_SPACING:     sequence { "SPACING"     space, <NUMBER>:spacing=@ space }
+NDR_LAYER_WIDTH:       sequence { 'WIDTH'       space, <NUMBER>:width=@ space }
+NDR_LAYER_SPACING:     sequence { 'SPACING'     space, <NUMBER>:spacing=@ space }
 NDR_LAYER_DIAGSPACING: sequence { "DIAGSPACING" space, <NUMBER>:diag_spacing=@ space }
 NDR_LAYER_WIREEXT:     sequence { "WIREEXT"     space, <NUMBER>:wire_ext=@ space }
 
@@ -2018,7 +2018,7 @@ DEF_VIA_PATTERNNAME_CLAUSE: sequence dict {
 // form). Optional MASK qualifier as a separate optional sub-
 // clause.
 DEF_VIA_RECT_CLAUSE: sequence dict {
-  "+" space, "RECT":type="Rect" space,
+  "+" space, 'RECT':type="Rect" space,
   identifier:layer=@ space,
   ?<DEF_VIA_MASK_QUAL>,
   <RECT_COORDS>
@@ -2083,7 +2083,7 @@ DEF_NDR_HARDSPACING_CLAUSE: sequence dict {
 DEF_NDR_LAYER_CLAUSE: sequence dict {
   "+" space, "LAYER":type="Layer" space,
   identifier:layer=@ space,
-  "WIDTH" space, <NUMBER>:width=@ space,
+  'WIDTH' space, <NUMBER>:width=@ space,
   ?<DEF_NDR_LAYER_DIAGWIDTH>,
   ?<DEF_NDR_LAYER_SPACING>,
   ?<DEF_NDR_LAYER_WIREEXT>
@@ -2092,7 +2092,7 @@ DEF_NDR_LAYER_DIAGWIDTH: sequence {
   "DIAGWIDTH" space, <NUMBER>:diag_width=@ space
 }
 DEF_NDR_LAYER_SPACING: sequence {
-  "SPACING" space, <NUMBER>:spacing=@ space
+  'SPACING' space, <NUMBER>:spacing=@ space
 }
 DEF_NDR_LAYER_WIREEXT: sequence {
   "WIREEXT" space, <NUMBER>:wire_ext=@ space
@@ -2484,7 +2484,7 @@ DEF_PIN_LAYER_QUALIFIER: choice {
   <DEF_PIN_LAYER_DRW>
 }
 DEF_PIN_LAYER_SPACING: sequence {
-  "SPACING" space, <NUMBER>:spacing=@ space
+  'SPACING' space, <NUMBER>:spacing=@ space
 }
 DEF_PIN_LAYER_DRW: sequence {
   "DESIGNRULEWIDTH" space, <NUMBER>:design_rule_width=@ space
@@ -2678,7 +2678,7 @@ DEF_BLOCKAGE_COMPONENT: sequence dict {
   identifier:component=@ space
 }
 DEF_BLOCKAGE_SPACING: sequence dict {
-  "+" space, "SPACING":type="Spacing" space,
+  "+" space, 'SPACING':type="Spacing" space,
   <NUMBER>:spacing=@ space
 }
 DEF_BLOCKAGE_DRW: sequence dict {
@@ -2690,7 +2690,7 @@ DEF_BLOCKAGE_MASK: sequence dict {
 }
 
 DEF_BLOCKAGE_RECT: sequence dict {
-  "RECT":type="Rect" space,
+  'RECT':type="Rect" space,
   <RECT_COORDS>
 }
 
@@ -2752,7 +2752,7 @@ DEF_SLOT_SHAPE: choice {
 }
 
 DEF_SLOT_RECT: sequence dict {
-  "RECT":type="Rect" space,
+  'RECT':type="Rect" space,
   <RECT_COORDS>
 }
 
@@ -2834,7 +2834,7 @@ DEF_FILL_OPC_FLAG: sequence dict {
 }
 
 DEF_FILL_RECT: sequence dict {
-  "RECT":type="Rect" space,
+  'RECT':type="Rect" space,
   <RECT_COORDS>
 }
 
@@ -2938,7 +2938,7 @@ DEF_NET_PATH_VIRTUAL: sequence dict {
 // emits this form for via-cut RECT shapes embedded in
 // routing paths.
 DEF_NET_PATH_PARENS_RECT: sequence dict {
-  "RECT":type="PathRect" space,
+  'RECT':type="PathRect" space,
   "(" space,
   <DEF_NET_COORD>:x1=@ space, <DEF_NET_COORD>:y1=@ space,
   <DEF_NET_COORD>:x2=@ space, <DEF_NET_COORD>:y2=@ space,
@@ -3091,7 +3091,7 @@ DEF_SPECIALNET_VOLTAGE: sequence dict {
   "+" space, "VOLTAGE":type="Voltage" space, <NUMBER>:voltage=@ space
 }
 DEF_SPECIALNET_SPACING: sequence dict {
-  "+" space, "SPACING":type="Spacing" space,
+  "+" space, 'SPACING':type="Spacing" space,
   identifier:layer=@ space, <NUMBER>:spacing=@ space,
   ?<DEF_SPECIALNET_SPACING_RANGE>
 }
@@ -3205,7 +3205,7 @@ DEF_NET_PATH_MID_MASK: sequence dict {
 // Distinct from BLOCKAGES/FILLS/SLOTS RECT because it has
 // the `+` separator and emits as a body element.
 DEF_SPECIALNET_BODY_RECT: sequence dict {
-  "+" space, "RECT":type="Rect" space, identifier:layer=@ space,
+  "+" space, 'RECT':type="Rect" space, identifier:layer=@ space,
   "(" space, <DEF_NET_COORD>:x1=@ space, <DEF_NET_COORD>:y1=@ space, ")" space,
   "(" space, <DEF_NET_COORD>:x2=@ space, <DEF_NET_COORD>:y2=@ space, ")" space
 }
