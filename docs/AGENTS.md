@@ -196,9 +196,11 @@ But this trade is rarely worth it — the linter (LL(k) lookahead) won't flag th
 
 ### Silencing the lint on intentional shared-prefix Choices
 
-The lint's LL(k) check is conservative — it flags shared-prefix Choices when one of the alternatives can begin with a generic Parse (identifier, number) that has no Key constraint at the lookahead depth. PEG handles these cases correctly via alt-failure recovery (alt A is tried, fails, alt B is tried), but the lint warns because the first-token analysis can't prove disjointness within bounded depth.
+The lint's LL(k) check flags Choices where two alternatives share a leading rule that can't be disambiguated by first-token analysis within bounded depth. The OR / OR_MULTI pattern above is a typical example — both branches start with `<AND>`, and the lint can't prove they diverge within its lookahead window because `<AND>` can begin with a generic Parse (identifier, number).
 
-The right marker is `backtrack: true` on the Choice — it tells both the engine and the lint "this alt-failure pattern is intentional." Today the DSL doesn't have syntax for this attribute (tracked as issue #4); the workaround is to set it on the dict at load time before passing to `Grammar.from_dict()`:
+**Important — this is a lint annotation, NOT a runtime control.** The rawast engine *always* backtracks Choice frames at runtime: every alternative attempt is wrapped in input-cursor `mark()` / `reject()`, so partial alt-failure cleanly restores position and tries the next alt. The shared-prefix pattern parses correctly without any `backtrack: true` setting. The lint just can't see that statically, so it flags as a heads-up.
+
+To silence the lint on a Choice that uses an intentional fall-through pattern, set `backtrack: true` on the Choice. Today the DSL doesn't have syntax for this attribute (tracked as issue #4); the workaround is to set it on the dict at load time before passing to `Grammar.from_dict()`:
 
 ```python
 import rawast
@@ -213,9 +215,9 @@ def _load(grammar_path: str, backtrack_rules: tuple[str, ...]) -> rawast.Grammar
 grammar = _load("constraint.rawast", backtrack_rules=("OR", "AND", "RELATION"))
 ```
 
-This is a **loader configuration**, not AST post-processing. The grammar still emits the host's IR shape directly via bindings; the dict gets one flag per Choice rule before construction. The lint goes clean; the parse behavior is unchanged. When the DSL syntax for `backtrack` lands (issue #4), this loader hook collapses to nothing — but `backtrack: true` in the dict is the canonical way to express the same intent today.
+This is a **loader-time lint annotation**, not AST post-processing. The grammar still emits the host's IR shape directly via bindings; the dict gets one flag per Choice rule before construction. The lint output goes clean; the parse behaviour is identical with or without it. When DSL syntax for `backtrack` lands (issue #4), this loader hook collapses to nothing.
 
-The honest framing: this is the one piece of "Python around a rawast grammar" that ISN'T an anti-pattern. It's saying "this Choice was designed to use alt-failure intentionally" — a structural assertion about the grammar, not a transformation of parsed output.
+The honest framing: this is the one piece of "Python around a rawast grammar" that isn't an anti-pattern. It's a *grammar annotation* saying "this fall-through pattern is intentional, don't warn me." Skip the loader hook entirely if you don't mind a few lint warnings — the grammar still produces correct output either way.
 
 ## How an agent uses the parsed AST
 

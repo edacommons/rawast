@@ -475,18 +475,22 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
             issue.alternatives.assign(still_ambiguous.begin(),
                                       still_ambiguous.end());
             issue.description =
-                "Choice has an ambiguous first-token \"" + tok + "\" across " +
+                "Choice has shared first-token \"" + tok + "\" across " +
                 std::to_string(issue.alternatives.size()) +
                 " alternatives whose key-paths remain indistinguishable up to "
-                "depth " + std::to_string(kMaxDepth) + ". Without "
-                "`backtrack: true` the predictive engine will commit to the "
-                "first one and the others become unreachable. Either set "
-                "`backtrack: true` on the Choice or restructure the grammar "
-                "so the alternatives diverge at some Key position. "
-                "(Alternatives that share the first token but diverge at a "
-                "later Key — e.g. `\"+\", \"FIXED\"` vs `\"+\", \"ROUTED\"` — "
-                "are not flagged: PEG's ordered choice naturally falls back "
-                "between them on alt failure.)";
+                "LL(" + std::to_string(kMaxDepth) + ") lookahead. The engine "
+                "handles this correctly via alt-failure recovery (every Choice "
+                "frame is backtracked at runtime — partial alt matches restore "
+                "input cursor and the next alt is tried). The lint flags it as "
+                "a heads-up because the analysis can't prove disjointness "
+                "statically. Either set `backtrack: true` on the Choice to "
+                "mark this fall-through pattern as intentional (silences this "
+                "warning; runtime behaviour is unchanged), or restructure the "
+                "grammar so the alternatives diverge within LL(" +
+                std::to_string(kMaxDepth) + ") lookahead. "
+                "(Choices that share the first token but diverge at a later "
+                "Key — e.g. `\"+\", \"FIXED\"` vs `\"+\", \"ROUTED\"` — are not "
+                "flagged: the LL(k) check sees through to the diverging Key.)";
             issues.push_back(std::move(issue));
         }
     }

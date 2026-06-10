@@ -746,10 +746,20 @@ permitted.
 choice_expr ::= 'choice' '{' items '}'
 ```
 
-Ordered alternation: the first alternative whose initial terminal
-accepts is selected (predictive PEG; rawast does not backtrack at the
-structural level). All alternatives must be terminal-prefix-
-distinguishable; the grammar linter (planned) flags violations.
+Ordered alternation: alternatives are tried in source order. Each
+alternative attempt is wrapped in input-cursor `mark()` / `reject()` —
+if an alternative partially matches and then fails, the input position
+is restored and the next alternative is tried from the same position.
+This is standard PEG ordered-choice semantics and applies to every
+Choice node by default; the `backtrack: true` attribute on a Choice
+(if explicitly set) is retained as a *grammar-author annotation* that
+the linter uses to suppress LL(k)-ambiguity warnings on intentional
+shared-prefix patterns. It does not gate runtime behaviour.
+
+Alternatives with overlapping first-token signatures still parse
+correctly via the alt-failure recovery above, but the linter flags
+them as a heads-up unless `backtrack: true` is set on the Choice.
+See the `Grammar::lint()` machinery and `docs/AGENTS.md`.
 
 ### 4.8 Repeat — `repeat expression [separator expression]`
 
