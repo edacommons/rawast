@@ -64,6 +64,13 @@ Your output is a single .rawast file. Conventions:
   fires otherwise).
 - Use `:name[]=@` for multi-instance clauses, not the catcher flatten.
 - For vendor-extension or opaque body content, use `*:body=@, "STOP" newline`.
+- **Pick the right literal form**: `"text"` is byte-prefix (matches "text"
+  even as the prefix of "textfoo"); `'text'` is strict / word-bounded
+  (only matches "text" when followed by a non-word char or EOF). Use
+  single-quote `'...'` for language reserved words and spec keywords
+  that mustn't consume into identifiers (e.g. `'not'`, `'END'`, `'MACRO'`).
+  Use double-quote `"..."` for punctuation, openers, or intentional
+  prefix captures (e.g. `"LEF58_":@`). See `docs/rawast-format.md` §4.2a.
 - Add a comment with the spec section number for each non-trivial rule.
 
 Before emitting, mentally walk the grammar through:
@@ -144,6 +151,8 @@ Round-trip property: `parse → typed model → edit → dump → save` is lossl
 **Test grammars with `rawast pycode` against real files.** Once a grammar exists, point `rawast pycode` at a real instance of the format to generate Python source that reconstructs the same model. If the round-trip diverges, the grammar has a coverage gap. This is faster than hand-writing test fixtures and catches gaps the agent missed at authoring time.
 
 **Track grammars in git like code.** Version them alongside the format spec they model. A grammar at v1.0 should produce the same AST for the same file across runs. Treat grammar updates the same way you treat schema migrations.
+
+**Default keywords to strict (`'token'`).** When the format spec defines a reserved-word vocabulary that mustn't collide with identifiers — language keywords, section names, named clauses — author them as `'KEYWORD'` (single-quote, word-bounded) rather than `"KEYWORD"` (byte-prefix). Catches a whole class of bugs at parse time: byte-prefix `"not"` silently matches the prefix of `"notch"`, leaving `"ch"` as a phantom identifier; strict `'not'` correctly rejects, so a Choice over `'not'` / `notch` dispatches to the right branch without depending on hand-ordering. The cost of strict is one peek per match; the benefit is a class of bugs that doesn't reach runtime.
 
 ## When NOT to use rawast for agent work
 

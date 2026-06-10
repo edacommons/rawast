@@ -95,17 +95,24 @@ in separate registries — but mixing them within a file is discouraged.
 
 ### 2.5 String literals
 
-Double-quoted, with backslash-pass-through for embedded quotes:
+Two quoting forms, both with backslash-pass-through for embedded
+quotes. The forms have distinct semantics in `KEY_EXPR` (see §4.2 and
+§4.2a) but are otherwise syntactically interchangeable wherever the
+grammar reads a string token:
 
 ```
-"hello"
+"hello"                     // double-quote — byte-prefix Key
 "with \"embedded\" quotes"
 "//\\/* etc */"
+
+'hello'                     // single-quote — strict (word-bounded) Key
+'with \'embedded\' quotes'
 ```
 
 The backslash itself is preserved verbatim (this is the engine's existing
-pass-through escape behaviour from `DoubleQuoteStringParser`; higher-level
-escape interpretation is a future concern).
+pass-through escape behaviour from `DoubleQuoteStringParser` /
+`SingleQuoteStringParser`; higher-level escape interpretation is a future
+concern).
 
 ### 2.6 Reserved words
 
@@ -287,6 +294,77 @@ text but emit no value to the surrounding catcher.
 ```
 "[", "{", ":"
 ```
+
+### 4.2a Strict literal — `'text'`
+
+```
+strict_literal ::= single_quote_string
+```
+
+A literal that additionally requires a *word boundary* after the
+matched bytes. The match succeeds only when the byte immediately
+following the literal is **not** a word character (ASCII alphanumeric
+or `_`) — or when the literal lands at end-of-input. Produces a Key
+node with `Node.strict = true`.
+
+```
+'not'              // matches "not", "not foo", "not\n", "not;"
+                   // does NOT match the prefix of "notch" or "notty"
+
+'END'              // matches "END;" or "END\n"
+                   // does NOT match the prefix of "ENDSECTION"
+```
+
+The boundary check fires only when the *last* character of the literal
+is itself a word character. For punctuation literals like `'+'`, `'('`,
+`';'`, the strict form has no effect (and there is no reason to write
+them as strict) — the engine still emits the Key node but skips the
+boundary check at parse time.
+
+**When to use which form.**
+
+Reach for `"text"` (byte-prefix, current default) when:
+
+- The literal is punctuation or an operator that may legitimately
+  abut following content (`"+"`, `"<"`, `";"`).
+- Adjacent tokens are packed without whitespace and the literal is a
+  short opener that the next item will consume past (e.g. `"["` in a
+  bracketed list).
+- You're capturing a fixed prefix that introduces opaque content
+  (`"LEF58_":@` for vendor-extension property names).
+
+Reach for `'text'` (strict, word-bounded) when:
+
+- The literal is a closed-keyword that must not be confused with an
+  identifier — language reserved words (`'if'`, `'not'`, `'while'`),
+  spec keywords (`'END'`, `'MACRO'`, `'PIN'`).
+- A grammar Choice has alternatives whose literals share a prefix
+  (`'SPACING'` vs `'SPACINGTABLE'`); strict mode lets the engine pick
+  the right alternative without depending on hand-ordering.
+- The same identifier-suffix can legitimately appear elsewhere in the
+  grammar (`'do'` in a language that also accepts identifiers like
+  `done` or `doc`).
+
+**Round-trip.**
+
+The save direction preserves the surface form. A grammar source that
+used `'token'` will save back to `'token'`; one that used `"token"`
+saves back to `"token"`. Internally the discriminator is the
+`Node.strict` flag carried through the parse-Node-save chain.
+
+**JSON-form equivalent.**
+
+In JSON form, the strict variant is expressed by either of these
+equivalent shapes — the loader accepts both:
+
+```json
+{"type": "strict_key", "key": "not"}
+{"type": "key", "key": "not", "strict": true}
+```
+
+The DSL `'not'` always lowers to the first form; the second form
+remains available as an escape hatch for machine-generated JSON
+that prefers a single `type` value.
 
 ### 4.3 Literal with constant — `"text":CONSTANT`
 
