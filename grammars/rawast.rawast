@@ -111,12 +111,31 @@ CHOICE_EXPR: sequence {
   "{", <ITEMS>:value=@, "}"
 }
 
+// `repeat` quantifier syntax:
+//   repeat <X>       → min=0 (zero-or-more, classic PEG `*`)
+//   repeat+ <X>      → min=1 (one-or-more, classic PEG `+`)
+//   repeat+N <X>     → min=N (at least N occurrences, N ≥ 2)
+//
+// The two `+`-prefixed forms are a Choice. Save dispatch picks
+// `REPEAT_PLUS_ONE` for dict.min == 1 (specific const matches) and
+// falls through to `REPEAT_PLUS_N` for higher values. Parse tries
+// `REPEAT_PLUS_N` first so `+2` greedy-matches the digit; the engine
+// falls back to `REPEAT_PLUS_ONE` for bare `+` via Choice-frame
+// alt-failure recovery.
 REPEAT_EXPR: sequence {
   "repeat":type="repeat",
-  ?"+":min=1,
+  ?<REPEAT_PLUS_FORM>,
   <ITEM>:value=@,
   ?<SEPARATOR>
 }
+
+REPEAT_PLUS_FORM: choice {
+  <REPEAT_PLUS_N>,
+  <REPEAT_PLUS_ONE>
+}
+
+REPEAT_PLUS_N: sequence { "+", int:min=@ }
+REPEAT_PLUS_ONE: sequence { "+":min=1 }
 
 SEPARATOR: sequence { "separator", <ITEM>:separator=@ }
 

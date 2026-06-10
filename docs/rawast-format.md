@@ -762,20 +762,37 @@ cost is real, even if small), not bugs. There is no flag to suppress
 them; either restructure the alternatives to diverge earlier, or
 accept the warning as a permanent design note.
 
-### 4.8 Repeat — `repeat expression [separator expression]`
+### 4.8 Repeat — `repeat[+[N]] expression [separator expression]`
 
 ```
-repeat_expr ::= 'repeat' expression ('separator' expression)?
+repeat_expr ::= 'repeat' ('+' int?)? expression ('separator' expression)?
 ```
 
-Zero-or-more iteration of the given expression, optionally separated
-between iterations by the separator expression. Produces no container
-of its own; the surrounding sequence's container catches the iteration
+Iteration of the given expression, optionally separated between
+iterations by the separator expression. Produces no container of its
+own; the surrounding sequence's container catches the iteration
 results.
 
+The quantifier suffix sets a minimum required iteration count:
+
 ```
-repeat <VALUE> separator ","            // for arrays
-repeat <PAIR> separator ","             // for dicts
+repeat <X>          // min=0 (zero-or-more)
+repeat+ <X>         // min=1 (one-or-more)
+repeat+2 <X>        // min=2 (at-least-two)
+repeat+5 <X>        // min=5 (at-least-five), etc.
+```
+
+`repeat+` is shorthand for `repeat+1`. The save direction canonicalises
+back to the same surface form on round-trip (min=1 emits `repeat+`,
+min=N for N≥2 emits `repeat+N`).
+
+Examples:
+
+```
+repeat <VALUE> separator ","            // 0+ values, for arrays
+repeat <PAIR> separator ","             // 0+ pairs, for dicts
+repeat+ <ITEM>                          // 1+ items (classic PEG `+`)
+repeat+2 <ARG>:args[]=@ separator ","   // at least 2 args (e.g. a binary op)
 ```
 
 ### 4.9 Optional — `?expression`

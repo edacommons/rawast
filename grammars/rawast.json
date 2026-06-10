@@ -321,35 +321,47 @@
         "type": "key",
         "key": "repeat",
         "bindings": [
-          {
-            "name": "type",
-            "value": "repeat"
-          }
+          { "name": "type", "value": "repeat" }
         ]
       },
-      {
-        "type": "key",
-        "key": "+",
-        "optional": true,
-        "bindings": [
-          {
-            "name": "min",
-            "value": 1
-          }
-        ]
-      },
+      { "type": "REPEAT_PLUS_FORM", "optional": true },
       {
         "type": "ITEM",
         "bindings": [
-          {
-            "name": "value",
-            "value": "@"
-          }
+          { "name": "value", "value": "@" }
         ]
       },
+      { "type": "SEPARATOR", "optional": true }
+    ]
+  },
+  "REPEAT_PLUS_FORM": {
+    "type": "choice",
+    "value": [
+      { "type": "REPEAT_PLUS_N" },
+      { "type": "REPEAT_PLUS_ONE" }
+    ]
+  },
+  "REPEAT_PLUS_N": {
+    "type": "sequence",
+    "value": [
+      { "type": "key", "key": "+" },
       {
-        "type": "SEPARATOR",
-        "optional": true
+        "type": "int",
+        "bindings": [
+          { "name": "min", "value": "@" }
+        ]
+      }
+    ]
+  },
+  "REPEAT_PLUS_ONE": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "key",
+        "key": "+",
+        "bindings": [
+          { "name": "min", "value": 1 }
+        ]
       }
     ]
   },
