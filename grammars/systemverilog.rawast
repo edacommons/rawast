@@ -704,90 +704,98 @@ WAIT_STMT: sequence dict {
 // the design-choice comment at the top of this file. The grammar
 // emits `{op, args:[lhs, rhs]}` only for exactly two operands.
 
+// Each binop precedence level uses the `NEXT (OP NEXT)*` pattern:
+//
+//   LEVEL: sequence dict {
+//     <NEXT>:lhs=@,
+//     repeat <LEVEL_TAIL>:tail[]=@
+//   }
+//   LEVEL_TAIL: sequence dict { <OP>:op=@, <NEXT>:rhs=@ }
+//
+// This parses NEXT *once*, then loops looking for `OP NEXT` greedily.
+// Linear in the number of operands. CRITICALLY: this avoids the 2^N
+// exponential blowup of the `choice { LEVEL_BINOP, NEXT }` pattern
+// where the binop alt re-parses NEXT just to fail on the missing
+// operator. See issue #8 for the diagnosis — single set of parens
+// went from 209M frames (100s) to ~600 frames (<1ms).
+//
+// IR shape:
+//   no operator         → `{lhs: <inner>, tail: []}` (or just <inner>
+//                          if the host strips empty-tail wrappers)
+//   one or more ops     → `{lhs: <inner>, tail: [{op, rhs}, …]}`
+//
+// Left-associativity (`a + b - c` should mean `(a + b) - c`) is
+// encoded structurally in the tail list order; host applies a
+// left-fold pass if it needs nested `{op, args}` form.
+
 EXPR: choice { <TERNARY>, <LOR> }
 
 TERNARY: sequence dict {
-  <LOR>:args[]=@, "?", <EXPR>:args[]=@, ":", <EXPR>:args[]=@:op="?:"
+  <LOR>:cond=@:op="?:", "?", <EXPR>:then=@, ":", <EXPR>:else=@
 }
 
-LOR: choice { <LOR_BINOP>, <LAND> }
-LOR_BINOP: sequence dict {
-  <LAND>:args[]=@, "||", <LAND>:args[]=@:op="||"
-}
+LOR: sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
+LOR_TAIL: sequence dict { "||":op="||", <LAND>:rhs=@ }
 
-LAND: choice { <LAND_BINOP>, <BOR> }
-LAND_BINOP: sequence dict {
-  <BOR>:args[]=@, "&&", <BOR>:args[]=@:op="&&"
-}
+LAND: sequence dict { <BOR>:lhs=@, repeat <LAND_TAIL>:tail[]=@ }
+LAND_TAIL: sequence dict { "&&":op="&&", <BOR>:rhs=@ }
 
-BOR: choice { <BOR_BINOP>, <BXOR> }
-BOR_BINOP: sequence dict {
-  <BXOR>:args[]=@, "|", <BXOR>:args[]=@:op="|"
-}
+BOR: sequence dict { <BXOR>:lhs=@, repeat <BOR_TAIL>:tail[]=@ }
+BOR_TAIL: sequence dict { "|":op="|", <BXOR>:rhs=@ }
 
-BXOR: choice { <BXOR_BINOP>, <BAND> }
-BXOR_BINOP: sequence dict {
-  <BAND>:args[]=@, <BXOR_OP>:op=@, <BAND>:args[]=@
-}
+BXOR: sequence dict { <BAND>:lhs=@, repeat <BXOR_TAIL>:tail[]=@ }
+BXOR_TAIL: sequence dict { <BXOR_OP>:op=@, <BAND>:rhs=@ }
 
 BXOR_OP: choice { "^~":@, "~^":@, "^":@ }
 
-BAND: choice { <BAND_BINOP>, <EQUALITY> }
-BAND_BINOP: sequence dict {
-  <EQUALITY>:args[]=@, "&", <EQUALITY>:args[]=@:op="&"
-}
+BAND: sequence dict { <EQUALITY>:lhs=@, repeat <BAND_TAIL>:tail[]=@ }
+BAND_TAIL: sequence dict { "&":op="&", <EQUALITY>:rhs=@ }
 
-EQUALITY: choice { <EQUALITY_BINOP>, <RELATIONAL> }
-EQUALITY_BINOP: sequence dict {
-  <RELATIONAL>:args[]=@, <EQUALITY_OP>:op=@, <RELATIONAL>:args[]=@
-}
+EQUALITY: sequence dict { <RELATIONAL>:lhs=@, repeat <EQUALITY_TAIL>:tail[]=@ }
+EQUALITY_TAIL: sequence dict { <EQUALITY_OP>:op=@, <RELATIONAL>:rhs=@ }
 
 // Longest-first so `===` wins over `==` and `!==` wins over `!=`.
 EQUALITY_OP: choice {
   "===":@, "!==":@, "==?":@, "!=?":@, "==":@, "!=":@
 }
 
-RELATIONAL: choice { <RELATIONAL_BINOP>, <SHIFT> }
-RELATIONAL_BINOP: sequence dict {
-  <SHIFT>:args[]=@, <RELATIONAL_OP>:op=@, <SHIFT>:args[]=@
-}
+RELATIONAL: sequence dict { <SHIFT>:lhs=@, repeat <RELATIONAL_TAIL>:tail[]=@ }
+RELATIONAL_TAIL: sequence dict { <RELATIONAL_OP>:op=@, <SHIFT>:rhs=@ }
 
 RELATIONAL_OP: choice {
   "<=":@, ">=":@, "<":@, ">":@
 }
 
-SHIFT: choice { <SHIFT_BINOP>, <ADD> }
-SHIFT_BINOP: sequence dict {
-  <ADD>:args[]=@, <SHIFT_OP>:op=@, <ADD>:args[]=@
-}
+SHIFT: sequence dict { <ADD>:lhs=@, repeat <SHIFT_TAIL>:tail[]=@ }
+SHIFT_TAIL: sequence dict { <SHIFT_OP>:op=@, <ADD>:rhs=@ }
 
 // Arithmetic shifts (<<<, >>>) before logical shifts so longer wins.
 SHIFT_OP: choice {
   "<<<":@, ">>>":@, "<<":@, ">>":@
 }
 
-ADD: choice { <ADD_BINOP>, <MUL> }
-ADD_BINOP: sequence dict {
-  <MUL>:args[]=@, <ADD_OP>:op=@, <MUL>:args[]=@
-}
+ADD: sequence dict { <MUL>:lhs=@, repeat <ADD_TAIL>:tail[]=@ }
+ADD_TAIL: sequence dict { <ADD_OP>:op=@, <MUL>:rhs=@ }
 
 ADD_OP: choice { "+":@, "-":@ }
 
-MUL: choice { <MUL_BINOP>, <POWER> }
-MUL_BINOP: sequence dict {
-  <POWER>:args[]=@, <MUL_OP>:op=@, <POWER>:args[]=@
-}
+MUL: sequence dict { <POWER>:lhs=@, repeat <MUL_TAIL>:tail[]=@ }
+MUL_TAIL: sequence dict { <MUL_OP>:op=@, <POWER>:rhs=@ }
 
 MUL_OP: choice { "*":@, "/":@, "%":@ }
 
-POWER: choice { <POWER_BINOP>, <UNARY> }
-POWER_BINOP: sequence dict {
-  <UNARY>:args[]=@, "**", <UNARY>:args[]=@:op="**"
+// POWER is right-associative per SV LRM. Right-recursive pattern
+// (?<POWER_REST>) instead of repeat-tail — still linear because
+// UNARY on each side is parsed exactly once.
+POWER: sequence dict {
+  <UNARY>:lhs=@,
+  ?<POWER_REST>
 }
+POWER_REST: sequence dict { "**":op="**", <POWER>:rhs=@ }
 
 UNARY: choice { <UNARY_OP_EXPR>, <PRIMARY> }
 UNARY_OP_EXPR: sequence dict {
-  <UNARY_OP>:op=@, <PRIMARY>:args[]=@
+  <UNARY_OP>:op=@, <PRIMARY>:arg=@
 }
 
 UNARY_OP: choice {

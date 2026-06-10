@@ -22,6 +22,29 @@ def sv_grammar():
     return rawast.Grammar.from_dict(d)
 
 
+def unwrap(node):
+    """Strip empty-tail passthrough wrappers from an expression node.
+
+    The linear-precedence grammar emits `{lhs: <inner>, tail: [...]}`
+    at each binop level when there ARE operators. When there are NONE,
+    the `repeat` matches zero times and the binding emits no `tail`
+    key at all — leaving just `{lhs: <inner>}`. So a passthrough
+    wrapper is either `{lhs: X, tail: []}` OR `{lhs: X}`.
+
+    Strip these recursively until we hit a node with a non-empty tail
+    OR any other shape.
+    """
+    while isinstance(node, dict):
+        keys = set(node.keys())
+        if keys == {"lhs"}:
+            node = node["lhs"]
+        elif keys == {"lhs", "tail"} and node["tail"] == []:
+            node = node["lhs"]
+        else:
+            break
+    return node
+
+
 # ─── Module structure ────────────────────────────────────────────────
 
 
@@ -50,8 +73,8 @@ def test_module_with_ansi_ports(sv_grammar):
     # Range [7:0] captured
     assert "range" in ports[2]
     rng = ports[2]["range"]
-    assert rng["msb"]["type"] == "number"
-    assert rng["lsb"]["type"] == "number"
+    assert unwrap(rng["msb"])["type"] == "number"
+    assert unwrap(rng["lsb"])["type"] == "number"
 
 
 def test_module_with_nonansi_ports(sv_grammar):
@@ -118,10 +141,12 @@ def test_continuous_assign(sv_grammar):
     cont = [i for i in items if i["type"] == "cont_assign"][0]
     assignments = cont["assignments"]
     assert assignments[0]["lhs"]["name"] == "y"
-    # RHS is `a & b` — bitwise-and
-    rhs = assignments[0]["rhs"]
-    assert rhs["op"] == "&"
-    assert len(rhs["args"]) == 2
+    # RHS is `a & b` — bitwise-and. Linear-PEG grammar: at the BAND
+    # level, `lhs=a` and `tail=[{op:&, rhs:b}]`. The OUTER passthrough
+    # wrappers (LOR/LAND/BOR/BXOR) are stripped by unwrap().
+    rhs = unwrap(assignments[0]["rhs"])
+    assert rhs["tail"][0]["op"] == "&"
+    assert len(rhs["tail"]) == 1
 
 
 def test_module_instantiation_named_ports(sv_grammar):
@@ -144,8 +169,10 @@ def test_module_instantiation_named_ports(sv_grammar):
 
 
 def test_expression_arithmetic(sv_grammar):
-    """Arithmetic expression in an assign RHS — exercises the 13-level
-    precedence chain at the lower (PRIMARY / multiplicative) levels."""
+    """Arithmetic expression `a * 2 + b` — exercises the per-level
+    repeat-tail pattern. The IR shape is `{lhs, tail: [{op, rhs}]}` at
+    each precedence level, with sub-expressions nested in `lhs`/`rhs`
+    when they involve higher-precedence operators."""
     src = """
     module e1 (input [7:0] a, input [7:0] b, output [7:0] y);
       assign y = a * 2 + b;
@@ -154,16 +181,16 @@ def test_expression_arithmetic(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
-    # Top level: `+` with two args (a*2, b)
-    assert rhs["op"] == "+"
-    # Left arg is a*2
-    left = rhs["args"][0]
-    assert left["op"] == "*"
+    rhs = unwrap(cont["assignments"][0]["rhs"])
+    # ADD level (after stripping wrappers): lhs is `a * 2`, tail is `[{op:+, rhs:b}]`
+    assert rhs["tail"][0]["op"] == "+"
+    # lhs of ADD unwraps to MUL: `a * 2`
+    add_lhs = unwrap(rhs["lhs"])
+    assert add_lhs["tail"][0]["op"] == "*"
 
 
 def test_expression_comparison(sv_grammar):
-    """Equality and relational operators."""
+    """Equality with based-number RHS."""
     src = """
     module e2 (input [7:0] x, output flag);
       assign flag = x == 8'hAA;
@@ -172,16 +199,15 @@ def test_expression_comparison(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
-    assert rhs["op"] == "=="
+    rhs = unwrap(cont["assignments"][0]["rhs"])
+    # EQUALITY (after stripping wrappers): lhs=x, tail=[{op:==, rhs: 8'hAA}]
+    assert rhs["tail"][0]["op"] == "=="
 
 
-@pytest.mark.skip(reason="""Concatenation `{a, b}` triggers exponential
-PEG backtracking through the 13-level expression chain when
-distinguishing concat from replication. The grammar is correct; the
-engine needs packrat-style memoization to handle this efficiently.
-Tracked as a separate optimization issue.""")
 def test_expression_concatenation(sv_grammar):
+    """Concatenation `{a, b}` — verifies the previously-skipped concat
+    test now parses linearly (was exponential in nested-expression depth
+    before the linear-precedence grammar restructure)."""
     src = """
     module e3 (input [3:0] a, input [3:0] b, output [7:0] y);
       assign y = {a, b};
@@ -190,7 +216,7 @@ def test_expression_concatenation(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
+    rhs = unwrap(cont["assignments"][0]["rhs"])
     assert rhs["type"] == "concat"
     assert len(rhs["elements"]) == 2
 
@@ -207,7 +233,7 @@ def test_sized_hex_literal(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    num = cont["assignments"][0]["rhs"]
+    num = unwrap(cont["assignments"][0]["rhs"])
     assert num["type"] == "number"
     n = num["number"]
     assert n["kind"] == "based"
@@ -225,7 +251,7 @@ def test_unsized_decimal(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    n = cont["assignments"][0]["rhs"]["number"]
+    n = unwrap(cont["assignments"][0]["rhs"])["number"]
     assert n["kind"] == "integer"
     assert n["value"] == 42
 
