@@ -41,12 +41,46 @@ TEST_CASE("Linter: clean Choice mixing keys and parsers produces no issues") {
 
 // Shared-prefix collision detection ---------------------------------------
 
-TEST_CASE("Linter: Choice with two alternatives sharing initial Key is flagged") {
+TEST_CASE("Linter: Choice with identical alternatives is flagged") {
+    // Two alternatives whose key-paths are identical at every depth —
+    // both just match `+ <identifier>`. The second alt is unreachable
+    // because the first wins on every input the second could match.
+    // Lint should flag this even though only the first Key collides
+    // (the second position is a non-Key Parse, contributing no
+    // discriminator).
+    Grammar g;
+    g.register_parser(std::make_unique<IdentifierParser>());
+
+    NodeId top = g.new_choice();
+    g.register_rule("TOP", top);
+
+    NodeId alt1 = g.add_sequence(top);
+    g.add_key(alt1, "+");
+    g.add_parse(alt1, "identifier");
+
+    NodeId alt2 = g.add_sequence(top);
+    g.add_key(alt2, "+");
+    g.add_parse(alt2, "identifier");
+
+    g.set_top(g.new_ref("TOP"));
+
+    auto issues = lint_grammar(g);
+    REQUIRE(issues.size() == 1);
+    CHECK(issues[0].choice_node == top);
+    CHECK(issues[0].token == "K:+");
+    CHECK(issues[0].alternatives.size() == 2);
+    CHECK(issues[0].description.find("backtrack") != std::string::npos);
+}
+
+TEST_CASE("Linter: shared first-Key with diverging second-Key is NOT flagged") {
+    // The PEG-natural case: alts share their FIRST Key but diverge at
+    // the SECOND Key. Engine tries alt 0, fails when input doesn't
+    // match alt 0's second Key, falls back to alt 1 via natural PEG
+    // alt-failure recovery. LL(2) lookahead disambiguates; no warning.
     Grammar g;
     NodeId top = g.new_choice();
     g.register_rule("TOP", top);
 
-    // Both alternatives start with the literal "+":
     NodeId alt1 = g.add_sequence(top);
     g.add_key(alt1, "+");
     g.add_key(alt1, "FOO");
@@ -58,11 +92,7 @@ TEST_CASE("Linter: Choice with two alternatives sharing initial Key is flagged")
     g.set_top(g.new_ref("TOP"));
 
     auto issues = lint_grammar(g);
-    REQUIRE(issues.size() == 1);
-    CHECK(issues[0].choice_node == top);
-    CHECK(issues[0].token == "K:+");
-    CHECK(issues[0].alternatives.size() == 2);
-    CHECK(issues[0].description.find("backtrack") != std::string::npos);
+    CHECK(issues.empty());
 }
 
 // Prefix-collision (strict-key shadowing) -------------------------------
@@ -169,7 +199,10 @@ TEST_CASE("Linter: Choice with backtrack:true is silently allowed") {
     CHECK(issues.empty());
 }
 
-TEST_CASE("Linter: collision across more than two alternatives reports all") {
+TEST_CASE("Linter: many alternatives diverging at depth 2 — not flagged") {
+    // Four alts, all sharing "X" as the first Key, each diverging at
+    // a distinct second Key (A / B / C / D). LL(2) sees all four as
+    // mutually distinguishable; no warning emitted.
     Grammar g;
     NodeId top = g.new_choice();
     g.register_rule("TOP", top);
@@ -182,9 +215,33 @@ TEST_CASE("Linter: collision across more than two alternatives reports all") {
     g.set_top(g.new_ref("TOP"));
 
     auto issues = lint_grammar(g);
+    CHECK(issues.empty());
+}
+
+TEST_CASE("Linter: many alternatives, some colliding at depth 2") {
+    // Four alts share "X" as the first Key. Three diverge at depth 2
+    // (A / B / C), but the fourth ALSO has "A" at depth 2 — colliding
+    // with alt 0. Lint should flag alts 0 and 3 (and only those), not
+    // the LL(2)-disambiguated alts 1 and 2.
+    Grammar g;
+    NodeId top = g.new_choice();
+    g.register_rule("TOP", top);
+
+    for (int i = 0; i < 4; ++i) {
+        NodeId alt = g.add_sequence(top);
+        g.add_key(alt, "X");
+        char second = (i == 3) ? 'A' : static_cast<char>('A' + i);
+        g.add_key(alt, std::string{second});
+    }
+    g.set_top(g.new_ref("TOP"));
+
+    auto issues = lint_grammar(g);
     REQUIRE(issues.size() == 1);
     CHECK(issues[0].token == "K:X");
-    CHECK(issues[0].alternatives.size() == 4);
+    // Alts 0 and 3 are mutually ambiguous; alts 1 and 2 are clean.
+    CHECK(issues[0].alternatives.size() == 2);
+    CHECK(issues[0].alternatives[0] == 0);
+    CHECK(issues[0].alternatives[1] == 3);
 }
 
 TEST_CASE("Linter: nullable leading children expand the first-set") {

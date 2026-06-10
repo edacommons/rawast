@@ -207,6 +207,210 @@ bool is_strict_prefix(const std::string& prefix, const std::string& longer) {
     return longer.compare(0, prefix.size(), prefix) == 0;
 }
 
+// LL(k) discrimination: compute the set of possible Key-token sequences
+// an alternative could match, up to `max_depth` keys deep. Each element
+// is a vector of Key literals at successive positions. Non-Key consumers
+// (Parse, Value) are skipped — they consume input but don't contribute
+// to LL(k) Key-based disambiguation. Repeat and unbounded Choice that
+// can't be pinned down are treated as "indeterminate" and stop the walk
+// at that depth.
+//
+// For two Choice alternatives to be LL(k)-disambiguated, their
+// key-path sets must be disjoint (no shared prefix-sequence). The PEG
+// engine naturally falls back on alt failure, so shared first-token
+// alternatives with diverging second-tokens (the DEF `+ FIXED` vs
+// `+ ROUTED` pattern) parse correctly without warning.
+using KeyPath = std::vector<std::string>;
+
+void key_paths_of(const Grammar& g, NodeId id,
+                  std::set<std::size_t>& visited,
+                  std::size_t max_depth,
+                  KeyPath prefix,
+                  std::set<KeyPath>& out);
+
+// Walk children of a sequence-like node, accumulating Keys into the
+// current path. Forks into multiple paths when a Choice is encountered
+// (each alternative contributes its own continuation).
+void key_paths_sequence(const Grammar& g,
+                        const std::vector<NodeId>& children,
+                        std::size_t start_idx,
+                        std::set<std::size_t>& visited,
+                        std::size_t max_depth,
+                        KeyPath prefix,
+                        std::set<KeyPath>& out) {
+    if (prefix.size() >= max_depth) {
+        out.insert(prefix);
+        return;
+    }
+    if (start_idx >= children.size()) {
+        out.insert(prefix);
+        return;
+    }
+    NodeId ch_id = children[start_idx];
+    NodeId resolved = g.resolve_ref(ch_id);
+    if (!resolved.valid()) {
+        out.insert(prefix);
+        return;
+    }
+    const Node& ch = g.node(resolved);
+
+    switch (ch.kind) {
+    case NodeKind::Key: {
+        auto sv = std::dynamic_pointer_cast<StringValue>(ch.value);
+        if (sv) {
+            KeyPath next = prefix;
+            next.push_back(sv->data());
+            key_paths_sequence(g, children, start_idx + 1, visited,
+                               max_depth, std::move(next), out);
+        } else {
+            out.insert(prefix);
+        }
+        if (ch.is_optional) {
+            // Optional Key — also try skipping it.
+            key_paths_sequence(g, children, start_idx + 1, visited,
+                               max_depth, prefix, out);
+        }
+        break;
+    }
+    case NodeKind::Parse:
+    case NodeKind::Value:
+        // Consumes (Parse) or emits (Value) but doesn't contribute a
+        // Key to the path — walk past.
+        key_paths_sequence(g, children, start_idx + 1, visited,
+                           max_depth, prefix, out);
+        break;
+    case NodeKind::Choice: {
+        // Each alt contributes its own continuation. Recurse into each
+        // alt with the current prefix, then continue from start_idx+1
+        // for each resulting extended prefix.
+        std::set<KeyPath> alt_paths;
+        for (NodeId alt : ch.children) {
+            std::set<std::size_t> sub_v = visited;
+            key_paths_of(g, alt, sub_v, max_depth, prefix, alt_paths);
+        }
+        for (const KeyPath& ap : alt_paths) {
+            if (ap.size() < max_depth) {
+                key_paths_sequence(g, children, start_idx + 1, visited,
+                                   max_depth, ap, out);
+            } else {
+                out.insert(ap);
+            }
+        }
+        break;
+    }
+    case NodeKind::Sequence: {
+        // Nested sequence — flatten.
+        std::set<KeyPath> sub_paths;
+        std::size_t sub_start = (ch.has_separator ? 1 : 0);
+        key_paths_sequence(g, ch.children, sub_start, visited,
+                           max_depth, prefix, sub_paths);
+        for (const KeyPath& sp : sub_paths) {
+            if (sp.size() < max_depth) {
+                key_paths_sequence(g, children, start_idx + 1, visited,
+                                   max_depth, sp, out);
+            } else {
+                out.insert(sp);
+            }
+        }
+        break;
+    }
+    case NodeKind::Repeat:
+        // Indeterminate — could be 0+ occurrences. Yield current prefix
+        // and continue past (the 0-occurrence case).
+        key_paths_sequence(g, children, start_idx + 1, visited,
+                           max_depth, prefix, out);
+        break;
+    case NodeKind::Ref:
+    case NodeKind::Raw:
+        // Ref already resolved above; Raw consumes opaque bytes and
+        // doesn't contribute a Key. Walk past.
+        key_paths_sequence(g, children, start_idx + 1, visited,
+                           max_depth, prefix, out);
+        break;
+    }
+}
+
+void key_paths_of(const Grammar& g, NodeId id,
+                  std::set<std::size_t>& visited,
+                  std::size_t max_depth,
+                  KeyPath prefix,
+                  std::set<KeyPath>& out) {
+    if (prefix.size() >= max_depth) {
+        out.insert(prefix);
+        return;
+    }
+    if (!id.valid()) { out.insert(prefix); return; }
+    NodeId resolved = g.resolve_ref(id);
+    if (!resolved.valid()) { out.insert(prefix); return; }
+    if (visited.count(resolved.value())) { out.insert(prefix); return; }
+    visited.insert(resolved.value());
+
+    const Node& n = g.node(resolved);
+    switch (n.kind) {
+    case NodeKind::Sequence: {
+        std::size_t start = (n.has_separator ? 1 : 0);
+        key_paths_sequence(g, n.children, start, visited,
+                           max_depth, prefix, out);
+        break;
+    }
+    case NodeKind::Key: {
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (sv) {
+            KeyPath next = prefix;
+            next.push_back(sv->data());
+            out.insert(std::move(next));
+        } else {
+            out.insert(prefix);
+        }
+        break;
+    }
+    case NodeKind::Choice:
+        for (NodeId alt : n.children) {
+            std::set<std::size_t> sub_v = visited;
+            key_paths_of(g, alt, sub_v, max_depth, prefix, out);
+        }
+        break;
+    default:
+        // Parse / Value / Raw / Repeat / Ref — recurse one level if
+        // applicable, otherwise yield the current prefix.
+        out.insert(prefix);
+        break;
+    }
+
+    visited.erase(resolved.value());
+}
+
+// Two alternatives are LL(k)-distinguished if their key-path sets are
+// disjoint at depth k. Returns true iff there is NO shared path of
+// length 1 OR longer between the two sets — i.e. every path in `a`
+// differs from every path in `b` at some position.
+//
+// Conservative: a shared single-Key path (e.g. both alts start with
+// the same Key with no further Keys before max_depth) counts as a
+// collision. The depth limit reflects how deep the lint is willing to
+// look; deeper grammars beyond that point fall back to first-token
+// behaviour.
+bool key_paths_disjoint(const std::set<KeyPath>& a,
+                        const std::set<KeyPath>& b) {
+    for (const KeyPath& pa : a) {
+        for (const KeyPath& pb : b) {
+            std::size_t prefix_len = std::min(pa.size(), pb.size());
+            if (prefix_len == 0) {
+                // One alt yielded an empty path (truly indeterminate
+                // up to this depth). Be conservative — treat as
+                // colliding.
+                return false;
+            }
+            bool same_prefix = true;
+            for (std::size_t i = 0; i < prefix_len; ++i) {
+                if (pa[i] != pb[i]) { same_prefix = false; break; }
+            }
+            if (same_prefix) return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 std::vector<LintIssue> lint_grammar(const Grammar& g) {
@@ -233,18 +437,56 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
 
         for (const auto& [tok, alts] : token_to_alts) {
             if (alts.size() <= 1) continue;
+            // LL(k) disambiguation. Compute key-paths for each colliding
+            // alternative and check pairs. The PEG engine restores the
+            // input position on alt failure, so two alts sharing a first
+            // token but diverging at a later Key position are fine:
+            // engine tries alt A, fails on alt A's second Key, falls
+            // back to alt B which matches.
+            //
+            // Depth limit of 4 reflects: most LEF/DEF / similar grammars
+            // disambiguate within 2 keys; 4 leaves headroom for nested
+            // sub-rules without blowing up combinatorially on grammars
+            // with deep Choice trees.
+            constexpr std::size_t kMaxDepth = 4;
+            std::vector<std::set<KeyPath>> alt_paths(alts.size());
+            for (std::size_t i = 0; i < alts.size(); ++i) {
+                std::set<std::size_t> v;
+                key_paths_of(g, n.children[alts[i]], v, kMaxDepth, {},
+                             alt_paths[i]);
+            }
+
+            // Collect alts that remain ambiguous with at least one
+            // other alt (their key-paths overlap).
+            std::set<std::size_t> still_ambiguous;
+            for (std::size_t i = 0; i < alts.size(); ++i) {
+                for (std::size_t j = i + 1; j < alts.size(); ++j) {
+                    if (!key_paths_disjoint(alt_paths[i], alt_paths[j])) {
+                        still_ambiguous.insert(alts[i]);
+                        still_ambiguous.insert(alts[j]);
+                    }
+                }
+            }
+            if (still_ambiguous.size() < 2) continue;
+
             LintIssue issue;
             issue.choice_node    = choice_id;
             issue.token          = tok;
-            issue.alternatives   = alts;
+            issue.alternatives.assign(still_ambiguous.begin(),
+                                      still_ambiguous.end());
             issue.description =
                 "Choice has an ambiguous first-token \"" + tok + "\" across " +
-                std::to_string(alts.size()) +
-                " alternatives. Without `backtrack: true` the predictive "
-                "engine will commit to the first one and the others become "
-                "unreachable. Either set `backtrack: true` on the Choice or "
-                "restructure the grammar so the alternatives have distinct "
-                "initial terminals.";
+                std::to_string(issue.alternatives.size()) +
+                " alternatives whose key-paths remain indistinguishable up to "
+                "depth " + std::to_string(kMaxDepth) + ". Without "
+                "`backtrack: true` the predictive engine will commit to the "
+                "first one and the others become unreachable. Either set "
+                "`backtrack: true` on the Choice or restructure the grammar "
+                "so the alternatives diverge at some Key position. "
+                "(Alternatives that share the first token but diverge at a "
+                "later Key — e.g. `\"+\", \"FIXED\"` vs `\"+\", \"ROUTED\"` — "
+                "are not flagged: PEG's ordered choice naturally falls back "
+                "between them on alt failure.)";
             issues.push_back(std::move(issue));
         }
     }
