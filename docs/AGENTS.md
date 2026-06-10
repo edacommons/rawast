@@ -263,6 +263,60 @@ with open("output.fmt", "wb") as f:
 
 Round-trip property: `parse → typed model → edit → dump → save` is lossless. An agent reading a config file can modify one field and save the rest verbatim (whitespace, comment positions, and clause ordering may canonicalize — the *structure* is preserved).
 
+## Parsing arbitrary character sequences with pure grammar
+
+When the input contains a token that no shipped terminal parser handles — a hex-digit run with `x`/`z`/`?` characters, a Verilog-style underscored number, a custom literal form — the first instinct is to write a C++ terminal parser. **Try pure grammar first.** Most "needs a custom parser" cases turn out to be expressible with two existing mechanisms in combination.
+
+### The technique
+
+Two pieces:
+
+1. **`RULE ignore:` (empty list)** disables whitespace skipping inside the rule. Adjacent characters in the rule body must match without intervening whitespace — exactly the behaviour you need to lex a token as one tight sequence.
+
+2. **Character-level `choice`** of single-char strict keys (`"0":@`, `"1":@`, …, `"F":@`) acts as a character class. Combined with `repeat+` you get a digit run.
+
+### Concrete example — Verilog based-number digit run
+
+The Verilog source form `8'h1_0_FF_xz?` has a digit run containing hex digits, `x`/`z`/`?` placeholders, and underscores as visual separators. No std parser handles this. With pure grammar:
+
+```rawast
+BASED_DIGITS ignore: sequence array {
+  repeat+ <BASED_DIGIT>
+}
+
+BASED_DIGIT: choice {
+  "0":@, "1":@, "2":@, "3":@, "4":@, "5":@, "6":@, "7":@,
+  "8":@, "9":@,
+  "a":@, "b":@, "c":@, "d":@, "e":@, "f":@,
+  "A":@, "B":@, "C":@, "D":@, "E":@, "F":@,
+  "x":@, "X":@, "z":@, "Z":@, "?":@,
+  "_":@
+}
+```
+
+That's it. `BASED_DIGITS` returns an array of single characters; the host joins or treats as a list. The `ignore:` keeps the digits packed; the Choice is the character class.
+
+### When this works well
+
+* **Lexical tokens with a fixed character alphabet.** Hex strings, binary strings, alphanumeric ID continuations, any "consume run of chars in set X" pattern.
+* **Format-specific separators** like `_` in numbers, `'` between size and base, or `.` in dotted identifiers — express as literal Keys in a sequence.
+* **Composing with std parsers in a Choice.** Most numbers in most grammars need only `std.int` + `std.float` + this technique for the format-specific portion (like a Verilog `'hFF` suffix). Don't write a parser that does everything; let `choice { <YOUR_SPECIAL>, std.float, std.int }` dispatch.
+
+### When a custom Parse terminal IS the right answer
+
+* **"Consume until X" semantics.** Verilog's escaped identifier `\<chars until whitespace>` consumes any printable char. Expressing 95+ char alternatives in a Choice is impractical; a 10-line custom parser is cleaner.
+* **Structural semantics inside the token.** If you need to compute a value (parse digits into an int with overflow check, decode an escape sequence) rather than just capture chars, do it in C++.
+* **The token is a single canonical form across many grammars.** `std.int`, `std.float`, `std.identifier`, `std.string` exist for this reason — write once, reuse everywhere.
+
+### Tips and caveats
+
+* **Order matters in the outer Choice.** A `BASED_NUM` rule must come before plain `INTEGER_NUM` in a Choice, because `8'hFF` shares its leading `8` with the integer form. PEG's alt-failure recovery picks the right one but only if you list the more-specific match first.
+* **Watch interactions with deeply nested precedence chains.** When a sub-rule with its own `dict` container is invoked via `<Ref>:field=@` binding from inside a long precedence chain (13-level expression grammar etc.), the inner dict can fail to propagate as a captured value. If your grammar shows correct behaviour for simple test cases but the wrapping field disappears in deep contexts, hoist the rule into the outer dict scope OR use a Parse terminal whose result is a single value the binding can capture cleanly.
+* **The lint flags some Choice patterns as informational.** A long character-set Choice (`"0":@, "1":@, …`) has many alternatives with disjoint first tokens, so it parses correctly and is lint-clean. Don't worry about it.
+* **Strict keys preserve case sensitivity.** `"A":@` matches only `A`, not `a`. For case-insensitive matching, add both alternatives explicitly. (Verilog accepts `8'hff` and `8'hFF`; the Choice lists both letter cases.)
+
+This technique covers most "the grammar can't express my token" cases. Reach for it before writing a custom Parse terminal — fewer lines, no recompile, the entire spec lives in the grammar source.
+
 ## Practical tips for agents
 
 **Always lint after generating a grammar.** Either via the CLI (`rawast lint <grammar>`) or programmatically (`Grammar.load(...).lint()`). The lint catches LL(1) ambiguity, the wildcard-Choice-type-emit anti-pattern, and `*` raw-consume misuse — three failure modes that are hard to diagnose at parse time but trivial to fix at grammar-design time. Feed lint output back into your agent as a follow-up turn so it can iterate.
