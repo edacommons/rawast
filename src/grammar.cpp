@@ -1165,6 +1165,15 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
+                // Optional frame's entry mark must be accepted so the
+                // stream advance becomes permanent. Without this the
+                // mark stays on the StreamReader's mark stack and the
+                // NEXT mark-pop (Choice accept or any reject) targets
+                // the WRONG mark — subtle and ugly.
+                if (popped.is_optional() && popped.has_mark()) {
+                    on_mark_accept();
+                    popped.set_has_mark(false);
+                }
                 popped.finish(pool);
                 fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
@@ -1195,6 +1204,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 } else {
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
+                    // See the Raw / Parse cases for why the optional
+                    // mark accept is required here.
+                    if (popped.is_optional() && popped.has_mark()) {
+                        on_mark_accept();
+                        popped.set_has_mark(false);
+                    }
                     popped.finish(pool);
                     fire_callbacks_for_frame(popped);
                     if (stack.empty()) {
@@ -1259,6 +1274,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 } else {
                     Frame popped = std::move(stack.back());
                     stack.pop_back();
+                    // See the Raw / Key cases for why the optional
+                    // mark accept is required here.
+                    if (popped.is_optional() && popped.has_mark()) {
+                        on_mark_accept();
+                        popped.set_has_mark(false);
+                    }
                     popped.finish(pool);
                     fire_callbacks_for_frame(popped);
                     if (stack.empty()) {
