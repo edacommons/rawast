@@ -211,8 +211,7 @@ STATEMENT: choice {
   <BLOCK_STMT>,
   <IF_STMT>,
   <CASE_STMT>,
-  <NONBLOCKING_ASSIGN>,
-  <BLOCKING_ASSIGN>,
+  <ASSIGN_STMT>,
   <SYSTEM_TASK_CALL>,
   <NULL_STMT>
 }
@@ -251,14 +250,18 @@ CASE_ITEM: sequence dict {
   <STATEMENT>:body=@
 }
 
-BLOCKING_ASSIGN: sequence dict {
-  <LVALUE>:lhs=@:type="blocking_assign",
-  "=", <EXPR>:rhs=@, ";"
+// Unified blocking + non-blocking assignment — same single-rule
+// pattern as systemverilog.rawast. Avoids the LVALUE re-parse the
+// shared-leading-ref lint flags on `choice { BLOCKING, NONBLOCKING }`.
+ASSIGN_STMT: sequence dict {
+  <LVALUE>:lhs=@,
+  <ASSIGN_OP>:type=@,
+  <EXPR>:rhs=@, ";"
 }
 
-NONBLOCKING_ASSIGN: sequence dict {
-  <LVALUE>:lhs=@:type="nonblocking_assign",
-  "<=", <EXPR>:rhs=@, ";"
+ASSIGN_OP: choice {
+  "<=":"nonblocking_assign",
+  "=":"blocking_assign"
 }
 
 // System task call expressed via grammar: `"$" identifier`. The
@@ -278,21 +281,26 @@ TASK_ARG_LIST: sequence dict {
 }
 
 // ─── Expressions (simplified — 5 levels instead of 13) ─────────────────
+//
+// Uses the linear `NEXT (OP NEXT)*` PEG pattern at each precedence
+// level. See the same chain in systemverilog.rawast for the full
+// V2001 13-level expression grammar and the design discussion. The
+// shared-leading-ref lint catches the alternative `choice { BINOP,
+// NEXT }` pattern that re-parses NEXT and compounds to 2^N per
+// nesting level.
 
-EXPR: choice { <LOR>, <PRIMARY> }
+EXPR: sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
+LOR_TAIL: sequence dict { "||":op="||", <LAND>:rhs=@ }
 
-LOR: choice { <LOR_BINOP>, <LAND> }
-LOR_BINOP: sequence dict { <LAND>:args[]=@:op="||", "||", <LAND>:args[]=@ }
+LAND: sequence dict { <EQUALITY>:lhs=@, repeat <LAND_TAIL>:tail[]=@ }
+LAND_TAIL: sequence dict { "&&":op="&&", <EQUALITY>:rhs=@ }
 
-LAND: choice { <LAND_BINOP>, <EQUALITY> }
-LAND_BINOP: sequence dict { <EQUALITY>:args[]=@:op="&&", "&&", <EQUALITY>:args[]=@ }
-
-EQUALITY: choice { <EQUALITY_BINOP>, <ADD> }
-EQUALITY_BINOP: sequence dict { <ADD>:args[]=@, <EQ_OP>:op=@, <ADD>:args[]=@ }
+EQUALITY: sequence dict { <ADD>:lhs=@, repeat <EQ_TAIL>:tail[]=@ }
+EQ_TAIL: sequence dict { <EQ_OP>:op=@, <ADD>:rhs=@ }
 EQ_OP: choice { "==":@, "!=":@ }
 
-ADD: choice { <ADD_BINOP>, <PRIMARY> }
-ADD_BINOP: sequence dict { <PRIMARY>:args[]=@, <ADD_OP>:op=@, <PRIMARY>:args[]=@ }
+ADD: sequence dict { <PRIMARY>:lhs=@, repeat <ADD_TAIL>:tail[]=@ }
+ADD_TAIL: sequence dict { <ADD_OP>:op=@, <PRIMARY>:rhs=@ }
 ADD_OP: choice { "+":@, "-":@ }
 
 PRIMARY: choice {
