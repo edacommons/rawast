@@ -4,8 +4,10 @@ What rawast can do today. Most features were validated against a 3,132-file prod
 
 ## Engine
 
-- **Predictive PEG parsing** with per-`Choice` opt-in bounded backtracking. The default is first-token commit; opt in to `backtrack: true` on a Choice that needs it.
-- **Structural linter at grammar-load time** flagging LL(1) violations and a wildcard-rule-with-nested-Choice-type-emit anti-pattern that breaks save dispatch. Invoke via `rawast lint <grammar>` or `Grammar.lint()`. The lint catches real grammar-design bugs before they fail mysteriously at save time.
+- **Predictive PEG parsing** with always-on alt-failure recovery on Choice frames. Each Choice alternative attempt is wrapped in input-cursor `mark()` / `reject()` so partial alt failures restore position and try the next alternative — standard PEG ordered-choice semantics, no opt-in.
+- **Structural linter** with four design-time checks: LL(k) lookahead ambiguity (depth-4, sees through shared-prefix Choices that diverge at later Keys), prefix-collision (catches the canonical `"not"` matching the prefix of `"notch"` bug at design time), wildcard-rule-with-nested-Choice-type-emit anti-pattern (breaks save dispatch), and `*` raw-consume misuse. Invoke via `rawast lint <grammar>` or `Grammar.lint()`. Issues identify the offending rule by name with one consolidated message per Choice.
+- **Strict-key literal `'X'`** — word-bounded `Key` matching (requires non-word character or EOF after the literal). Eliminates the byte-prefix footgun where `"not"` silently consumes the prefix of `"notch"`. Opt-in via single-quote DSL syntax (`'token'`) or `{"strict": true}` JSON form. Lint catches non-strict prefix shadowing at design time.
+- **`repeat+N` quantifier** — extends the existing `repeat+` (min=1) shorthand to arbitrary minimum counts: `repeat+2 <X>` requires at least 2 iterations, `repeat+5 <X>` at least 5, etc. Useful for cardinality constraints — binary operators, EDA spec minimums.
 - **Bidirectional walk** — parse and save share one grammar definition. The save direction uses a stack-navigation walk with key-based Choice dispatch, wrapped-substructure descent, and catch-all alternatives. The `.rawast` meta-grammar can save its own parsed grammars back as canonical `.rawast` text (self-host save).
 - **Pretty-print attributes** — `indent`, `tab`, `space`, `newline`, `tail="…"` plus a `pretty=true/false` toggle let one grammar cover both compact and human-readable output.
 - **Subparse** — `:subparse="<RULE>"` on a Parse-terminal item re-invokes the parse loop on the captured string with a different rule as start. Same grammar, fresh ignore-stack, fully recursive. Used by the Tcl grammar to re-parse quoted strings for `$var` and `[cmd]` substitutions.
@@ -42,7 +44,7 @@ What rawast can do today. Most features were validated against a 3,132-file prod
 
 253 tests in two layers:
 
-- **208 C++ doctest** covering the engine, loader, JSON round-trip, GDSII round-trip, linter, pretty-print, the `use:` directive, subparse, per-rule ignore, list-append binding, the data-shape schema generator.
+- **216 C++ doctest** covering the engine, loader, JSON round-trip, GDSII round-trip, linter (LL(k), prefix-collision, wildcard-Choice anti-pattern, raw-consume), pretty-print, strict-key parse+save, `repeat+N` quantifier, the `use:` directive, subparse, per-rule ignore, list-append binding, the data-shape schema generator.
 - **45 Python pytest** covering Pydantic generator round-trip on a synthetic full-LEF-spec fixture plus four real Sky130 PDK files (the HD tech LEF, an OpenRAM SRAM, the `top_xres4v2` IO pad, and a multi-ANTENNA HD cell).
 
 Plus 3,132 real production files across GDSII / LEF / DEF / Tcl parsing 100% end-to-end, of which a 1,013-file LEF + GDSII subset additionally `parse → save → reparse`s to a structurally equivalent value tree (1,013 / 1,013).

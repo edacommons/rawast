@@ -11,7 +11,8 @@ The Pydantic v2 generator and `pycode` Python source emitter already ship today 
 - **Structural-validation API** for host-constructed value trees with path-aware errors. Separate from the Pydantic-model generator: lets a host build a partial tree and ask "is this shape valid for this grammar at rule X?". The current path is "construct via Pydantic, hand the dict to `g.save`, handle save-time errors"; the validation API gives faster, more localized feedback.
 - **Data-shape reference generator** productionised. `rawast schema` exists and works; gaps remaining are around discriminated-union rendering, nested-list-of-union edge cases, and stable cross-rule anchors.
 - **Sub-parse-aware error reporting.** When a sub-parse (`:subparse="X"`) fails, the engine currently reports the inner parser's error against the inner string. Plumb context through so the caller sees "in the body of the `if` at outer.tcl:42, expected …".
-- **Expanded grammar linter.** Today the linter catches LL(1) violations, the nested-Choice-type-emit anti-pattern, and `*` misuse. Add: unreachable rules; binding-shape mismatches between sibling alts; sub-parse target reachability.
+- **Expanded grammar linter.** Today the linter catches LL(k) ambiguity (depth-4 lookahead), prefix-collision, the nested-Choice-type-emit anti-pattern, and `*` misuse — issues identify the offending rule by name and coalesce per-Choice. Add: unreachable rules; binding-shape mismatches between sibling alts; sub-parse target reachability.
+- **`rawast cppgen`** ([issue #2](https://github.com/edacommons/rawast/issues/2)) — emit C++ source that reconstructs a `Grammar` at compile time via the existing `Grammar::from_dict()` loader path. Embed grammars in C++ consumers without runtime file I/O. Depends on [issue #3](https://github.com/edacommons/rawast/issues/3) (`Grammar::to_value()` helper — inverse of `from_dict()`).
 
 ## M2 — The `.jast` binary container
 

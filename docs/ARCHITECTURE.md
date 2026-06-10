@@ -4,7 +4,7 @@ Concepts a grammar author or engine contributor needs to understand. For the `.r
 
 ## Engine overview
 
-rawast is a **predictive PEG parser** with opt-in bounded backtracking. The grammar is a tree of typed nodes (`Choice`, `Sequence`, `Repeat`, `Key`, `Parse`, `Value`, `Raw`, `Ref`). The same tree drives both the parse direction (text → value tree) and the save direction (value tree → text).
+rawast is a **predictive PEG parser** with always-on alt-failure recovery on Choice frames (each alternative attempt is wrapped in input-cursor `mark()` / `reject()` so partial alt failures restore position and try the next alt). The grammar is a tree of typed nodes (`Choice`, `Sequence`, `Repeat`, `Key`, `Parse`, `Value`, `Raw`, `Ref`). The same tree drives both the parse direction (text → value tree) and the save direction (value tree → text).
 
 **Stable invariants:**
 - One grammar definition = one parser AND one saver. There is no separate "writer grammar" or "save schema".

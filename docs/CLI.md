@@ -60,10 +60,11 @@ rawast convert --read grammars/rawast.rawast \
 
 ## `rawast lint <grammar>`
 
-Run the structural linter on a grammar. Outputs human-readable diagnostics; exit code is 0 if clean, non-zero if issues found.
+Run the structural linter on a grammar. Outputs human-readable diagnostics; each issue identifies the offending rule by name, lists the problem, and points at fixes.
 
 Detects:
-- **LL(1) violations** — Choices whose alternatives share a first-token signature, on non-`backtrack` Choices.
+- **LL(k) ambiguity** — Choices whose alternatives share a leading rule that can't be disambiguated by Key-path analysis within depth-4 lookahead. The engine handles these via always-on Choice-frame alt-failure recovery, so the warning is *informational* — restructure to factor out the shared prefix (eliminates the alt-failure cost), or accept the pattern as intentional fall-through.
+- **Prefix-collision** — a non-strict `Key` in an earlier alternative whose literal is a strict prefix of a `Key` in a later alternative. Without word-boundary checking, PEG would consume the shorter Key first and leave the longer keyword's branch unreachable (canonical `"not"` shadowing `"notch"`). Fix: write the shorter Key as `'foo'` (strict, word-bounded) or reorder so the longer Key comes first.
 - **Wildcard-rule-with-nested-Choice-type-emit anti-pattern** — a sequence-dict rule with no top-level `:type=…` discriminator whose body contains a nested Choice with type emits. Such rules act as wildcards at save dispatch and silently swallow types meant for sibling alts.
 - **Raw-consume (`*`) misuse** — `*` not followed by a literal-key sibling in the same sequence.
 
@@ -72,8 +73,15 @@ rawast lint grammars/gdsii.rawast
 # clean → exit 0, no output
 
 rawast lint grammars/lefdef.rawast
-# any issues print as paragraphs naming the rule and the problem
+# 2 issues, one per rule:
+#   informational [VIARULE_LAYER_SUB]: 3 alternatives (0, 6, 7) share
+#   first-token(s) {"K:ENCLOSURE", "K:RESISTANCE"} within LL(4)
+#   lookahead. Engine handles via alt-failure recovery; restructure
+#   to factor out the shared prefix if the alt-failure cost matters,
+#   or accept the pattern. See docs/AGENTS.md.
 ```
+
+Each issue starts with the severity tag (`informational`, `prefix-collision`, etc.), the rule name in `[brackets]`, then the specific problem and fix. Multiple shared tokens on one Choice are coalesced into a single issue.
 
 ## `rawast profile <grammar> <files…>`
 
