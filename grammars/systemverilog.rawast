@@ -86,7 +86,7 @@ DESCRIPTION: choice {
   <EXPORT_STMT>,
   <MACRO_STMT>,
   <MODULE_DECL>
-  // future: <UDP_DECL>, <CONFIG_DECL>, <CLASS_DECL>
+  // future: <CLASS_DECL>, <UDP_DECL>, <CONFIG_DECL>
 }
 
 // ─── Module declaration ─────────────────────────────────────────────────
