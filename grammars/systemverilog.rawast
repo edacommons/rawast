@@ -87,6 +87,8 @@ DESCRIPTION: choice {
   <CONFIG_DECL>,
   <PROGRAM_DECL>,
   <TYPEDEF_DECL>,
+  <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_STMT>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
   <MACRO_STMT>,
@@ -102,7 +104,8 @@ MODULE_DECL: sequence dict {
   ?<PORT_LIST>:ports=@,
   ";",
   <MODULE_ITEMS>:items=@,
-  'endmodule'
+  'endmodule',
+  ?<END_LABEL>:end_label=@
 }
 
 // SV adds `program` and `macromodule` as module-equivalent keywords;
@@ -125,7 +128,8 @@ PARAM_PORT_LIST: sequence dict {
 // non-container sidesteps that.
 PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
-  <PARAM_DECL_VALUE>
+  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_IMPLICIT>
 }
 
 PARAM_DECL_TYPE: sequence dict {
@@ -142,7 +146,20 @@ PARAM_DECL_VALUE: sequence {
   ?<TYPE_SPEC>:type_spec=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
-  "=", <EXPR>:value=@
+  ?<PARAM_VALUE_DEFAULT>:default=@
+}
+
+PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
+
+// Implicit-`parameter` form for class parameter port lists:
+// `class C #(int N = 8); ...endclass`. The `parameter` keyword is
+// implied. Same fields as PARAM_DECL_VALUE but without the
+// `'parameter'` prefix.
+PARAM_DECL_IMPLICIT: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="param_implicit",
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
 // Port list — Choice between ANSI-style and Verilog-95-style. The
@@ -342,6 +359,8 @@ MODULE_ITEM: choice {
   <MODPORT_DECL>,
   <CLASS_DECL_VIRTUAL>,
   <CLASS_DECL_PLAIN>,
+  <MODULE_DECL>,
+  <INTERFACE_DECL>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
   <MODULE_INSTANTIATION>,
@@ -893,7 +912,8 @@ BLOCK_STMT: sequence dict {
   'begin':@:type="block",
   ?<BLOCK_LABEL>,
   repeat <BLOCK_ITEM>:items[]=@,
-  'end':@
+  'end':@,
+  ?<END_LABEL>:end_label=@
 }
 
 // Non-container; the `label` binding flows up to the parent dict.
@@ -940,11 +960,18 @@ CASE_ITEM: sequence dict {
   choice {
     sequence { 'default':default=true, ?":" },
     sequence {
-      repeat+ <EXPR>:labels[]=@ separator ",",
+      repeat+ <CASE_LABEL>:labels[]=@ separator ",",
       ":"
     }
   },
   <STATEMENT>:body=@
+}
+
+// Case label: an expression OR a range (for `case ... inside`).
+// Range form `[a:b]` is allowed by LRM in inside-case items.
+CASE_LABEL: choice {
+  <RANGE>,
+  <EXPR>
 }
 
 FOR_STMT: sequence dict {
@@ -1524,16 +1551,23 @@ SYSTEM_FUNC_ARGS: sequence dict {
 }
 
 // Hierarchical reference: identifier, optionally with `.subident`
-// chains, optionally with bit/part selects at the end.
+// chains and array-index selects at any point. `mod.inst[i].q[7:0]`
+// parses as alternating dot-paths and bracket-selects.
 HIER_REF: sequence dict {
   sv_identifier:name=@:type="ref",
   repeat <HIER_PART>:path[]=@,
-  ?<RANGE_OR_INDEX>:select=@
+  repeat <RANGE_OR_INDEX>:selects[]=@
 }
 
-HIER_PART: sequence dict {
-  ".", sv_identifier:field=@
+// Either a `.field` step or a chained bracket-select. Each path
+// element captures one step.
+HIER_PART: choice {
+  <HIER_DOT>,
+  <HIER_SELECT>
 }
+
+HIER_DOT: sequence dict { ".", sv_identifier:field=@ }
+HIER_SELECT: sequence dict { "[", <EXPR>:index=@, "]" }
 
 // ─── Preprocessor — recognition only, no expansion ──────────────────────
 //
@@ -1689,11 +1723,25 @@ INTERFACE_DECL: sequence dict {
   ?<LIFETIME>:lifetime=@,
   sv_identifier:name=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<INTERFACE_EXTENDS>:extends=@,
   ?<PORT_LIST>:ports=@,
   ";",
   <MODULE_ITEMS>:items=@,
   'endinterface',
   ?<END_LABEL>:end_label=@
+}
+
+// `extends parent_if [#(params)] [, parent_if2 ...]` — interface
+// inheritance (SV-1800 LRM §25.5.1). Comma-separated list of
+// parent interfaces, each optionally parameterized.
+INTERFACE_EXTENDS: sequence dict {
+  'extends':@,
+  repeat+ <INTERFACE_PARENT>:parents[]=@ separator ","
+}
+
+INTERFACE_PARENT: sequence dict {
+  sv_identifier:name=@,
+  ?<PARAM_OVERRIDE>:params=@
 }
 
 // `import pkg::*;` or `import pkg::ident;`. One or more comma-
@@ -2014,9 +2062,15 @@ METHOD_PORT_LIST: sequence dict {
 }
 
 // `constraint NAME { … }` — body captured as raw text; downstream
-// pass can re-parse the constraint expression language. Body
-// uses sv_balanced_braces so nested `{ [a:b], c }` inside-set
+// Body uses sv_balanced_braces so nested `{ [a:b], c }` inside-set
 // patterns don't terminate the capture at the first `}`.
+//
+// Note: a subparse=CONSTRAINT_BLOCK would re-parse the body into
+// structured per-statement form. Deferred until a proper
+// CONSTRAINT_STMT grammar (with dist, solve before, foreach,
+// implication, etc.) is defined — splitting on `;` alone loses
+// the `{...}` nesting context needed for dist clauses and `if`
+// branches inside constraints.
 CONSTRAINT_DECL: sequence dict {
   'constraint':@:type="constraint",
   sv_identifier:name=@,
@@ -2100,19 +2154,32 @@ SPECIFY_BLOCK: sequence dict {
 //
 // The `action` is an optional `else <stmt>` or `; <stmt>` clause —
 // captured as part of the raw body up to the trailing `;`.
+// Either `<kind> property (...)` or `cover sequence (...)`. The
+// `sequence` form is only valid for `cover` per SV-1800, but we
+// don't enforce that — pure parse, host validates.
 CONCURRENT_ASSERT: sequence dict {
+  ?<ASSERTION_LABEL>:label=@,
   <ASSERT_KIND>:kind=@:type="assert_concurrent",
-  'property',
+  <ASSERT_KIND_KW>:kind_kw=@,
   "(",
-  *:body=@,
+  sv_balanced_arg:body=@,
   ")",
   *:action=@,
   ";"
 }
 
+// `label_name :` — optional name prefix on a concurrent assertion.
+// Common pattern: `a1: assert property (...)`. Captured as a
+// separate field so the host can use the label for tooling.
+ASSERTION_LABEL: sequence dict { sv_identifier:name=@, ":" }
+
 ASSERT_KIND: choice {
   'assert':@, 'cover':@, 'assume':@, 'restrict':@
 }
+
+// `property` (the LRM-standard) OR `sequence` (only valid for
+// `cover`). Captured separately so the host knows which form.
+ASSERT_KIND_KW: choice { 'property':@, 'sequence':@ }
 
 // `property NAME([args]); <body> endproperty [: NAME]`
 PROPERTY_DECL: sequence dict {
@@ -2224,6 +2291,7 @@ FORK_JOIN_PLAIN: sequence dict {
 // requires `property`) lives in MODULE_ITEM; IMMEDIATE_ASSERT
 // lives in STATEMENT (procedural context).
 IMMEDIATE_ASSERT: sequence dict {
+  ?<ASSERTION_LABEL>:label=@,
   <ASSERT_KIND>:kind=@:type="assert_immediate",
   "(",
   sv_balanced_arg:body=@,

@@ -1003,6 +1003,51 @@ def test_parameterized_user_types(sv_grammar):
         sv_grammar.parse_string(src)
 
 
+def test_more_coverage_extensions(sv_grammar):
+    """Additional SV-1800 features added in the final coverage push:
+
+    * Implicit-`parameter` form in class parameter lists
+      (`class C #(int N=8)`)
+    * Interface extends (single + multi)
+    * Nested module declarations
+    * Module/block trailing `endmodule : label` / `end : label`
+    * Top-level `parameter`/`localparam` declarations
+    * Cover sequence (`cover sequence (...)`)
+    * Labeled concurrent/immediate assertions (`a1: assert property (...)`)
+    * Case-inside with range labels (`case (x) inside [0:10]: ...`)
+    * Chained array selects in hier refs (`a[0][1][2]`,
+      `mod.inst[i].q`)
+    """
+    for src in [
+        # Implicit parameter form
+        "class C #(int N=8) extends Base; endclass\n",
+        "class C #(int N=8) extends Base #(N); endclass\n",
+        "class T #(int W); bit [W-1:0] data; endclass\n",
+        # Interface inheritance
+        "interface child_if extends parent_if; logic extra; endinterface\n",
+        "interface c extends p1, p2; endinterface\n",
+        # Nested module
+        "module outer; module inner; endmodule endmodule\n",
+        # End labels
+        "module m; endmodule : m\n",
+        "module m; initial begin : lbl x = 1; end : lbl endmodule\n",
+        # Top-level parameter
+        "parameter int W = 8;\nmodule m; endmodule\n",
+        "localparam int X = 16;\nmodule m; endmodule\n",
+        # Cover sequence
+        "module m; cover sequence (@(posedge clk) a ##1 b); endmodule\n",
+        # Labeled assertions
+        "module m; a1: assert property (@(posedge clk) p); endmodule\n",
+        "module m; initial begin a1: assert(x == 1); end endmodule\n",
+        # Case-inside with range label
+        "module m; always_comb case (x) inside [0:10]: y = a; default: y = b; endcase endmodule\n",
+        # Chained array selects in hier refs
+        "module m; initial x = a[0][1][2]; endmodule\n",
+        "module m; initial x = mod.inst[i].q; endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
 def test_uvm_style_endtoend(sv_grammar):
     """Real-world UVM-style testbench code with package + typedef
     enum/struct + class with rand/constraint/extern/virtual +
