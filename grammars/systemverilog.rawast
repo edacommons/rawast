@@ -80,19 +80,62 @@ DESCRIPTION: choice {
   <INCLUDE>,
   <IFDEF>,
   <IFNDEF>,
+  <SV_ATTRIBUTE>,
+  <DPI_IMPORT>,
+  <DPI_EXPORT>,
   <PACKAGE_DECL>,
   <INTERFACE_DECL>,
-  <CLASS_DECL>,
+  <CLASS_DECL_VIRTUAL>,
+  <CLASS_DECL_PLAIN>,
   <UDP_DECL>,
   <CONFIG_DECL>,
   <PROGRAM_DECL>,
-  <TYPEDEF_DECL>,
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>,
   <PARAM_DECL_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
   <MACRO_STMT>,
-  <MODULE_DECL>
+  <FUNCTION_DECL>,
+  <TASK_DECL>,
+  <MODULE_DECL>,
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <CONT_ASSIGN>,
+  <ALWAYS_BLOCK>,
+  <INITIAL_BLOCK>,
+  <CONCURRENT_ASSERT>,
+  <USER_TYPED_DECL>
+}
+
+// SV-1800 attribute syntax: `(* attr_name = value, attr_name2 = value, ... *)`.
+// Attributes can appear before nearly any declaration to provide
+// tool-specific hints. Pure parse — body captured raw.
+SV_ATTRIBUTE: sequence dict {
+  "(*":type="attribute",
+  *:body=@,
+  "*)"
+}
+
+// `import "DPI-C" [pure | context] [c_name =] function|task NAME (args);`
+// Foreign function interface declaration. Body captured raw to the
+// trailing `;` so the full signature (return type, args with default
+// values, modifiers like `pure`/`context`) parses uniformly.
+DPI_IMPORT: sequence dict {
+  'import':@:type="dpi_import",
+  string:dpi_spec=@,
+  *:body=@,
+  ";"
+}
+
+// `export "DPI-C" [c_name =] function|task NAME;` — DPI export.
+DPI_EXPORT: sequence dict {
+  'export':@:type="dpi_export",
+  string:dpi_spec=@,
+  *:body=@,
+  ";"
 }
 
 // ─── Module declaration ─────────────────────────────────────────────────
@@ -100,6 +143,7 @@ DESCRIPTION: choice {
 MODULE_DECL: sequence dict {
   <MODULE_KEYWORD>:keyword=@:type="module",
   <IDENT_OR_MACRO>:name=@,
+  ?<MODULE_HEADER_IMPORT>:header_import=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<PORT_LIST>:ports=@,
   ";",
@@ -108,17 +152,47 @@ MODULE_DECL: sequence dict {
   ?<END_LABEL>:end_label=@
 }
 
+// `module foo import pkg::*; #(...) (...)` — SV-1800 §23.2.1
+// allows package imports immediately after the module name.
+// Captures the import declarations as raw text up to the next
+// non-import token (`#`, `(`, or `;`).
+MODULE_HEADER_IMPORT: sequence dict {
+  'import':@:type="module_header_import",
+  *:body=@,
+  ";"
+}
+
 // SV adds `program` and `macromodule` as module-equivalent keywords;
 // keep them under one rule so the same item grammar applies.
 MODULE_KEYWORD: choice {
   'module':@, 'macromodule':@, 'program':@
 }
 
-// `#(parameter A = 4, parameter B = 8)`
+// `#(parameter A = 4, parameter B = 8)`. `localparam` may also appear
+// inside the port list for derived parameters that can't be
+// overridden by the instantiator. Each entry is `<PARAM_DECL_OR_LOCAL>`.
 PARAM_PORT_LIST: sequence dict {
   "#", "(",
-  repeat+ <PARAM_DECL>:params[]=@ separator ",",
+  repeat+ <PARAM_DECL_OR_LOCAL>:params[]=@ separator ",",
   ")"
+}
+
+PARAM_DECL_OR_LOCAL: choice {
+  <PARAM_DECL_LOCALPARAM>,
+  <PARAM_DECL_TYPE>,
+  <PARAM_DECL_TYPE_IMPLICIT>,
+  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_IMPLICIT>,
+  <PARAM_DECL_USERTYPE>
+}
+
+// `localparam [type] NAME = expr` — non-overridable derived parameter.
+PARAM_DECL_LOCALPARAM: sequence {
+  'localparam':@:type="localparam_port",
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
 // Non-container sequence: its emitted bindings flow into the
@@ -129,8 +203,20 @@ PARAM_PORT_LIST: sequence dict {
 PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
+  <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_VALUE>,
   <PARAM_DECL_IMPLICIT>
+}
+
+// `parameter <user_type_name> <NAME> [= <expr>]` — user-typed param.
+PARAM_DECL_USERTYPE: sequence dict {
+  'parameter':@:type="param_usertype",
+  sv_identifier:type_spec=@,
+  ?<PARAM_OVERRIDE>:type_params=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
 PARAM_DECL_TYPE: sequence dict {
@@ -345,6 +431,9 @@ MODULE_ITEM: choice {
   <INCLUDE>,
   <IFDEF>,
   <IFNDEF>,
+  <SV_ATTRIBUTE>,
+  <DPI_IMPORT>,
+  <DPI_EXPORT>,
   <PORT_DECL_STMT>,
   <NET_DECL>,
   <REG_DECL>,
@@ -358,6 +447,9 @@ MODULE_ITEM: choice {
   <INITIAL_BLOCK>,
   <FINAL_BLOCK>,
   <GENERATE_BLOCK>,
+  <GEN_IF>,
+  <GEN_FOR>,
+  <GEN_CASE>,
   <TASK_DECL>,
   <FUNCTION_DECL>,
   <EXTERN_DECL>,
@@ -380,7 +472,8 @@ MODULE_ITEM: choice {
   <EXPORT_STMT>,
   <MODULE_INSTANTIATION>,
   <VIRTUAL_INTERFACE_DECL>,
-  <TYPEDEF_DECL>,
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>,
   <USER_TYPED_DECL>,
   <MACRO_STMT>
 }
@@ -466,7 +559,22 @@ INTEGER_KIND: choice {
 // the AST captures both the source type and the new name; the host
 // (or a downstream pass) builds the symbol table that lets later
 // declarations like `byte_t data;` resolve to the typedef.
-TYPEDEF_DECL: sequence dict {
+//
+// Also recognizes the `typedef class NAME;` forward declaration
+// form used to break circular class references.
+TYPEDEF_DECL: choice {
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>
+}
+
+TYPEDEF_FORWARD_CLASS: sequence dict {
+  'typedef':@:type="typedef_forward_class",
+  'class',
+  sv_identifier:name=@,
+  ";"
+}
+
+TYPEDEF_REGULAR: sequence dict {
   'typedef':@:type="typedef",
   <TYPEDEF_BASE>:base=@,
   ?<RANGE>:range=@,
@@ -538,7 +646,17 @@ STRUCT_FIELD: sequence dict {
 
 STRUCT_FIELD_TYPE: choice {
   <TYPE_SPEC>,
+  <STRUCT_FIELD_PKG_TYPE>,
   <STRUCT_FIELD_USER_TYPE>
+}
+
+// `pkg::type_name` — package-qualified type used as a struct/union
+// field type. Captured as a single dict so save reconstructs the
+// `pkg::name` form.
+STRUCT_FIELD_PKG_TYPE: sequence dict {
+  sv_identifier:pkg=@:type="pkg_qual_type",
+  "::",
+  sv_identifier:name=@
 }
 
 STRUCT_FIELD_USER_TYPE: sequence { sv_identifier }
@@ -559,6 +677,8 @@ STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 // matching the `type_spec` field against the keyword set. Pure parse;
 // no symbol-table lookup at parse time.
 USER_TYPED_DECL: sequence dict {
+  ?'const':is_const=true,
+  ?'var':is_var=true,
   sv_identifier:type_spec=@:type="user_typed_decl",
   ?<PARAM_OVERRIDE>:params=@,
   ?<NET_SIGNING>:signing=@,
@@ -1328,6 +1448,7 @@ PRIMARY: choice {
   <NEW_EXPR>,
   <TYPE_CAST>,
   <ASSIGNMENT_PATTERN>,
+  <DEFAULT_VALUE_PATTERN>,
   <SYSTEM_FUNC_CALL>,
   <METHOD_CALL>,
   <FUNC_CALL>,
@@ -1340,6 +1461,20 @@ PRIMARY: choice {
   <SUPER_REF>,
   <PKG_QUAL_PRIMARY>,
   <HIER_REF>
+}
+
+// SV-1800 default-value patterns: `'0` (all bits 0), `'1` (all
+// bits 1), `'x` (all bits x), `'z` (all bits z). Used for full-
+// width literal initialization.
+DEFAULT_VALUE_PATTERN: sequence dict {
+  "'":type="default_value_pattern",
+  <DEFAULT_VALUE_CHAR>:value=@
+}
+
+DEFAULT_VALUE_CHAR: choice {
+  "0":@, "1":@,
+  "x":@, "X":@,
+  "z":@, "Z":@
 }
 
 // `<type>'(expr)` — type cast. Type can be a TYPE_SPEC keyword,
@@ -1508,7 +1643,7 @@ CONCAT_OR_REPLICATION: choice {
 
 CONCAT: sequence dict {
   "{":type="concat",
-  repeat+ <EXPR>:elements[]=@ separator ",",
+  repeat <EXPR>:elements[]=@ separator ",",
   "}"
 }
 
@@ -1792,6 +1927,7 @@ INTERFACE_DECL: sequence dict {
   'interface':@:type="interface",
   ?<LIFETIME>:lifetime=@,
   sv_identifier:name=@,
+  ?<MODULE_HEADER_IMPORT>:header_import=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<INTERFACE_EXTENDS>:extends=@,
   ?<PORT_LIST>:ports=@,
@@ -1939,7 +2075,8 @@ CLASS_ITEM: choice {
   <INCLUDE>,
   <IFDEF>,
   <IFNDEF>,
-  <TYPEDEF_DECL>,
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>,
   <PARAM_DECL_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <CLASS_PURE_VIRTUAL_FUNCTION>,
