@@ -270,3 +270,210 @@ def test_module_with_comments(sv_grammar):
     """
     r = sv_grammar.parse_string(src)
     assert r["descriptions"][0]["name"] == "r"
+
+
+# ─── Preprocessor — recognition only, no expansion ────────────────────
+
+
+def test_preprocessor_define(sv_grammar):
+    """`define is captured as a directive AST node. The body is raw
+    text up to the next un-escaped newline."""
+    src = "`define WIDTH 8\nmodule m; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    d = r["descriptions"][0]
+    assert d["type"] == "define"
+    assert d["name"] == "WIDTH"
+    assert d["body"] == "8"
+
+
+def test_preprocessor_define_with_continuation(sv_grammar):
+    """Backslash-newline line continuation extends the body across
+    multiple source lines."""
+    src = "`define MULTI first \\\n  second\nmodule m; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    d = r["descriptions"][0]
+    assert d["type"] == "define"
+    assert d["name"] == "MULTI"
+    # The body preserves the backslash + newline + continuation text.
+    assert "first" in d["body"]
+    assert "second" in d["body"]
+
+
+def test_preprocessor_include(sv_grammar):
+    src = '`include "definitions.vh"\nmodule m; endmodule\n'
+    r = sv_grammar.parse_string(src)
+    d = r["descriptions"][0]
+    assert d["type"] == "include"
+    assert d["file"] == "definitions.vh"
+
+
+def test_preprocessor_ifdef(sv_grammar):
+    """`ifdef body is captured as raw text up to `endif. The host
+    evaluates the condition and re-parses the active branch."""
+    src = "`ifdef SYNTHESIS\ninitial $display(\"syn\");\n`endif\nmodule m; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    d = r["descriptions"][0]
+    assert d["type"] == "ifdef"
+    assert d["cond"] == "SYNTHESIS"
+    assert "initial" in d["body"]
+
+
+def test_preprocessor_undef(sv_grammar):
+    src = "`undef WIDTH\nmodule m; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    d = r["descriptions"][0]
+    assert d["type"] == "undef"
+    assert d["name"] == "WIDTH"
+
+
+def test_macro_use_in_expression(sv_grammar):
+    """Bare `MACRO at expression position emits a macro_use AST
+    node — distinguished from numeric/identifier literals by the
+    `type: macro_use` discriminator."""
+    src = "module m (output y); assign y = `WIDTH; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    cont = [i for i in r["descriptions"][0]["items"]
+            if i["type"] == "cont_assign"][0]
+    rhs = cont["assignments"][0]["rhs"]
+    # Unwrap precedence-passthrough layers
+    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
+        if rhs.get("tail"):
+            break
+        rhs = rhs.get("lhs", rhs)
+    assert rhs["type"] == "macro_use"
+    assert rhs["name"] == "WIDTH"
+
+
+def test_macro_use_in_number_size(sv_grammar):
+    """`WIDTH'd42 is recognized as a based number whose size IS a
+    macro_use node. The token form (`MACRO immediately followed
+    by `'d42`) is unambiguous: NUMBER_PRIMARY is tried before
+    bare MACRO_USE in PRIMARY's Choice."""
+    src = "module m (output y); assign y = `WIDTH'd42; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    cont = [i for i in r["descriptions"][0]["items"]
+            if i["type"] == "cont_assign"][0]
+    rhs = cont["assignments"][0]["rhs"]
+    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
+        if rhs.get("tail"):
+            break
+        rhs = rhs.get("lhs", rhs)
+    assert rhs["type"] == "number"
+    n = rhs["number"]
+    assert n["kind"] == "based"
+    assert n["base"] == "d"
+    assert n["value"] == "42"
+    assert n["size"]["type"] == "macro_use"
+    assert n["size"]["name"] == "WIDTH"
+
+
+def test_macro_call_with_args(sv_grammar):
+    """Function-like macro call `MACRO(a, b) captures args as an
+    array of strings, with nested parens balanced via the
+    sv_balanced_arg parser."""
+    src = "module m (output y); assign y = `MAX(a, b); endmodule\n"
+    r = sv_grammar.parse_string(src)
+    cont = [i for i in r["descriptions"][0]["items"]
+            if i["type"] == "cont_assign"][0]
+    rhs = cont["assignments"][0]["rhs"]
+    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
+        if rhs.get("tail"):
+            break
+        rhs = rhs.get("lhs", rhs)
+    assert rhs["type"] == "macro_use"
+    assert rhs["name"] == "MAX"
+    # Args preserve their text exactly as-is — leading space included.
+    # The host trims if it cares; we don't lose information.
+    assert rhs["args"] == ["a", " b"]
+
+
+def test_macro_call_with_nested_parens(sv_grammar):
+    """Nested parens inside macro args are balanced by the
+    depth-tracking sv_balanced_arg parser: `FOO(g(a, b), c)
+    yields two args, not three."""
+    src = "module m (output y); assign y = `FOO(g(a, b), c); endmodule\n"
+    r = sv_grammar.parse_string(src)
+    cont = [i for i in r["descriptions"][0]["items"]
+            if i["type"] == "cont_assign"][0]
+    rhs = cont["assignments"][0]["rhs"]
+    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
+        if rhs.get("tail"):
+            break
+        rhs = rhs.get("lhs", rhs)
+    assert rhs["args"] == ["g(a, b)", " c"]
+
+
+def test_macro_use_as_module_name(sv_grammar):
+    """`module `MOD_NAME (...)` — IDENT_OR_MACRO wraps the name slot."""
+    src = "module `MOD_NAME (input a, output y); endmodule\n"
+    r = sv_grammar.parse_string(src)
+    m = r["descriptions"][0]
+    assert m["name"]["type"] == "macro_use"
+    assert m["name"]["name"] == "MOD_NAME"
+
+
+def test_macro_use_as_port_name(sv_grammar):
+    src = "module m (input `CLK_NAME, output y); endmodule\n"
+    r = sv_grammar.parse_string(src)
+    port0 = r["descriptions"][0]["ports"]["ports"][0]
+    assert port0["name"]["type"] == "macro_use"
+    assert port0["name"]["name"] == "CLK_NAME"
+
+
+def test_macro_use_as_wire_name(sv_grammar):
+    src = "module m; wire `SIG_NAME; endmodule\n"
+    r = sv_grammar.parse_string(src)
+    net = [i for i in r["descriptions"][0]["items"]
+           if i["type"] == "net_decl"][0]
+    assert net["names"][0]["name"]["type"] == "macro_use"
+    assert net["names"][0]["name"]["name"] == "SIG_NAME"
+
+
+def test_macro_use_as_instance_name(sv_grammar):
+    """Both the module type and the instance name can be macros."""
+    src = "module m; `MOD_TYPE `U0(.clk(clk)); endmodule\n"
+    r = sv_grammar.parse_string(src)
+    inst = [i for i in r["descriptions"][0]["items"]
+            if i["type"] == "instance"][0]
+    assert inst["module_name"]["type"] == "macro_use"
+    assert inst["module_name"]["name"] == "MOD_TYPE"
+    assert inst["instances"][0]["name"]["type"] == "macro_use"
+    assert inst["instances"][0]["name"]["name"] == "U0"
+
+
+def test_macro_statement(sv_grammar):
+    """A bare `MACRO; at statement position parses as a macro_stmt,
+    consuming the optional trailing semicolon. Useful for assertion
+    macros: `ASSERT_CLOCKED(clk, req, gnt); etc."""
+    src = "module m (input clk); always @(*) `MY_ASSERT(clk);\nendmodule\n"
+    r = sv_grammar.parse_string(src)
+    always = [i for i in r["descriptions"][0]["items"]
+              if i["type"] == "always"][0]
+    body = always["body"]
+    assert body["type"] == "macro_stmt"
+    assert body["macro"]["type"] == "macro_use"
+    assert body["macro"]["name"] == "MY_ASSERT"
+
+
+def test_define_then_module_use(sv_grammar):
+    """Real-world common case: `define at top-level, then a module
+    that uses the macro in a port range and an assignment."""
+    src = (
+        "`define WIDTH 8\n"
+        "module m (output [`WIDTH-1:0] y);\n"
+        "  assign y = `WIDTH;\n"
+        "endmodule\n"
+    )
+    r = sv_grammar.parse_string(src)
+    # First description: the directive.
+    d0 = r["descriptions"][0]
+    assert d0["type"] == "define"
+    assert d0["name"] == "WIDTH"
+    # Second description: the module.
+    d1 = r["descriptions"][1]
+    assert d1["type"] == "module"
+    # The port range MSB is an EXPR containing a macro_use.
+    port = d1["ports"]["ports"][0]
+    range_msb_str = str(port["range"])
+    assert "macro_use" in range_msb_str
+    assert "WIDTH" in range_msb_str

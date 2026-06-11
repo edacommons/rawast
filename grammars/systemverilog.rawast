@@ -57,11 +57,29 @@ start: <SOURCE_TEXT>
 // Top-level ignore: whitespace + both comment styles. SV LRM §5.4
 // permits both `//` and `/* */`; the std parsers handle both.
 SOURCE_TEXT ignore whitespace line_comment block_comment: sequence dict {
-  repeat <DESCRIPTION>:descriptions[]=@
+  <DESCRIPTIONS>:descriptions=@
 }
 
+// Wrap the repeat in its own `sequence array` rule so save-side
+// dispatch can iterate the array cleanly. Putting the repeat
+// directly in SOURCE_TEXT (`repeat <DESCRIPTION>:descriptions[]=@`)
+// breaks Choice dispatch because the pending-name path can't find
+// the top dict scope at the moment alt-selection runs — peek_value
+// ends up empty/wrong-typed and every alt's can_consume returns
+// false. The extra rule resolves cleanly per the tcl.SCRIPT pattern.
+DESCRIPTIONS: sequence array {
+  repeat <DESCRIPTION>
+}
+
+// Flat Choice — directives are inlined directly (not nested through
+// DIRECTIVE) so save dispatch can find the `:type=` discriminator on
+// each alternative without recursing into a nested Choice.
 DESCRIPTION: choice {
-  <DIRECTIVE>,
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
   <MACRO_STMT>,
   <MODULE_DECL>
   // future: <UDP_DECL>, <CONFIG_DECL>, <PACKAGE_DECL>, <INTERFACE_DECL>
@@ -71,11 +89,11 @@ DESCRIPTION: choice {
 
 MODULE_DECL: sequence dict {
   <MODULE_KEYWORD>:keyword=@:type="module",
-  sv_identifier:name=@,
+  <IDENT_OR_MACRO>:name=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<PORT_LIST>:ports=@,
   ";",
-  repeat <MODULE_ITEM>:items[]=@,
+  <MODULE_ITEMS>:items=@,
   'endmodule'
 }
 
@@ -124,7 +142,7 @@ PORT_DECL_ANSI: sequence dict {
   <PORT_DIRECTION>:direction=@,
   ?<TYPE_SPEC>:type_spec=@,
   ?<RANGE>:range=@,
-  sv_identifier:name=@,
+  <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
 
@@ -153,9 +171,28 @@ TYPE_SPEC: choice {
 
 // ─── Module items ───────────────────────────────────────────────────────
 
+// Array-wrapper rule for the items list in MODULE_DECL — same
+// pattern as DESCRIPTIONS (see SOURCE_TEXT). Wrapping the repeat
+// in its own `sequence array` rule lets save-side dispatch iterate
+// the array cleanly; embedding `repeat <X>:items[]=@` directly in
+// MODULE_DECL breaks Choice dispatch at save time.
+MODULE_ITEMS: sequence array {
+  repeat <MODULE_ITEM>
+}
+
+// Flat Choice — directives inlined for save-dispatch reasons (see
+// DESCRIPTION). MACRO_STMT comes LAST: a `MACRO at module-item
+// position is tried as a regular item first (instantiation, decl,
+// etc.), and only falls through to MACRO_STMT if nothing else
+// matches. This is what makes `MOD_TYPE `U0(.clk(clk)); parse as
+// an instance (with macro module-type and macro instance-name)
+// instead of gobbling just `MOD_TYPE as a statement.
 MODULE_ITEM: choice {
-  <DIRECTIVE>,
-  <MACRO_STMT>,
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
   <PORT_DECL_STMT>,
   <NET_DECL>,
   <REG_DECL>,
@@ -169,7 +206,8 @@ MODULE_ITEM: choice {
   <GENERATE_BLOCK>,
   <TASK_DECL>,
   <FUNCTION_DECL>,
-  <MODULE_INSTANTIATION>
+  <MODULE_INSTANTIATION>,
+  <MACRO_STMT>
   // future: <SPECIFY_BLOCK>, <DEFPARAM_STMT>, <BIND_STMT>
 }
 
@@ -205,7 +243,7 @@ NET_KIND: choice {
 NET_SIGNING: choice { 'signed':@, 'unsigned':@ }
 
 NET_NAME: sequence dict {
-  sv_identifier:name=@,
+  <IDENT_OR_MACRO>:name=@,
   ?<NET_INIT>
 }
 
@@ -227,7 +265,7 @@ REG_KIND: choice {
 }
 
 REG_NAME: sequence dict {
-  sv_identifier:name=@,
+  <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:packed=@,
   ?<NET_INIT>
 }
@@ -347,7 +385,7 @@ EVENT_SEP: choice { ",":@, 'or':@ }
 // ─── Module instantiation ───────────────────────────────────────────────
 
 MODULE_INSTANTIATION: sequence dict {
-  sv_identifier:module_name=@:type="instance",
+  <IDENT_OR_MACRO>:module_name=@:type="instance",
   ?<PARAM_OVERRIDE>:params=@,
   repeat+ <INSTANCE>:instances[]=@ separator ",",
   ";"
@@ -374,7 +412,7 @@ PARAM_BINDING_POSITIONAL: sequence dict {
 }
 
 INSTANCE: sequence dict {
-  sv_identifier:name=@,
+  <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:array=@,
   "(",
   repeat <PORT_BINDING>:port_bindings[]=@ separator ",",
@@ -525,7 +563,11 @@ TASK_ITEM: choice {
 // ─── Statements ─────────────────────────────────────────────────────────
 
 STATEMENT: choice {
-  <DIRECTIVE>,
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
   <MACRO_STMT>,
   <BLOCK_STMT>,
   <IF_STMT>,
@@ -952,8 +994,16 @@ FUNC_CALL: sequence dict {
 
 // System function call: `$name(arg, ...)` — same shape as task call
 // but used in expression context.
-SYSTEM_FUNC_CALL: sequence dict {
-  sv_identifier:name=@:type="system_func",
+// System function calls start with `$` per LRM §20. The `$` is
+// part of the lexical form — we match it as a literal then take
+// the identifier portion. (`sv_identifier` accepts the system form
+// as a single token, but having the literal `$` here is what stops
+// SYSTEM_FUNC_CALL from claiming plain identifiers like `clk` —
+// the earlier behavior was a bug surfaced by save-direction round-
+// tripping.)
+SYSTEM_FUNC_CALL ignore: sequence dict {
+  "$":type="system_func",
+  sv_identifier:name=@,
   ?<SYSTEM_FUNC_ARGS>:args=@
 }
 
@@ -1007,6 +1057,16 @@ MACRO_USE ignore: sequence dict {
   ?<MACRO_CALL_ARGS>:args=@
 }
 
+// Bare macro use: `IDENT only, no `(args)`. Used where the
+// surrounding rule (e.g. MODULE_INSTANTIATION's INSTANCE) takes
+// `(...)` as its OWN structural element — the full MACRO_USE
+// would gobble those parens as its args, breaking the outer
+// parse. This form parses just the backtick + name.
+MACRO_USE_BARE ignore: sequence dict {
+  "`",
+  sv_identifier:name=@:type="macro_use"
+}
+
 MACRO_CALL_ARGS: sequence array {
   "(",
   repeat sv_balanced_arg separator ",",
@@ -1016,12 +1076,18 @@ MACRO_CALL_ARGS: sequence array {
 // Choice wraps. Wherever the grammar previously pinned a specific
 // terminal that a macro might substitute for, route through one of
 // these so MACRO_USE is an accepted alternative. The terminal's
-// emitted value (int/string/float) and macro_use AST node are
-// both passable in the same slot — the host distinguishes by
-// checking for `{type: "macro_use"}`.
+// emitted value (int/string) and macro_use AST node are both
+// passable in the same slot — the host distinguishes by checking
+// for `{type: "macro_use"}`.
+//
+// (No FLOAT_OR_MACRO: real-number literals can't usefully be
+// supplanted by a macro; a bare `` `MACRO `` at expression position
+// reaches MACRO_USE in PRIMARY, which is the correct classification.)
 INT_OR_MACRO:   choice { <INT_VAL>,    <MACRO_USE> }
-FLOAT_OR_MACRO: choice { <FLOAT_VAL>,  <MACRO_USE> }
-IDENT_OR_MACRO: choice { <IDENT_VAL>,  <MACRO_USE> }
+// IDENT_OR_MACRO uses the BARE form because identifier slots are
+// inside rules that have their own `(...)` (port lists, parameter
+// lists, etc.); the full MACRO_USE would gobble those.
+IDENT_OR_MACRO: choice { <IDENT_VAL>,  <MACRO_USE_BARE> }
 
 // Non-container wrappers — the parser's value flows through the
 // Sequence and becomes the Choice alternative's emitted value.
@@ -1029,22 +1095,16 @@ IDENT_OR_MACRO: choice { <IDENT_VAL>,  <MACRO_USE> }
 //  for Parse terminals in Choice position, this wrapper form is
 //  the canonical way to forward the parsed value.)
 INT_VAL:   sequence { int }
-FLOAT_VAL: sequence { float }
 IDENT_VAL: sequence { sv_identifier }
 
-// Preprocessor directives that begin with a specific backtick-
-// keyword. These are distinct from macro USES (`` `MACRO_NAME ``) —
-// the keyword prefix (`` `define ``, `` `include ``, etc.) makes
-// them recognizable. Bare macro uses at directive/statement
-// position go through MACRO_STMT instead (which handles the
-// optional trailing `;`).
-DIRECTIVE: choice {
-  <DEFINE>,
-  <UNDEF>,
-  <INCLUDE>,
-  <IFDEF>,
-  <IFNDEF>
-}
+// Preprocessor directives are inlined directly into the host
+// Choice rules (DESCRIPTION, MODULE_ITEM, STATEMENT) rather than
+// being collected under a nested DIRECTIVE Choice. The flat-
+// Choice form is required for save-side dispatch: save walks each
+// host-Choice alt looking for a `:type=` discriminator on the
+// resolved rule body, and won't recurse through a nested Choice
+// to find one. The cost is the keyword list being repeated in
+// three places; the benefit is round-trip save/load works.
 
 // `define NAME [params] body
 // Body extends to the next un-escaped newline. We capture as raw
@@ -1055,11 +1115,13 @@ DIRECTIVE: choice {
 // causing the body to swallow the next line). Horizontal whitespace
 // between the keyword/name/body is consumed via `linespace` (from
 // std). The body extends to the next un-escaped newline, with
-// `\` line-continuation handled by sv_line_text.
+// `\` line-continuation handled by sv_line_text. Discriminator
+// `:type="define"` lives on the leading keyword so save-side
+// dispatch picks it up from the first item.
 DEFINE ignore: sequence dict {
-  "`define",
+  "`define":type="define",
   linespace,
-  sv_identifier:name=@:type="define",
+  sv_identifier:name=@,
   linespace,
   sv_line_text:body=@
 }
