@@ -593,6 +593,34 @@ def test_imports(sv_grammar):
         assert imp["type"] == "import"
 
 
+def test_multi_port_shared_direction(sv_grammar):
+    """SV's multi-port shorthand: `input a, b, c` is equivalent to
+    `input a, input b, input c`. The first port is direction-headed
+    and the rest inherit. Host walks left-to-right to re-apply.
+
+    Parse-only: continuation ports are tagged `type=port_name_cont`
+    so the host can distinguish them from direction-headed ports."""
+    src = "module mon (input clk, req, gnt, output logic q, r); endmodule\n"
+    r = sv_grammar.parse_string(src)
+    ports = r["descriptions"][0]["ports"]["ports"]
+    assert len(ports) == 5
+    # First port: direction-headed (input clk).
+    assert ports[0].get("direction") == "input"
+    assert ports[0].get("name") == "clk"
+    assert "type" not in ports[0] or ports[0]["type"] == "port_decl"
+    # Continuations inherit from clk.
+    assert ports[1].get("type") == "port_name_cont"
+    assert ports[1].get("name") == "req"
+    assert ports[2].get("type") == "port_name_cont"
+    assert ports[2].get("name") == "gnt"
+    # Then a new direction-headed port (output logic q).
+    assert ports[3].get("direction") == "output"
+    assert ports[3].get("name") == "q"
+    # And another continuation inheriting from q.
+    assert ports[4].get("type") == "port_name_cont"
+    assert ports[4].get("name") == "r"
+
+
 def test_modport_declarations(sv_grammar):
     """Modports in interface bodies — body captured as raw text for
     host re-parsing."""

@@ -135,29 +135,51 @@ PORT_LIST: choice {
   <PORT_LIST_NONANSI>
 }
 
+// ANSI port list. The FIRST port must be direction-headed (so the
+// ANSI/non-ANSI disambiguation works correctly — `(a, b, c)` falls
+// through to PORT_LIST_NONANSI). Subsequent ports can be either
+// direction-headed (new direction) or name-only continuations
+// (inherit the preceding direction, like SV's `input a, b, c`
+// shorthand). PORT_BODY_NEXT wraps the leading `,` so we can put
+// the Choice over direction-vs-cont forms in one place.
 PORT_LIST_ANSI: sequence dict {
   "(":style="ansi",
-  repeat <PORT_BODY_ANSI>:ports[]=@ separator ",",
+  <PORT_BODY_FIRST>:ports[]=@,
+  repeat <PORT_BODY_NEXT>:ports[]=@,
   ")"
 }
 
-// Port body Choice — user-typed-port (e.g. `input data_t x`) tried
-// FIRST because PORT_DECL_ANSI's optional `?<TYPE_SPEC>` would
-// otherwise greedily match the user-defined name as a type and
-// leave the actual name unconsumed. PORT_DECL_ANSI handles
-// keyword-typed ports (`input logic clk`) and untyped ports
-// (`input clk`).
-//
-// Pre-existing limitation: SV's multi-port shorthand form
-// `input a, b, c` (where `b, c` inherit `input` from the
-// preceding port) isn't supported in the ANSI grammar today —
-// adding a PORT_NAME_CONT alternative would conflict with the
-// non-ANSI port-list path (which is just bare identifiers with
-// commas). For now, write each port explicitly with its own
-// direction: `input a, input b, input c`.
-PORT_BODY_ANSI: choice {
+// First port — must have a direction keyword. PORT_DECL_ANSI_USERTYPE
+// (direction + user type + name) tried FIRST because PORT_DECL_ANSI's
+// optional `?<TYPE_SPEC>` would otherwise greedily match a user-
+// defined type name as the port name.
+PORT_BODY_FIRST: choice {
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>
+}
+
+// Subsequent ports: comma + port-body. The port-body Choice
+// includes the name-only continuation form (PORT_NAME_CONT) for
+// inherited-direction ports. The non-container Sequence passes
+// PORT_BODY_ANY's emitted port-dict up through PORT_LIST_ANSI's
+// `:ports[]=@` binding.
+PORT_BODY_NEXT: sequence { ",", <PORT_BODY_ANY> }
+
+PORT_BODY_ANY: choice {
+  <PORT_DECL_ANSI_USERTYPE>,
+  <PORT_DECL_ANSI>,
+  <PORT_NAME_CONT>
+}
+
+// Continuation form: `input a, b, c` is shorthand for
+// `input a, input b, input c`. The first port carries the
+// direction; subsequent ports inherit it. Pure parse — host
+// re-applies the inherited direction by walking the port array
+// left-to-right.
+PORT_NAME_CONT: sequence dict {
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@:type="port_name_cont",
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
 
 // `input <typedef'd_name> [range] <name>` — two identifiers in a row,
