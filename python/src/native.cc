@@ -363,5 +363,5 @@ NB_MODULE(_native, m) {
             "grammar files (use it to browse a JSON-form grammar as a "
             "Python dict).");
 
-    m.attr("__version__") = "0.1.6";
+    m.attr("__version__") = "0.1.7";
 }
