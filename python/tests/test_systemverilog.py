@@ -884,6 +884,46 @@ def test_virtual_interface_and_global_clocking(sv_grammar):
         sv_grammar.parse_string(src)
 
 
+def test_randomize_with_and_method_stmt(sv_grammar):
+    """`obj.randomize() with { ... };` as expression OR statement;
+    `obj.method();` as statement. METHOD_CALL handles the
+    expression form; METHOD_CALL_STMT handles the statement form.
+    IMMEDIATE_ASSERT now uses sv_balanced_arg for body so the
+    nested-paren `assert(obj.randomize() with { ... });` works."""
+    for src in [
+        "module m; initial begin x = obj.randomize() with { y > 0; }; end endmodule\n",
+        "module m; initial obj.randomize(); endmodule\n",
+        "module m; initial obj.randomize() with { y > 0; }; endmodule\n",
+        "module m; initial drv.bus.write(addr, data); endmodule\n",
+        "class C; function void foo(); this.config.set_value(42); endfunction endclass\n",
+        "module m; initial begin assert(obj.randomize() with { x > 0; }); end endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_type_cast_and_assignment_pattern(sv_grammar):
+    """`<type>'(expr)` cast and `'{field: val, ...}` assignment
+    pattern primaries."""
+    for src in [
+        "module m; initial begin x = int'(y); end endmodule\n",
+        "module m; initial begin x = byte_t'(y); end endmodule\n",
+        "module m; initial begin s = '{a: 1, b: 2}; end endmodule\n",
+        "module m; initial begin arr = '{1, 2, 3, 4}; end endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_qualified_class_extends(sv_grammar):
+    """`extends pkg::Base` and top-level typedef declarations."""
+    for src in [
+        "package p; class C extends pkg::Base; endclass endpackage\n",
+        "class C extends pkg::Base; endclass\n",
+        "typedef enum { A, B } e_t; class C; e_t x; endclass\n",
+        "typedef struct packed { int a; bit b; } s_t;\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
 def test_uvm_style_endtoend(sv_grammar):
     """Real-world UVM-style testbench code with package + typedef
     enum/struct + class with rand/constraint/extern/virtual +

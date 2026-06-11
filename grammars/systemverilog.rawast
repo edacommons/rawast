@@ -86,6 +86,7 @@ DESCRIPTION: choice {
   <UDP_DECL>,
   <CONFIG_DECL>,
   <PROGRAM_DECL>,
+  <TYPEDEF_DECL>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
   <MACRO_STMT>,
@@ -788,6 +789,7 @@ STATEMENT: choice {
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
   <SYSTEM_TASK_CALL>,
+  <METHOD_CALL_STMT>,
   <TASK_CALL>,
   <DISABLE_STMT>,
   <WAIT_STMT>,
@@ -1148,6 +1150,8 @@ PRIMARY: choice {
   <PAREN_EXPR>,
   <NULL_LIT>,
   <NEW_EXPR>,
+  <TYPE_CAST>,
+  <ASSIGNMENT_PATTERN>,
   <SYSTEM_FUNC_CALL>,
   <METHOD_CALL>,
   <FUNC_CALL>,
@@ -1162,14 +1166,67 @@ PRIMARY: choice {
   <HIER_REF>
 }
 
+// `<type>'(expr)` — type cast. Type can be a TYPE_SPEC keyword,
+// an identifier (typedef'd), or a width expression. The cast
+// operator is the single quote `'` followed by parens.
+//
+// For pure parse, the type is captured as a single identifier
+// (covers most cases: `int'(x)`, `byte_t'(y)`, etc.). Width-
+// expression casts (`8'(x)`) parse as NUMBER_PRIMARY's based-
+// number form via the existing number grammar.
+TYPE_CAST: sequence dict {
+  sv_identifier:type=@:type="type_cast",
+  "'",
+  "(",
+  <EXPR>:value=@,
+  ")"
+}
+
+// `'{<fields>}` — assignment pattern. Used to initialize struct/
+// array/queue literals. Body captured raw because the inner
+// content has its own dialect (key-value pairs, default values,
+// type-based defaults).
+ASSIGNMENT_PATTERN: sequence dict {
+  "'":type="assignment_pattern",
+  "{",
+  sv_balanced_braces:body=@,
+  "}"
+}
+
 // `obj.method(args)` / `obj.field.method(args)` — method invocation
 // via dot notation. At least one `.path` is required so this rule
-// doesn't claim plain `foo()` (which is FUNC_CALL).
+// doesn't claim plain `foo()` (which is FUNC_CALL). An optional
+// trailing `with { <constraints> }` clause (for
+// `obj.randomize() with { x > 0; }` and similar) is captured raw.
 METHOD_CALL: sequence dict {
   sv_identifier:name=@:type="method_call",
   repeat+ <HIER_PART>:path[]=@,
   "(",
   repeat <EXPR>:args[]=@ separator ",",
+  ")",
+  ?<WITH_CLAUSE>:with=@
+}
+
+// Optional `with { ... }` (constraint block style) OR `with (expr)`
+// (array-method predicate style) trailing a method call. Body
+// captured raw to handle both forms uniformly; host inspects the
+// captured text to decide.
+WITH_CLAUSE: choice {
+  <WITH_BRACES>,
+  <WITH_PARENS>
+}
+
+WITH_BRACES: sequence dict {
+  'with':@:type="with_braces",
+  "{",
+  sv_balanced_braces:body=@,
+  "}"
+}
+
+WITH_PARENS: sequence dict {
+  'with':@:type="with_parens",
+  "(",
+  *:body=@,
   ")"
 }
 
@@ -1619,11 +1676,28 @@ CLASS_DECL_PLAIN: sequence dict {
   ?<END_LABEL>:end_label=@
 }
 
+// `extends BASE [#(params)]` — class inheritance. BASE can be a
+// plain identifier OR a package-qualified `pkg::Name`. Tried in
+// order: pkg-qualified first (would otherwise leave `::Name`
+// unconsumed).
 CLASS_EXTENDS: sequence dict {
   'extends':@,
-  sv_identifier:base=@,
+  <CLASS_BASE>:base=@,
   ?<PARAM_OVERRIDE>:params=@
 }
+
+CLASS_BASE: choice {
+  <CLASS_BASE_QUALIFIED>,
+  <CLASS_BASE_PLAIN>
+}
+
+CLASS_BASE_QUALIFIED: sequence dict {
+  sv_identifier:pkg=@:type="qualified_base",
+  "::",
+  sv_identifier:name=@
+}
+
+CLASS_BASE_PLAIN: sequence { sv_identifier }
 
 // `implements I1, I2, ...` — class implements one or more
 // interfaces (SV-1800 interface classes).
@@ -2023,7 +2097,7 @@ FORK_JOIN_PLAIN: sequence dict {
 IMMEDIATE_ASSERT: sequence dict {
   <ASSERT_KIND>:kind=@:type="assert_immediate",
   "(",
-  *:body=@,
+  sv_balanced_arg:body=@,
   ")",
   *:action=@,
   ";"
@@ -2173,6 +2247,20 @@ FOREACH_STMT: sequence dict {
   'foreach':@:type="foreach",
   "(", *:iter=@, ")",
   <STATEMENT>:body=@
+}
+
+// `obj.method(args);` / `obj.field.method(args);` — method call
+// as a statement. Distinct from TASK_CALL which is just
+// `name(args);`. The trailing `with { ... }` clause is supported
+// via the same METHOD_CALL primary rule's optional with-clause.
+METHOD_CALL_STMT: sequence dict {
+  sv_identifier:name=@:type="method_call_stmt",
+  repeat+ <HIER_PART>:path[]=@,
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")",
+  ?<WITH_CLAUSE>:with=@,
+  ";"
 }
 
 // `virtual interface bus_if [#(params)] name [, name2, ...];` —
