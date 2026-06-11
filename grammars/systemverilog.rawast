@@ -147,6 +147,14 @@ PORT_LIST_ANSI: sequence dict {
 // leave the actual name unconsumed. PORT_DECL_ANSI handles
 // keyword-typed ports (`input logic clk`) and untyped ports
 // (`input clk`).
+//
+// Pre-existing limitation: SV's multi-port shorthand form
+// `input a, b, c` (where `b, c` inherit `input` from the
+// preceding port) isn't supported in the ANSI grammar today —
+// adding a PORT_NAME_CONT alternative would conflict with the
+// non-ANSI port-list path (which is just bare identifiers with
+// commas). For now, write each port explicitly with its own
+// direction: `input a, input b, input c`.
 PORT_BODY_ANSI: choice {
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>
@@ -247,11 +255,18 @@ MODULE_ITEM: choice {
   <GENERATE_BLOCK>,
   <TASK_DECL>,
   <FUNCTION_DECL>,
+  <SPECIFY_BLOCK>,
+  <DEFPARAM_STMT>,
+  <BIND_STMT>,
+  <LET_DECL>,
+  <PROPERTY_DECL>,
+  <SEQUENCE_DECL>,
+  <CONCURRENT_ASSERT>,
+  <MODPORT_DECL>,
   <MODULE_INSTANTIATION>,
   <TYPEDEF_DECL>,
   <USER_TYPED_DECL>,
   <MACRO_STMT>
-  // future: <SPECIFY_BLOCK>, <DEFPARAM_STMT>, <BIND_STMT>
 }
 
 // Verilog-95 / non-ANSI port declaration: a port direction followed by
@@ -1452,6 +1467,117 @@ CONSTRAINT_DECL: sequence dict {
   "{",
   *:body=@,
   "}"
+}
+
+// ─── Miscellaneous module-item constructs (parse-only) ──────────────────
+
+// `modport NAME (input a, b, output c, ...);` — interface modport.
+// Lives in MODULE_ITEM so it can appear in interface bodies; module
+// bodies aren't supposed to have modports per LRM, but pure-parse
+// doesn't enforce that — host validates semantically.
+//
+// The body inside parens is direction-keyword + names, where each
+// direction group switches to a new direction. PEG can't cleanly
+// express "identifier until next direction keyword" without negative
+// lookahead, so the body is captured as raw text; host re-parses
+// into the structured `{direction, names: [...]}` form.
+MODPORT_DECL: sequence dict {
+  'modport':@:type="modport",
+  sv_identifier:name=@,
+  "(",
+  *:body=@,
+  ")",
+  ";"
+}
+
+// `let NAME(args) = expr;` — SV-1800 macro-like substitution. Body
+// captured as raw text up to the trailing `;`. Host re-parses if it
+// needs to manipulate the body.
+LET_DECL: sequence dict {
+  'let':@:type="let",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  "=",
+  *:body=@,
+  ";"
+}
+
+// `bind <target> <module> <instance> (...);` — out-of-module
+// directive. Target is either a module type or an instance path;
+// captured as opaque text up to the binding clause.
+BIND_STMT: sequence dict {
+  'bind':@:type="bind",
+  *:body=@,
+  ";"
+}
+
+// `defparam path.to.param = value;` — overrides a parameter on an
+// instance after the fact. Deprecated in SV-1800 but still legal.
+DEFPARAM_STMT: sequence dict {
+  'defparam':@:type="defparam",
+  *:body=@,
+  ";"
+}
+
+// `specify … endspecify` — timing specifications. Body is highly
+// dialect-specific (timing paths, edge specifications); capture as
+// raw text and let host re-parse if needed.
+SPECIFY_BLOCK: sequence dict {
+  'specify':@:type="specify",
+  *:body=@,
+  'endspecify'
+}
+
+// ─── SystemVerilog Assertions (SVA) — parse-only ──────────────────────
+
+// SVA introduces a temporal property language (sequences, properties,
+// assert/cover/assume statements) layered on top of expressions. The
+// surface forms are well-defined but the temporal operators (`##`,
+// `|->`, `|=>`, `s_eventually`, `s_always`, `throughout`, `within`,
+// repetition `[*N]`, `[->N]`, `[=N]`, etc.) form an entire sub-
+// language. For pure parse, we capture the property body as raw text
+// and let the host re-parse it via a dedicated SVA pass.
+
+// `assert property (<expr>) [<action>];`
+// `cover property (<expr>) [<action>];`
+// `assume property (<expr>) [<action>];`
+//
+// The `action` is an optional `else <stmt>` or `; <stmt>` clause —
+// captured as part of the raw body up to the trailing `;`.
+CONCURRENT_ASSERT: sequence dict {
+  <ASSERT_KIND>:kind=@:type="assert_concurrent",
+  'property',
+  "(",
+  *:body=@,
+  ")",
+  *:action=@,
+  ";"
+}
+
+ASSERT_KIND: choice {
+  'assert':@, 'cover':@, 'assume':@, 'restrict':@
+}
+
+// `property NAME([args]); <body> endproperty [: NAME]`
+PROPERTY_DECL: sequence dict {
+  'property':@:type="property",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endproperty',
+  ?<END_LABEL>:end_label=@
+}
+
+// `sequence NAME([args]); <body> endsequence [: NAME]`
+SEQUENCE_DECL: sequence dict {
+  'sequence':@:type="sequence",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endsequence',
+  ?<END_LABEL>:end_label=@
 }
 
 

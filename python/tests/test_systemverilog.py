@@ -593,6 +593,79 @@ def test_imports(sv_grammar):
         assert imp["type"] == "import"
 
 
+def test_modport_declarations(sv_grammar):
+    """Modports in interface bodies — body captured as raw text for
+    host re-parsing."""
+    src = (
+        "interface bus_if;\n"
+        "  logic clk;\n"
+        "  logic [7:0] data;\n"
+        "  modport master (input clk, output data);\n"
+        "  modport slave (input clk, input data);\n"
+        "endinterface\n"
+    )
+    r = sv_grammar.parse_string(src)
+    intf = r["descriptions"][0]
+    assert intf["type"] == "interface"
+    items = intf["items"]
+    modports = [i for i in items if i.get("type") == "modport"]
+    assert len(modports) == 2
+    assert modports[0]["name"] == "master"
+    assert modports[1]["name"] == "slave"
+
+
+def test_let_bind_defparam_specify(sv_grammar):
+    """Miscellaneous module-item constructs that historically were
+    documented as 'future' but now parse to AST nodes."""
+    for src, kind in [
+        ("module m; let SIZE = 8; endmodule\n",                       "let"),
+        ("module m; let MAX(a, b) = (a > b) ? a : b; endmodule\n",    "let"),
+        ("module m; defparam u0.WIDTH = 16; endmodule\n",             "defparam"),
+        ("module m; bind sub_module assertions a1 (.*); endmodule\n", "bind"),
+        ("module m; specify (a => b) = 5; endspecify endmodule\n",    "specify"),
+    ]:
+        r = sv_grammar.parse_string(src)
+        items = r["descriptions"][0]["items"]
+        assert items[0].get("type") == kind, f"{src!r}: expected {kind}, got {items[0].get('type')!r}"
+
+
+def test_sva_concurrent_assertions(sv_grammar):
+    """SVA `assert property` / `cover property` / `assume property` —
+    body captured raw; host re-parses temporal expression."""
+    for src, kind in [
+        ("module m; assert property (a |-> b); endmodule\n",                            "assert_concurrent"),
+        ("module m; cover property (@(posedge clk) req); endmodule\n",                  "assert_concurrent"),
+        ("module m; assume property (rst == 0); endmodule\n",                           "assert_concurrent"),
+        ("module m; assert property (@(posedge clk) p) else $error(\"fail\"); endmodule\n", "assert_concurrent"),
+    ]:
+        r = sv_grammar.parse_string(src)
+        items = r["descriptions"][0]["items"]
+        assert items[0].get("type") == kind
+
+
+def test_sva_property_and_sequence(sv_grammar):
+    """Named `property NAME … endproperty` and `sequence NAME …
+    endsequence` declarations. Combined with concurrent assertions
+    in a monitor module."""
+    src = (
+        "module mon (input logic clk, input req, input gnt);\n"
+        "  property req_gnt;\n"
+        "    @(posedge clk) req |-> ##[1:5] gnt;\n"
+        "  endproperty\n"
+        "  sequence req_seq;\n"
+        "    @(posedge clk) req ##1 gnt;\n"
+        "  endsequence\n"
+        "  assert property (req_gnt) else $error;\n"
+        "endmodule\n"
+    )
+    r = sv_grammar.parse_string(src)
+    items = r["descriptions"][0]["items"]
+    types = [i.get("type") for i in items]
+    assert "property" in types
+    assert "sequence" in types
+    assert "assert_concurrent" in types
+
+
 def test_define_then_module_use(sv_grammar):
     """Real-world common case: `define at top-level, then a module
     that uses the macro in a port range and an assignment."""
