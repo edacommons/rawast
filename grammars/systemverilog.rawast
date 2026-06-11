@@ -128,6 +128,7 @@ PARAM_PORT_LIST: sequence dict {
 // non-container sidesteps that.
 PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
+  <PARAM_DECL_TYPE_IMPLICIT>,
   <PARAM_DECL_VALUE>,
   <PARAM_DECL_IMPLICIT>
 }
@@ -139,13 +140,22 @@ PARAM_DECL_TYPE: sequence dict {
   ?<PARAM_TYPE_DEFAULT>:default=@
 }
 
+// Implicit-`parameter` form for class type parameters:
+// `class C #(type T = int);`. The `parameter` keyword is omitted.
+PARAM_DECL_TYPE_IMPLICIT: sequence dict {
+  'type':@:type="param_type_implicit",
+  sv_identifier:name=@,
+  ?<PARAM_TYPE_DEFAULT>:default=@
+}
+
 PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 
 PARAM_DECL_VALUE: sequence {
   'parameter':@:type="param",
   ?<TYPE_SPEC>:type_spec=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
@@ -157,8 +167,9 @@ PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 // `'parameter'` prefix.
 PARAM_DECL_IMPLICIT: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="param_implicit",
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
@@ -283,9 +294,13 @@ ARRAY_KIND_SUFFIX: sequence dict {
   "[", *:kind=@, "]"
 }
 
-// `[0:15] [0:7]` — unpacked dimensions for arrays/memories.
+// `[0:15] [0:7]` or `[3]` — unpacked dimensions for arrays. Each
+// dimension is either an `[msb:lsb]` range OR a single `[size]`
+// fixed-size expression OR a typed bracket (`[type]`, `[$]`, `[]`).
+// Captured via ARRAY_KIND_SUFFIX which uses raw-capture between
+// brackets — covers all variants uniformly.
 UNPACKED_DIMENSIONS: sequence array {
-  repeat+ <RANGE>
+  repeat+ <ARRAY_KIND_SUFFIX>
 }
 
 // Built-in net/variable types. Used in OPTIONAL slots where adding
@@ -719,9 +734,9 @@ GENVAR_DECL: sequence dict {
 GEN_FOR: sequence dict {
   'for':@:type="gen_for",
   "(",
-  <ASSIGNMENT_PAIR>:init=@, ";",
+  <FOR_INIT>:init=@, ";",
   <EXPR>:cond=@, ";",
-  <ASSIGNMENT_PAIR>:step=@,
+  <FOR_STEP>:step=@,
   ")",
   <GEN_BLOCK>:body=@
 }
@@ -843,6 +858,7 @@ STATEMENT: choice {
   <RANDSEQUENCE_STMT>,
   <WAIT_FORK_STMT>,
   <DISABLE_FORK_STMT>,
+  <CONCURRENT_ASSERT>,
   <IMMEDIATE_ASSERT>,
   <RETURN_STMT>,
   <BREAK_STMT>,
@@ -985,12 +1001,19 @@ FOR_STMT: sequence dict {
 }
 
 // For-loop init can be an assignment OR a declaration with init
-// (`int i = 0` or `Driver drv = new()`). Declaration form
-// tried first so `int i = 0` is recognized as a typed loop
-// variable, not as a malformed assignment.
+// (`int i = 0`, `genvar i = 0`, or `Driver drv = new()`).
+// Declaration forms tried first so `int i = 0` and `genvar i = 0`
+// aren't mis-claimed as malformed assignments.
 FOR_INIT: choice {
+  <FOR_INIT_GENVAR>,
   <FOR_INIT_DECL>,
   <ASSIGNMENT_PAIR>
+}
+
+FOR_INIT_GENVAR: sequence dict {
+  'genvar':@:type="for_init_genvar",
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
 }
 
 FOR_INIT_DECL: sequence dict {
@@ -1292,20 +1315,39 @@ PRIMARY: choice {
 }
 
 // `<type>'(expr)` — type cast. Type can be a TYPE_SPEC keyword,
-// an identifier (typedef'd), or a width expression. The cast
-// operator is the single quote `'` followed by parens.
-//
-// For pure parse, the type is captured as a single identifier
-// (covers most cases: `int'(x)`, `byte_t'(y)`, etc.). Width-
-// expression casts (`8'(x)`) parse as NUMBER_PRIMARY's based-
-// number form via the existing number grammar.
-TYPE_CAST: sequence dict {
+// an identifier (typedef'd), `signed`/`unsigned`, or a width
+// expression (`8'(x)`). Multiple forms via Choice.
+TYPE_CAST: choice {
+  <TYPE_CAST_IDENT>,
+  <TYPE_CAST_NUM>,
+  <TYPE_CAST_SIGNED>
+}
+
+TYPE_CAST_IDENT: sequence dict {
   sv_identifier:type=@:type="type_cast",
   "'",
   "(",
   <EXPR>:value=@,
   ")"
 }
+
+TYPE_CAST_NUM: sequence dict {
+  int:type=@:type="type_cast_num",
+  "'",
+  "(",
+  <EXPR>:value=@,
+  ")"
+}
+
+TYPE_CAST_SIGNED: sequence dict {
+  <SIGNED_KW>:type=@:type="type_cast_signed",
+  "'",
+  "(",
+  <EXPR>:value=@,
+  ")"
+}
+
+SIGNED_KW: choice { 'signed':@, 'unsigned':@ }
 
 // `'{<fields>}` — assignment pattern. Used to initialize struct/
 // array/queue literals. Body captured raw because the inner
@@ -1758,9 +1800,16 @@ IMPORT_ENTRIES: sequence array {
 }
 
 IMPORT_ENTRY: sequence dict {
-  sv_identifier:pkg=@,
+  <IMPORT_PKG>:pkg=@,
   "::",
   <IMPORT_TARGET>:target=@
+}
+
+// Package qualifier: an identifier or `*` (wildcard, used by
+// `export *::*;`).
+IMPORT_PKG: choice {
+  "*":@,
+  sv_identifier
 }
 
 // Either `*` (wildcard) or an identifier.
