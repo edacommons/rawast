@@ -768,6 +768,21 @@ def test_extern_udp_config_program(sv_grammar):
             assert r["descriptions"][0]["items"][0].get("type") == kind
 
 
+def test_final_gaps_genvar_nettype_fork_ctrl(sv_grammar):
+    """The remaining small SV-1800 constructs."""
+    cases = [
+        ("module m; genvar i; endmodule\n",        "genvar"),
+        ("module m; genvar i, j, k; endmodule\n",  "genvar"),
+        ("module m; nettype real wire_t; endmodule\n", "nettype"),
+        ("module m; initial begin wait fork; end endmodule\n",     "initial"),
+        ("module m; initial begin disable fork; end endmodule\n",  "initial"),
+    ]
+    for src, kind in cases:
+        r = sv_grammar.parse_string(src)
+        items = r["descriptions"][0]["items"]
+        assert items[0].get("type") == kind
+
+
 def test_define_then_module_use(sv_grammar):
     """Real-world common case: `define at top-level, then a module
     that uses the macro in a port range and an assignment."""

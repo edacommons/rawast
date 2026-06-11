@@ -270,6 +270,8 @@ MODULE_ITEM: choice {
   <NET_DECL>,
   <REG_DECL>,
   <INTEGER_DECL>,
+  <GENVAR_DECL>,
+  <NETTYPE_DECL>,
   <PARAM_DECL_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <CONT_ASSIGN>,
@@ -706,6 +708,9 @@ STATEMENT: choice {
   <WHILE_STMT>,
   <REPEAT_STMT>,
   <FOREVER_STMT>,
+  <RANDSEQUENCE_STMT>,
+  <WAIT_FORK_STMT>,
+  <DISABLE_FORK_STMT>,
   <IMMEDIATE_ASSERT>,
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
@@ -1757,6 +1762,47 @@ PROGRAM_DECL: sequence dict {
   <MODULE_ITEMS>:items=@,
   'endprogram',
   ?<END_LABEL>:end_label=@
+}
+
+// ─── Small remaining gaps (genvar, nettype, randsequence, fork-ctrl) ───
+
+// `genvar i, j, k;` — generate-loop variable declarations. Standalone
+// form (not inside a `for` header). Multiple names per declaration
+// supported via the `:[]=@` list-append pattern.
+GENVAR_DECL: sequence dict {
+  'genvar':@:type="genvar",
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ";"
+}
+
+// `nettype <type> <name> [with <function>];` — SV-1800-2012
+// user-defined nettypes. Body captured raw up to `;`.
+NETTYPE_DECL: sequence dict {
+  'nettype':@:type="nettype",
+  *:body=@,
+  ";"
+}
+
+// `randsequence (<id>) <productions> endsequence` — class
+// randomization construct. Body captured raw.
+RANDSEQUENCE_STMT: sequence dict {
+  'randsequence':@:type="randsequence",
+  *:body=@,
+  'endsequence'
+}
+
+// `wait fork ;` — wait for all forked threads to terminate.
+WAIT_FORK_STMT: sequence dict {
+  'wait':@:type="wait_fork",
+  'fork',
+  ";"
+}
+
+// `disable fork ;` — terminate all forked threads.
+DISABLE_FORK_STMT: sequence dict {
+  'disable':@:type="disable_fork",
+  'fork',
+  ";"
 }
 
 
