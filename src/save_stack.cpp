@@ -233,6 +233,24 @@ bool has_name_markers(const Grammar& g, const Node& seq) {
         // V-name marker direct child.
         const Node& cn = g.node(g.resolve_ref(c));
         if (cn.kind == NodeKind::Value && cn.is_name) return true;
+        // Inline Choice whose alternatives have V-name markers inside
+        // them (e.g. EVENT_CONTROL's `choice { sequence { "*":wildcard=true },
+        // ... }`). Without this, the dict would flatten to open-schema
+        // mode (key/value queue pairs) — and the Choice dispatch would
+        // see no top_dict, failing every alt that needs to look up a
+        // discriminator field. Recurse one level into inline Choice
+        // alts.
+        if (cn.kind == NodeKind::Choice) {
+            for (NodeId alt : cn.children) {
+                const Node& alt_orig = g.node(alt);
+                if (alt_orig.kind == NodeKind::Ref) return true;
+                const Node& alt_n = g.node(g.resolve_ref(alt));
+                if (alt_n.kind == NodeKind::Sequence
+                    && has_name_markers(g, alt_n)) {
+                    return true;
+                }
+            }
+        }
     }
     return false;
 }
