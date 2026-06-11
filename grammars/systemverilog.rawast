@@ -83,11 +83,13 @@ DESCRIPTION: choice {
   <PACKAGE_DECL>,
   <INTERFACE_DECL>,
   <CLASS_DECL>,
+  <UDP_DECL>,
+  <CONFIG_DECL>,
+  <PROGRAM_DECL>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
   <MACRO_STMT>,
   <MODULE_DECL>
-  // future: <UDP_DECL>, <CONFIG_DECL>
 }
 
 // ─── Module declaration ─────────────────────────────────────────────────
@@ -277,10 +279,14 @@ MODULE_ITEM: choice {
   <GENERATE_BLOCK>,
   <TASK_DECL>,
   <FUNCTION_DECL>,
+  <EXTERN_DECL>,
   <SPECIFY_BLOCK>,
   <DEFPARAM_STMT>,
   <BIND_STMT>,
   <LET_DECL>,
+  <CLOCKING_BLOCK>,
+  <COVERGROUP_DECL>,
+  <CHECKER_DECL>,
   <PROPERTY_DECL>,
   <SEQUENCE_DECL>,
   <CONCURRENT_ASSERT>,
@@ -693,12 +699,14 @@ STATEMENT: choice {
   <IFNDEF>,
   <MACRO_STMT>,
   <BLOCK_STMT>,
+  <FORK_JOIN>,
   <IF_STMT>,
   <CASE_STMT>,
   <FOR_STMT>,
   <WHILE_STMT>,
   <REPEAT_STMT>,
   <FOREVER_STMT>,
+  <IMMEDIATE_ASSERT>,
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
   <SYSTEM_TASK_CALL>,
@@ -1599,6 +1607,155 @@ SEQUENCE_DECL: sequence dict {
   ";",
   *:body=@,
   'endsequence',
+  ?<END_LABEL>:end_label=@
+}
+
+// ─── Coverage, clocking, checkers, fork/join, immediate assertions ─────
+
+// `covergroup NAME [(args)] [coverage_event]; <items> endgroup
+// [: NAME]`. Coverpoints, crosses, options, types — all live in
+// the body which is captured raw. Host has a dedicated covergroup
+// pass to extract structure.
+COVERGROUP_DECL: sequence dict {
+  'covergroup':@:type="covergroup",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  *:body=@,
+  'endgroup',
+  ?<END_LABEL>:end_label=@
+}
+
+// `clocking [NAME] @(<event>); <items> endclocking [: NAME]`.
+// Used in testbenches to declare a clock domain with timing/skew
+// info for signals. Body captured raw.
+CLOCKING_BLOCK: sequence dict {
+  ?<DEFAULT_KW>:is_default=@,
+  'clocking':@:type="clocking",
+  ?<IDENT_OPT>:name=@,
+  *:body=@,
+  'endclocking',
+  ?<END_LABEL>:end_label=@
+}
+
+// Single-key rules wrapped in Choice (rawast doesn't allow bare
+// keys as rule bodies).
+DEFAULT_KW: choice { 'default':@ }
+IDENT_OPT: sequence { sv_identifier:name=@ }
+
+// `checker NAME(args); <items> endchecker [: NAME]`. SV-1800
+// construct for reusable verification IP. Body captured raw.
+CHECKER_DECL: sequence dict {
+  'checker':@:type="checker",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endchecker',
+  ?<END_LABEL>:end_label=@
+}
+
+// `fork <stmts> join` / `join_any` / `join_none` — concurrent block.
+// Split into three rules because `*` raw-consume requires a literal
+// Key terminator (not a Choice/Ref). Tried in order: most-specific
+// suffix first so `join_none` and `join_any` aren't claimed as
+// plain `join` followed by garbage.
+FORK_JOIN: choice {
+  <FORK_JOIN_NONE>,
+  <FORK_JOIN_ANY>,
+  <FORK_JOIN_PLAIN>
+}
+
+FORK_JOIN_NONE: sequence dict {
+  'fork':@:type="fork_join_none",
+  *:body=@,
+  'join_none'
+}
+
+FORK_JOIN_ANY: sequence dict {
+  'fork':@:type="fork_join_any",
+  *:body=@,
+  'join_any'
+}
+
+FORK_JOIN_PLAIN: sequence dict {
+  'fork':@:type="fork_join",
+  *:body=@,
+  'join'
+}
+
+// Immediate assertion inside procedural code:
+// `assert(expr) [else <stmt>];` or `assert(expr);` or
+// `cover(expr);` or `assume(expr);`. Body and optional action
+// captured raw to the next `;`.
+//
+// Distinguished from CONCURRENT_ASSERT by the lack of `property`
+// keyword after the kind — that lookahead would need negative
+// peek, so we use Choice ordering: CONCURRENT_ASSERT (which
+// requires `property`) lives in MODULE_ITEM; IMMEDIATE_ASSERT
+// lives in STATEMENT (procedural context).
+IMMEDIATE_ASSERT: sequence dict {
+  <ASSERT_KIND>:kind=@:type="assert_immediate",
+  "(",
+  *:body=@,
+  ")",
+  *:action=@,
+  ";"
+}
+
+// ─── Extern, UDP, config, program (parse-only) ─────────────────────────
+
+// `extern module NAME (...);` / `extern task NAME;` /
+// `extern function ... NAME;` — forward declarations. Captured as
+// raw text up to `;` for host to re-parse.
+EXTERN_DECL: sequence dict {
+  'extern':@:type="extern",
+  *:body=@,
+  ";"
+}
+
+// `primitive NAME (...); <body> endprimitive [: NAME]` — UDP
+// (user-defined primitive). Body is a small DSL of input/output
+// declarations + a truth table. Captured raw.
+UDP_DECL: sequence dict {
+  'primitive':@:type="primitive",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endprimitive',
+  ?<END_LABEL>:end_label=@
+}
+
+// `config NAME; <items> endconfig [: NAME]` — design configuration.
+CONFIG_DECL: sequence dict {
+  'config':@:type="config",
+  sv_identifier:name=@,
+  ";",
+  *:body=@,
+  'endconfig',
+  ?<END_LABEL>:end_label=@
+}
+
+// `program NAME (...); <items> endprogram [: NAME]` — program
+// blocks for testbench code. Body is essentially the same as a
+// module body so we reuse MODULE_ITEMS.
+//
+// Conflict note: MODULE_KEYWORD already accepts 'program' (a
+// long-standing alias for 'module' in this grammar). Real LRM
+// SV makes them distinct — `endprogram` ends a program, not
+// `endmodule`. We've kept the alias for back-compat with
+// existing tests; PROGRAM_DECL here adds the LRM-correct form
+// alongside, with explicit `program`/`endprogram` matching.
+// MODULE_KEYWORD's `program` alt would only fire as a fallback
+// when PROGRAM_DECL fails (e.g. when `endmodule` is used).
+PROGRAM_DECL: sequence dict {
+  'program':@:type="program",
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<PORT_LIST>:ports=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endprogram',
   ?<END_LABEL>:end_label=@
 }
 

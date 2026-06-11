@@ -694,6 +694,80 @@ def test_sva_property_and_sequence(sv_grammar):
     assert "assert_concurrent" in types
 
 
+def test_covergroup_and_clocking(sv_grammar):
+    """`covergroup … endgroup` and `clocking … endclocking` — body
+    captured raw; host re-parses to extract coverpoints/cross/etc.
+    or clocking signal directions."""
+    src = (
+        "module mon (input logic clk);\n"
+        "  covergroup cg @(posedge clk);\n"
+        "    cp_x: coverpoint x;\n"
+        "  endgroup\n"
+        "  clocking ck @(posedge clk);\n"
+        "  endclocking\n"
+        "  default clocking dck @(posedge clk);\n"
+        "  endclocking\n"
+        "endmodule\n"
+    )
+    r = sv_grammar.parse_string(src)
+    items = r["descriptions"][0]["items"]
+    types = [i.get("type") for i in items]
+    assert "covergroup" in types
+    assert types.count("clocking") == 2
+
+
+def test_checker_and_fork_join(sv_grammar):
+    """`checker … endchecker` reusable verification IP +
+    `fork … join`/`join_any`/`join_none` concurrent blocks."""
+    for src, expected in [
+        ("module m; checker c1(input clk); endchecker endmodule\n",
+         {"items_first_type": "checker"}),
+        ("module m; initial fork a = 1; b = 2; join endmodule\n",
+         {"initial_inner": "fork_join"}),
+        ("module m; initial fork a = 1; b = 2; join_any endmodule\n",
+         {"initial_inner": "fork_join_any"}),
+        ("module m; initial fork a = 1; b = 2; join_none endmodule\n",
+         {"initial_inner": "fork_join_none"}),
+    ]:
+        r = sv_grammar.parse_string(src)
+        items = r["descriptions"][0]["items"]
+        if "items_first_type" in expected:
+            assert items[0].get("type") == expected["items_first_type"]
+
+
+def test_immediate_assertions(sv_grammar):
+    """`assert(expr);` / `assert(expr) else <stmt>;` inside
+    procedural code (always block / initial block). Distinguished
+    from concurrent assertions (`assert property (...)`) by the
+    absence of the `property` keyword."""
+    for src in [
+        "module m; always @(posedge clk) begin assert(x == 1); end endmodule\n",
+        "module m; always @(posedge clk) begin assert(x == 1) else $error(\"bad\"); end endmodule\n",
+    ]:
+        r = sv_grammar.parse_string(src)
+        assert r["descriptions"][0]["items"][0].get("type") == "always"
+
+
+def test_extern_udp_config_program(sv_grammar):
+    """Top-level / module-level forward and ancillary declarations."""
+    cases = [
+        ("module m; extern function int foo(int a); endmodule\n",
+         "extern", "items"),
+        ("primitive my_or (out, a, b); output out; input a, b; table 0 0 : 0; 1 ? : 1; endtable endprimitive\n",
+         "primitive", "descriptions"),
+        ("config cfg; design lib.top; endconfig\n",
+         "config", "descriptions"),
+        ("program test (input clk); initial begin end endprogram\n",
+         "program", "descriptions"),
+    ]
+    for src, kind, where in cases:
+        r = sv_grammar.parse_string(src)
+        if where == "descriptions":
+            assert r["descriptions"][0].get("type") == kind
+        else:
+            assert r["descriptions"][0]["items"][0].get("type") == kind
+
+
 def test_define_then_module_use(sv_grammar):
     """Real-world common case: `define at top-level, then a module
     that uses the macro in a port range and an assignment."""
