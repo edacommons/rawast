@@ -704,6 +704,60 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (cn.kind == NodeKind::Key) continue;   // structural
 
                 // Real consumer.
+                if (!have_sim_pending) {
+                    // No V-name marker preceded this consumer. Possible
+                    // cases:
+                    //
+                    // 1. The consumer is a binding-wrapper Sequence
+                    //    (a Sequence/Container::None whose children are
+                    //    V-name + expr). Loader wraps repeated/choice
+                    //    targets this way so the binding sticks with
+                    //    the expr. Recurse into the wrapper.
+                    //
+                    // 2. The consumer is a Repeat node with a list-
+                    //    append binding desugared INSIDE the repeat
+                    //    target — the V-name marker lives on the
+                    //    Repeat's item, not as a sibling. Check the
+                    //    Repeat's item directly for a V-name + Ref
+                    //    pattern and validate it against the dict.
+                    if (cn.kind == NodeKind::Sequence
+                        && cn.container == Container::None
+                        && can_consume_peek(g, c, peek_value, peek_key, s)) {
+                        walked_consumer = true;
+                    } else if (cn.kind == NodeKind::Repeat
+                               && !cn.children.empty()) {
+                        // Repeat's item is at children[0] (or [1] if
+                        // separator-using; n.has_separator decides).
+                        std::size_t item_idx = cn.has_separator ? 1 : 0;
+                        if (item_idx < cn.children.size()) {
+                            const Node& item =
+                                g.node(g.resolve_ref(cn.children[item_idx]));
+                            // The item's leading V-name marker (if any)
+                            // is the list-append field name.
+                            if (!item.children.empty()) {
+                                const Node& first =
+                                    g.node(g.resolve_ref(item.children[0]));
+                                if (first.kind == NodeKind::Value
+                                    && first.is_name) {
+                                    auto fname = as_string(first.value);
+                                    if (fname) {
+                                        bool is_list = false;
+                                        std::string field =
+                                            strip_list_suffix(fname->data(),
+                                                              is_list);
+                                        auto it =
+                                            scope->dict->data().find(field);
+                                        if (it != scope->dict->data().end()
+                                            && !scope->consumed.count(field)) {
+                                            walked_consumer = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if (have_sim_pending) {
                     bool is_list = false;
                     std::string field = strip_list_suffix(sim_pending, is_list);
