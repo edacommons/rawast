@@ -1406,9 +1406,16 @@ RAND_QUAL: choice { 'randc':@, 'rand':@ }
 CLASS_PROPERTY_INIT: sequence dict { "=", <EXPR>:value=@ }
 
 // `[local|protected] function [<TYPE>] NAME(args); body endfunction`
+// CLASS_FUNCTION/CLASS_TASK don't use `:@` on the keyword Key
+// because a peek-and-skipped leading `?<CLASS_VISIBILITY>` would
+// otherwise pair its V-name "visibility" marker with the keyword's
+// emitted text ("function" or "task") and corrupt the AST. The
+// `:type=` const binding works regardless of which optional was
+// skipped because it's an explicit V-name + V-const pair, not a
+// "use the parser's emission" binding.
 CLASS_FUNCTION: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
-  'function':@:type="class_function",
+  'function':type="class_function",
   ?<LIFETIME>:lifetime=@,
   ?<TYPE_SPEC>:return_type=@,
   sv_identifier:name=@,
@@ -1421,7 +1428,7 @@ CLASS_FUNCTION: sequence dict {
 
 CLASS_TASK: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
-  'task':@:type="class_task",
+  'task':type="class_task",
   ?<LIFETIME>:lifetime=@,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
