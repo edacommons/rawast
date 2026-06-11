@@ -574,3 +574,179 @@ TEST_CASE("Loaded .rawast grammar parses key-with-null discriminator") {
     REQUIRE(key_dict->data().count("value") == 1);
     CHECK(key_dict->data().at("value").get() == null_value().get());
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Regression tests for engine-correctness fixes that landed alongside
+// the SV parse-completeness work. Each test corresponds to a real bug
+// that produced silently-wrong ASTs before the fix.
+// ──────────────────────────────────────────────────────────────────────
+
+TEST_CASE("Loader auto-emits Keys with at-bindings (`'X':name=@`)") {
+    // BEFORE FIX: `'aaa':a=@` left V-name "a" orphaned (the Key had no
+    // Value-child to provide `@`'s value), so the next emitted value
+    // paired with "a" — corrupting the field. With auto-emit, the Key's
+    // literal text becomes the binding's value.
+    register_std_parser_group();
+    Grammar target;
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.register_parser(std::make_unique<IdentifierParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <X>
+        X: sequence dict { 'aaa':a=@, identifier:name=@ }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    std::istringstream is{"aaa foo"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    REQUIRE(d->data().count("a") == 1);
+    REQUIRE(d->data().count("name") == 1);
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("a"))->data() == "aaa");
+    CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("name"))->data() == "foo");
+}
+
+TEST_CASE("Loader wraps optional with at-binding (`?<X>:name=@`) — skipped optional doesn't orphan V-name") {
+    // BEFORE FIX: `wrap_optional` only fired when const-bindings were
+    // present. For at-binding alone, the V-name "a" was a sibling of
+    // the optional Ref. When the optional was skipped (peek-and-skip
+    // OR try-and-fail), the V-name stayed in emitted_ and paired with
+    // the next sibling's value — producing `{a: <bbb_text>, ...}` or
+    // similar corruption. After the fix, V-name + optional expr are
+    // wrapped in one Sequence; skipping the optional drops both.
+    register_std_parser_group();
+    Grammar target;
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.register_parser(std::make_unique<IdentifierParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <X>
+        X: sequence dict { ?'aaa':a=@, 'bbb':@:type="my_type", identifier:name=@ }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    // Case 1: optional ABSENT — `a` field should not appear.
+    {
+        std::istringstream is{"bbb foo"};
+        StreamReader sr{is};
+        auto v = target.parse(sr);
+        REQUIRE(v);
+        auto d = std::dynamic_pointer_cast<DictValue>(*v);
+        REQUIRE(d);
+        CHECK(d->data().count("a") == 0);
+        CHECK(d->data().count("name") == 1);
+        CHECK(d->data().count("type") == 1);
+        CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("name"))->data() == "foo");
+        CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("type"))->data() == "my_type");
+    }
+    // Case 2: optional PRESENT — `a` is "aaa" (NOT "bbb" from the next field).
+    {
+        std::istringstream is{"aaa bbb foo"};
+        StreamReader sr{is};
+        auto v = target.parse(sr);
+        REQUIRE(v);
+        auto d = std::dynamic_pointer_cast<DictValue>(*v);
+        REQUIRE(d);
+        REQUIRE(d->data().count("a") == 1);
+        CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("a"))->data() == "aaa");
+        CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("name"))->data() == "foo");
+        CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("type"))->data() == "my_type");
+    }
+}
+
+TEST_CASE("Repeat per-iteration mark — failing iteration rolls back to where it started") {
+    // BEFORE FIX: an iteration that succeeded partway (e.g. an inner
+    // Choice committed) but then failed on a later required item left
+    // the cursor advanced. The surrounding rule's continuation
+    // (`'END'` here) then failed because the cursor was past `END`.
+    // After the fix, each iteration is bracketed in a mark — failing
+    // rolls back to the iteration's start.
+    register_std_parser_group();
+    Grammar target;
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.register_parser(std::make_unique<IdentifierParser>());
+    target.add_ignore("whitespace");
+
+    const char* rawast_source = R"(
+        start: <TOP>
+        TOP: sequence dict { <ITEMS>:items=@, 'END' }
+        ITEMS: sequence array { repeat <ITEM> }
+        ITEM: sequence dict { <X>:x=@, identifier:y=@, ";" }
+        X: choice { 'INT':@, <ID_WRAP> }
+        ID_WRAP: sequence { identifier }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    // For input `INT x; END`:
+    //   * iter 1: ITEM matches `INT x;` (X picks 'INT' alt; rest follows).
+    //   * iter 2: ITEM tries `END`. X falls through to ID_WRAP which
+    //     matches `END` as an identifier. Then ITEM expects another
+    //     identifier (`y`); EOF. ITEM fails.
+    //   * Without the rollback fix, the cursor stays past `END` and
+    //     TOP's `'END'` literal fails. With the fix, cursor restores to
+    //     before `END` and TOP completes with exactly 1 successful iter.
+    std::istringstream is{"INT x; END"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    auto items = std::dynamic_pointer_cast<ArrayValue>(d->data().at("items"));
+    REQUIRE(items);
+    CHECK(items->data().size() == 1);
+    auto item0 = std::dynamic_pointer_cast<DictValue>(items->data()[0]);
+    REQUIRE(item0);
+    CHECK(std::dynamic_pointer_cast<StringValue>(item0->data().at("x"))->data() == "INT");
+    CHECK(std::dynamic_pointer_cast<StringValue>(item0->data().at("y"))->data() == "x");
+}
+
+TEST_CASE("First-byte set propagates through leading optionals in a Sequence") {
+    // BEFORE FIX: `?<X>, <Y>` had first-byte = first(X) only. The
+    // engine's peek-and-skip then wrongly rejected inputs starting
+    // with Y's first byte. After the fix, an optional Ref's nullable
+    // bit propagates so the Sequence walker continues accumulating
+    // first-byte sets from later children.
+    register_std_parser_group();
+    Grammar target;
+    target.register_parser(std::make_unique<WhitespaceParser>());
+    target.register_parser(std::make_unique<IdentifierParser>());
+    target.add_ignore("whitespace");
+
+    // CONTAINER repeats ITEM. ITEM is a Choice with one alt
+    // (PROP) whose first non-optional child has a distinct first byte
+    // (`int`/`bool`) that's NOT in any earlier optional's first-byte
+    // set. Without the fix, peek-and-skip rejects valid input.
+    const char* rawast_source = R"(
+        start: <CONTAINER>
+        CONTAINER: sequence dict { 'C':@:type="c", '{', <ITEMS>:items=@, '}' }
+        ITEMS: sequence array { repeat <ITEM> }
+        ITEM: choice { <PROP> }
+        PROP: sequence dict {
+            ?'local':vis=@,
+            ?'static':life=@,
+            <KIND>:kind=@:type="prop",
+            identifier:name=@,
+            ';'
+        }
+        KIND: choice { 'int':@, 'bool':@ }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
+
+    // `int x;` should match PROP even though `i` isn't in either of
+    // the leading optionals' first-byte sets ({l}, {s}). With the fix,
+    // PROP's first-byte set is {l, s, i, b}.
+    std::istringstream is{"C { int x; bool y; }"};
+    StreamReader sr{is};
+    auto v = target.parse(sr);
+    REQUIRE(v);
+    auto d = std::dynamic_pointer_cast<DictValue>(*v);
+    REQUIRE(d);
+    auto items = std::dynamic_pointer_cast<ArrayValue>(d->data().at("items"));
+    REQUIRE(items);
+    CHECK(items->data().size() == 2);
+}
