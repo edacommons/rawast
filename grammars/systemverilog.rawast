@@ -80,9 +80,13 @@ DESCRIPTION: choice {
   <INCLUDE>,
   <IFDEF>,
   <IFNDEF>,
+  <PACKAGE_DECL>,
+  <INTERFACE_DECL>,
+  <IMPORT_STMT>,
+  <EXPORT_STMT>,
   <MACRO_STMT>,
   <MODULE_DECL>
-  // future: <UDP_DECL>, <CONFIG_DECL>, <PACKAGE_DECL>, <INTERFACE_DECL>
+  // future: <UDP_DECL>, <CONFIG_DECL>, <CLASS_DECL>
 }
 
 // ─── Module declaration ─────────────────────────────────────────────────
@@ -132,8 +136,32 @@ PORT_LIST: choice {
 
 PORT_LIST_ANSI: sequence dict {
   "(":style="ansi",
-  repeat <PORT_DECL_ANSI>:ports[]=@ separator ",",
+  repeat <PORT_BODY_ANSI>:ports[]=@ separator ",",
   ")"
+}
+
+// Port body Choice — user-typed-port (e.g. `input data_t x`) tried
+// FIRST because PORT_DECL_ANSI's optional `?<TYPE_SPEC>` would
+// otherwise greedily match the user-defined name as a type and
+// leave the actual name unconsumed. PORT_DECL_ANSI handles
+// keyword-typed ports (`input logic clk`) and untyped ports
+// (`input clk`).
+PORT_BODY_ANSI: choice {
+  <PORT_DECL_ANSI_USERTYPE>,
+  <PORT_DECL_ANSI>
+}
+
+// `input <typedef'd_name> [range] <name>` — two identifiers in a row,
+// with the first being the user type and the second the port name.
+// The sv_identifier here matches the type name; the IDENT_OR_MACRO
+// matches the port name. Range and unpacked dimensions are the same
+// as PORT_DECL_ANSI.
+PORT_DECL_ANSI_USERTYPE: sequence dict {
+  <PORT_DIRECTION>:direction=@,
+  sv_identifier:type_spec=@:type="port_decl_usertype",
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
 
 PORT_LIST_NONANSI: sequence dict {
@@ -165,7 +193,14 @@ UNPACKED_DIMENSIONS: sequence array {
   repeat+ <RANGE>
 }
 
-// Built-in net/variable types. User-defined types (typedef) deferred.
+// Built-in net/variable types. Used in OPTIONAL slots where adding
+// an identifier-fallback would cause greedy mis-matching of the
+// name as a type. User-defined type names in these positions reach
+// the AST via the separate `USER_TYPED_DECL` and `USER_TYPED_PORT`
+// rules (tried after the built-in-keyword variants in their
+// respective Choices). Host disambiguates "built-in vs typedef'd"
+// by matching against the keyword set — no symbol-table resolution
+// at parse time.
 TYPE_SPEC: choice {
   'wire':@,  'reg':@,    'logic':@,   'bit':@,
   'integer':@, 'int':@,  'real':@,    'time':@,
@@ -212,6 +247,8 @@ MODULE_ITEM: choice {
   <TASK_DECL>,
   <FUNCTION_DECL>,
   <MODULE_INSTANTIATION>,
+  <TYPEDEF_DECL>,
+  <USER_TYPED_DECL>,
   <MACRO_STMT>
   // future: <SPECIFY_BLOCK>, <DEFPARAM_STMT>, <BIND_STMT>
 }
@@ -285,6 +322,49 @@ INTEGER_KIND: choice {
   'integer':@,  'int':@,     'shortint':@,
   'longint':@,  'byte':@,    'real':@,
   'time':@,     'realtime':@
+}
+
+// `typedef <TYPE> <NAME>;` — user-defined type alias. Pure parse:
+// the AST captures both the source type and the new name; the host
+// (or a downstream pass) builds the symbol table that lets later
+// declarations like `byte_t data;` resolve to the typedef.
+TYPEDEF_DECL: sequence dict {
+  'typedef':@:type="typedef",
+  <TYPEDEF_BASE>:base=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ";"
+}
+
+// What can follow `typedef`: a built-in TYPE_SPEC keyword (logic,
+// integer, etc.) or any identifier (another typedef'd name being
+// re-aliased). The Choice tries TYPE_SPEC's keyword set first, then
+// falls through to sv_identifier so user-defined names work too.
+TYPEDEF_BASE: choice {
+  <TYPE_SPEC>,
+  sv_identifier
+}
+
+// User-defined-typed declaration: `<typedef'd_name> [range] <names>;`.
+// Tried at module-item position AFTER all the built-in-keyword
+// declarations and after MODULE_INSTANTIATION. The order matters:
+//
+//   * `wire foo;` matches NET_DECL (NET_KIND keyword).
+//   * `reg r1;`   matches REG_DECL (REG_KIND keyword).
+//   * `byte_t x;` falls through to USER_TYPED_DECL.
+//   * `Mod m(.p(s));` matches MODULE_INSTANTIATION (parens).
+//   * `Mod m;`     falls through to USER_TYPED_DECL (no parens).
+//
+// The host distinguishes "synth net/reg" vs "user-defined type" by
+// matching the `type_spec` field against the keyword set. Pure parse;
+// no symbol-table lookup at parse time.
+USER_TYPED_DECL: sequence dict {
+  sv_identifier:type_spec=@:type="user_typed_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<RANGE>:range=@,
+  repeat+ <NET_NAME>:names[]=@ separator ",",
+  ";"
 }
 
 PARAM_DECL_STMT: sequence dict {
@@ -1158,3 +1238,76 @@ IFNDEF: sequence dict {
   *:body=@,
   "`endif"
 }
+
+// ─── Package and interface (parse-only; semantics deferred to host) ────
+
+// `package NAME; <items> endpackage [: NAME]`. The package body uses
+// the same MODULE_ITEM Choice — most things (parameters, typedefs,
+// user-typed decls, function/task decls) work in both module and
+// package position. Imports inside packages also use IMPORT_STMT.
+PACKAGE_DECL: sequence dict {
+  'package':@:type="package",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endpackage',
+  ?<END_LABEL>:end_label=@
+}
+
+// `interface NAME (...); <items> endinterface`. Same body shape as
+// MODULE_DECL — interfaces are modules with a different keyword and
+// a more permissive item list. For now, share MODULE_ITEMS as the
+// body grammar; modport declarations can be added when needed.
+INTERFACE_DECL: sequence dict {
+  'interface':@:type="interface",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<PORT_LIST>:ports=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endinterface',
+  ?<END_LABEL>:end_label=@
+}
+
+// `import pkg::*;` or `import pkg::ident;`. One or more comma-
+// separated entries per statement; each entry is `<pkg>::<sym>` or
+// `<pkg>::*`.
+IMPORT_STMT: sequence dict {
+  'import':@:type="import",
+  <IMPORT_ENTRIES>:entries=@,
+  ";"
+}
+
+IMPORT_ENTRIES: sequence array {
+  repeat+ <IMPORT_ENTRY> separator ","
+}
+
+IMPORT_ENTRY: sequence dict {
+  sv_identifier:pkg=@,
+  "::",
+  <IMPORT_TARGET>:target=@
+}
+
+// Either `*` (wildcard) or an identifier.
+IMPORT_TARGET: choice {
+  "*":@,
+  sv_identifier
+}
+
+// `export pkg::*;` / `export *::*;` — semantics-equivalent surface form.
+EXPORT_STMT: sequence dict {
+  'export':@:type="export",
+  <IMPORT_ENTRIES>:entries=@,
+  ";"
+}
+
+// Trailing `: NAME` after end-keyword. Used by packages, interfaces,
+// blocks, classes — captures the optional label that some users
+// write for readability. Pure recognition; host may verify it
+// matches the opening name if desired.
+END_LABEL: sequence dict {
+  ":", sv_identifier:label=@
+}
+
