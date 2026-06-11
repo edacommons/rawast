@@ -251,6 +251,26 @@ bool has_name_markers(const Grammar& g, const Node& seq) {
                 }
             }
         }
+        // Repeat node whose item has a V-name marker (the
+        // `repeat <X>:f[]=@` pattern desugars to V-name + expr INSIDE
+        // the Repeat's item position). Same fixed-schema-vs-open-schema
+        // distinction: TASK_ARG_LIST's `repeat <EXPR>:args[]=@` would
+        // otherwise be treated as open-schema and flatten the dict's
+        // entries into the queue — sending the FIELD NAME (a String)
+        // to the Repeat's item dispatch instead of the array elements.
+        if (cn.kind == NodeKind::Repeat) {
+            std::size_t item_idx = cn.has_separator ? 1 : 0;
+            if (item_idx < cn.children.size()) {
+                const Node& item = g.node(g.resolve_ref(cn.children[item_idx]));
+                if (!item.children.empty()) {
+                    const Node& first =
+                        g.node(g.resolve_ref(item.children[0]));
+                    if (first.kind == NodeKind::Value && first.is_name) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
     return false;
 }
@@ -705,35 +725,33 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
 
                 // Real consumer.
                 if (!have_sim_pending) {
-                    // No V-name marker preceded this consumer. Possible
-                    // cases:
+                    // No V-name marker preceded this consumer. Three
+                    // shapes recognized below; everything else means
+                    // "this child doesn't help discriminate", so we
+                    // continue without marking walked_consumer.
                     //
-                    // 1. The consumer is a binding-wrapper Sequence
-                    //    (a Sequence/Container::None whose children are
-                    //    V-name + expr). Loader wraps repeated/choice
-                    //    targets this way so the binding sticks with
-                    //    the expr. Recurse into the wrapper.
+                    // 1. Wrapper Sequence (`Sequence/Container::None`
+                    //    whose children are V-name + expr). Loader
+                    //    wraps Choice / Optional targets this way so
+                    //    the binding sticks with the expr.
                     //
-                    // 2. The consumer is a Repeat node with a list-
-                    //    append binding desugared INSIDE the repeat
-                    //    target — the V-name marker lives on the
-                    //    Repeat's item, not as a sibling. Check the
-                    //    Repeat's item directly for a V-name + Ref
-                    //    pattern and validate it against the dict.
+                    // 2. Repeat node whose item child has a leading
+                    //    V-name marker (the list-append binding lives
+                    //    INSIDE the Repeat's item, not as a sibling).
+                    //
+                    // 3. Inline Choice node — the dispatch happens
+                    //    deeper; don't try to validate here.
                     if (cn.kind == NodeKind::Sequence
-                        && cn.container == Container::None
-                        && can_consume_peek(g, c, peek_value, peek_key, s)) {
-                        walked_consumer = true;
+                        && cn.container == Container::None) {
+                        if (can_consume_peek(g, c, peek_value, peek_key, s)) {
+                            walked_consumer = true;
+                        }
                     } else if (cn.kind == NodeKind::Repeat
                                && !cn.children.empty()) {
-                        // Repeat's item is at children[0] (or [1] if
-                        // separator-using; n.has_separator decides).
                         std::size_t item_idx = cn.has_separator ? 1 : 0;
                         if (item_idx < cn.children.size()) {
                             const Node& item =
                                 g.node(g.resolve_ref(cn.children[item_idx]));
-                            // The item's leading V-name marker (if any)
-                            // is the list-append field name.
                             if (!item.children.empty()) {
                                 const Node& first =
                                     g.node(g.resolve_ref(item.children[0]));
@@ -749,7 +767,27 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                                             scope->dict->data().find(field);
                                         if (it != scope->dict->data().end()
                                             && !scope->consumed.count(field)) {
-                                            walked_consumer = true;
+                                            // For list bindings, also
+                                            // verify the array has
+                                            // unconsumed elements. A
+                                            // fully-consumed list
+                                            // shouldn't keep the alt
+                                            // dispatchable.
+                                            if (is_list) {
+                                                if (auto arr =
+                                                    as_array(it->second)) {
+                                                    auto pit =
+                                                        scope->list_progress.find(field);
+                                                    std::size_t idx =
+                                                        pit == scope->list_progress.end()
+                                                          ? 0 : pit->second;
+                                                    if (idx < arr->data().size()) {
+                                                        walked_consumer = true;
+                                                    }
+                                                }
+                                            } else {
+                                                walked_consumer = true;
+                                            }
                                         }
                                     }
                                 }
