@@ -783,6 +783,186 @@ def test_final_gaps_genvar_nettype_fork_ctrl(sv_grammar):
         assert items[0].get("type") == kind
 
 
+def test_control_flow_statements(sv_grammar):
+    """`return`, `break`, `continue`, `foreach`, `do-while` statements."""
+    for src in [
+        "class C; function int f(); return 42; endfunction endclass\n",
+        "class C; task t(); return; endtask endclass\n",
+        "module m; initial begin while (1) break; end endmodule\n",
+        "module m; initial begin while (1) continue; end endmodule\n",
+        "module m; initial foreach (arr[i]) arr[i] = 0; endmodule\n",
+        "module m; initial do x = x + 1; while (x < 10); endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)  # just verify parses
+
+
+def test_class_idioms(sv_grammar):
+    """The OOP idioms that real testbench code uses heavily:
+    `this`, `super`, `null`, `new`, package-qualified refs."""
+    for src in [
+        "class C; int x; task set(int v); this.x = v; endtask endclass\n",
+        "class C extends Base; task t(); super.run(); endtask endclass\n",
+        "class C; function new(); obj = null; endfunction endclass\n",
+        "module m; initial obj = new(1, 2); endmodule\n",
+        "module m; initial begin x = pkg::name; end endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_class_method_modifiers(sv_grammar):
+    """Pure virtual, extern, virtual, static method declarations
+    inside classes."""
+    for src in [
+        "class C; virtual function int foo(); endfunction endclass\n",
+        "class C; virtual task run(); endtask endclass\n",
+        "class Base; pure virtual function int abstract(); endclass\n",
+        "class Base; pure virtual task run(); endclass\n",
+        "class C; extern function int foo(); endclass\n",
+        "class C; extern virtual task run(); endclass\n",
+        "class C; static function int counter(); endfunction endclass\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_class_parameters_implements(sv_grammar):
+    """Class type parameters with `#(parameter type T)` and
+    `implements <interface_list>` clauses."""
+    cases = [
+        ("class Stack #(parameter type T = int); T data; endclass\n", "class"),
+        ("class Stack #(parameter type T); endclass\n", "class"),
+        ("class C implements I1, I2; endclass\n", "class"),
+        ("class C extends Base implements I1; endclass\n", "class"),
+    ]
+    for src, kind in cases:
+        r = sv_grammar.parse_string(src)
+        assert r["descriptions"][0]["type"] == kind
+
+
+def test_enum_struct_union_typedefs(sv_grammar):
+    """User-defined type declarations: enum / struct / union typedefs.
+    Body captured raw; host re-parses field/label list."""
+    for src in [
+        "module m; typedef enum { A, B, C } e_t; endmodule\n",
+        "module m; typedef enum logic [1:0] { A = 0, B, C } e_t; endmodule\n",
+        "module m; typedef struct { int a; bit b; } s_t; endmodule\n",
+        "module m; typedef struct packed { int a; bit b; } s_t; endmodule\n",
+        "module m; typedef union { int a; real b; } u_t; endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_inside_operator(sv_grammar):
+    """`x inside { ... }` set membership operator at relational
+    precedence level."""
+    for src in [
+        "module m; initial begin if (x inside { 1, 2, 3 }) y = 1; end endmodule\n",
+        "module m; initial begin if (x inside { [1:10], 20, 30 }) y = 1; end endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_streaming_concat(sv_grammar):
+    """`{>>{...}}` / `{<<{...}}` / `{<<N{...}}` streaming
+    concatenation."""
+    for src in [
+        "module m; initial begin x = {>>{a, b, c}}; end endmodule\n",
+        "module m; initial begin x = {<<{a, b, c}}; end endmodule\n",
+        "module m; initial begin x = {<<8{a, b, c}}; end endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_virtual_interface_and_global_clocking(sv_grammar):
+    """`virtual interface bus_if vif;` in classes/modules +
+    `global clocking gck @(...); endclocking` at module level."""
+    for src in [
+        "class TB; virtual interface bus_if vif; endclass\n",
+        "class TB; virtual interface bus_if vif1, vif2; endclass\n",
+        "module m; virtual interface bus_if vif; endmodule\n",
+        "module m; global clocking gck @(posedge clk); endclocking endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_uvm_style_endtoend(sv_grammar):
+    """Real-world UVM-style testbench code with package + typedef
+    enum/struct + class with rand/constraint/extern/virtual +
+    parameterized class + import + module with class instantiation +
+    fork-join + global clocking. Parses AND saves cleanly."""
+    src = """package my_pkg;
+  typedef enum { READ, WRITE, IDLE } cmd_e;
+  typedef struct packed {
+    cmd_e cmd;
+    bit [31:0] addr;
+    bit [31:0] data;
+  } trans_t;
+
+  class Transaction;
+    rand cmd_e cmd;
+    rand bit [31:0] addr;
+    rand bit [31:0] data;
+
+    constraint c_addr_aligned { addr[1:0] == 0; }
+    constraint c_data_range { data inside { [0:1000], [10000:20000] }; }
+
+    function new();
+    endfunction
+
+    virtual function string convert2string();
+      return $sformatf(\"cmd=%s addr=%h data=%h\", cmd.name(), addr, data);
+    endfunction
+  endclass
+
+  class Driver #(parameter type T = Transaction) extends uvm_driver;
+    virtual interface bus_if vif;
+    T tr;
+
+    extern virtual task run_phase(uvm_phase phase);
+
+    function new(string name);
+      super.new(name);
+      tr = new();
+      this.tr = tr;
+    endfunction
+  endclass
+endpackage
+
+import my_pkg::*;
+
+module top;
+  bus_if vif();
+
+  initial begin
+    Driver drv;
+    drv = new(\"drv\");
+    drv.vif = vif;
+    fork
+      drv.run_phase(null);
+      $display(\"started\");
+    join_any
+  end
+
+  global clocking gck @(posedge vif.clk);
+  endclocking
+endmodule
+"""
+    r = sv_grammar.parse_string(src)
+    # 3 top-level: package + import + module
+    assert len(r["descriptions"]) == 3
+    descs = [d.get("type") for d in r["descriptions"]]
+    assert descs == ["package", "import", "module"]
+
+    # Package body: 2 typedefs + 2 classes
+    pkg = r["descriptions"][0]
+    item_types = [i.get("type") for i in pkg["items"]]
+    assert item_types.count("typedef") == 2
+    assert item_types.count("class") == 2
+
+    # Save round-trip
+    out = sv_grammar.save(r)
+    assert len(out) > 500
+
+
 def test_define_then_module_use(sv_grammar):
     """Real-world common case: `define at top-level, then a module
     that uses the macro in a port range and an assignment."""

@@ -85,6 +85,26 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// Consume text until the closing `}` at OUTERMOST depth. Tracks
+// nesting of `{}`, `()`, AND `[]` so commas, semicolons, and
+// closers inside nested brackets stay part of the captured run
+// instead of terminating early.
+//
+// Used for class constraint blocks (where the body has
+// `data inside { [0:1000], [10000:20000] }` patterns), enum/
+// struct/union bodies with nested `{...}` defaults, and any
+// other raw-body capture where the content might contain
+// brace-nested expressions.
+//
+// The closing `}` is NOT consumed — left for the outer rule's
+// next sibling Key to match.
+class SvBalancedBracesParser final : public Parser {
+public:
+    SvBalancedBracesParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Consume a line of text, terminating at the next un-escaped newline.
 // Handles the standard `\` line-continuation: a backslash IMMEDIATELY
 // before a newline causes the parser to include both and keep going,

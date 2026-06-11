@@ -217,6 +217,49 @@ SaveResult SvBalancedArgParser::unparse(const Value& v) const {
         "SvBalancedArgParser::unparse expects StringValue"});
 }
 
+// --- SvBalancedBracesParser ---------------------------------------------
+
+SvBalancedBracesParser::SvBalancedBracesParser()
+    : Parser("sv_balanced_braces") {}
+
+ParseResult SvBalancedBracesParser::parse(StreamReader& sr) {
+    sr.mark();
+    std::string out;
+    // Track depth of all three bracket kinds. Stop at depth-0
+    // closing `}` (left unconsumed for the next sibling Key to
+    // match). Constraint blocks and class body literals are
+    // commonly nested with mixed brackets — track all of them
+    // so commas inside `{}` or `[]` stay part of the captured
+    // text instead of terminating early.
+    int brace_depth = 0;
+    int paren_depth = 0;
+    int brack_depth = 0;
+    while (auto c = sr.peek()) {
+        // At outermost level, a closing `}` ends the captured
+        // section. Leave it unconsumed.
+        if (brace_depth == 0 && paren_depth == 0
+            && brack_depth == 0 && *c == '}') {
+            break;
+        }
+        if      (*c == '{') ++brace_depth;
+        else if (*c == '}') --brace_depth;
+        else if (*c == '(') ++paren_depth;
+        else if (*c == ')') --paren_depth;
+        else if (*c == '[') ++brack_depth;
+        else if (*c == ']') --brack_depth;
+        out.push_back(*c);
+        sr.get();
+    }
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult SvBalancedBracesParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvBalancedBracesParser::unparse expects StringValue"});
+}
+
 // --- SvLineTextParser ---------------------------------------------------
 
 SvLineTextParser::SvLineTextParser() : Parser("sv_line_text") {}
@@ -282,6 +325,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_balanced_arg", []() {
             return std::make_unique<SvBalancedArgParser>();
+        }},
+        ParserSpec{"sv_balanced_braces", []() {
+            return std::make_unique<SvBalancedBracesParser>();
         }},
     };
     return g;
