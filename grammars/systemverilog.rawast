@@ -82,11 +82,12 @@ DESCRIPTION: choice {
   <IFNDEF>,
   <PACKAGE_DECL>,
   <INTERFACE_DECL>,
+  <CLASS_DECL>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
   <MACRO_STMT>,
   <MODULE_DECL>
-  // future: <CLASS_DECL>, <UDP_DECL>, <CONFIG_DECL>
+  // future: <UDP_DECL>, <CONFIG_DECL>
 }
 
 // ─── Module declaration ─────────────────────────────────────────────────
@@ -1310,4 +1311,140 @@ EXPORT_STMT: sequence dict {
 END_LABEL: sequence dict {
   ":", sv_identifier:label=@
 }
+
+// ─── Class declarations (parse-only, semantics deferred) ──────────────
+
+// Class is split into `virtual class`/plain `class` variants —
+// otherwise the optional-leading-keyword (`?'virtual'`) interacts
+// badly with the surrounding DESCRIPTION Choice when peek-and-skip
+// has to decide whether to enter CLASS_DECL.
+CLASS_DECL: choice {
+  <CLASS_DECL_VIRTUAL>,
+  <CLASS_DECL_PLAIN>
+}
+
+CLASS_DECL_VIRTUAL: sequence dict {
+  'virtual':virtual=true,
+  'class':@:type="class",
+  sv_identifier:name=@,
+  ?<CLASS_EXTENDS>:extends=@,
+  ";",
+  <CLASS_ITEMS>:items=@,
+  'endclass',
+  ?<END_LABEL>:end_label=@
+}
+
+CLASS_DECL_PLAIN: sequence dict {
+  'class':@:type="class",
+  sv_identifier:name=@,
+  ?<CLASS_EXTENDS>:extends=@,
+  ";",
+  <CLASS_ITEMS>:items=@,
+  'endclass',
+  ?<END_LABEL>:end_label=@
+}
+
+CLASS_EXTENDS: sequence dict {
+  'extends':@,
+  sv_identifier:base=@,
+  ?<PARAM_OVERRIDE>:params=@
+}
+
+CLASS_ITEMS: sequence array {
+  repeat <CLASS_ITEM>
+}
+
+CLASS_ITEM: choice {
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
+  <TYPEDEF_DECL>,
+  <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_STMT>,
+  <CLASS_FUNCTION>,
+  <CLASS_TASK>,
+  <CONSTRAINT_DECL>,
+  <CLASS_PROPERTY>,
+  <CLASS_USER_PROPERTY>,
+  <MACRO_STMT>
+}
+
+// `[local|protected] [static|automatic] [rand|randc] <TYPE> name [= expr];`
+CLASS_PROPERTY: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?<LIFETIME>:lifetime=@,
+  ?<RAND_QUAL>:rand=@,
+  <TYPE_SPEC>:type_spec=@:type="class_property",
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<CLASS_PROPERTY_INIT>:init=@,
+  ";"
+}
+
+// User-typed class property: same shape as CLASS_PROPERTY but the
+// type slot is an sv_identifier (typedef'd type) instead of a
+// keyword. Engine repeat-iteration marks (added at grammar.cpp's
+// Repeat case) ensure a failed match rolls back cleanly so this
+// alt doesn't gobble `endclass` from the CLASS_ITEMS repeat.
+CLASS_USER_PROPERTY: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?<LIFETIME>:lifetime=@,
+  ?<RAND_QUAL>:rand=@,
+  sv_identifier:type_spec=@:type="class_user_property",
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<CLASS_PROPERTY_INIT>:init=@,
+  ";"
+}
+
+CLASS_VISIBILITY: choice { 'local':@, 'protected':@ }
+
+RAND_QUAL: choice { 'randc':@, 'rand':@ }
+
+CLASS_PROPERTY_INIT: sequence dict { "=", <EXPR>:value=@ }
+
+// `[local|protected] function [<TYPE>] NAME(args); body endfunction`
+CLASS_FUNCTION: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  'function':@:type="class_function",
+  ?<LIFETIME>:lifetime=@,
+  ?<TYPE_SPEC>:return_type=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endfunction',
+  ?<END_LABEL>:end_label=@
+}
+
+CLASS_TASK: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  'task':@:type="class_task",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endtask',
+  ?<END_LABEL>:end_label=@
+}
+
+METHOD_PORT_LIST: sequence dict {
+  "(",
+  *:text=@,
+  ")"
+}
+
+// `constraint NAME { … }` — body captured as raw text; downstream
+// pass can re-parse the constraint expression language.
+CONSTRAINT_DECL: sequence dict {
+  'constraint':@:type="constraint",
+  sv_identifier:name=@,
+  "{",
+  *:body=@,
+  "}"
+}
+
 

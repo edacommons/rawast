@@ -156,6 +156,17 @@ FirstByteResult compute_node_first_bytes(
     state[i] = 1;
 
     FirstByteResult result;
+    // Track the ORIGINAL node's is_optional flag — for a Ref like
+    // `?<RULE>`, the optional sits on the Ref, not on RULE's body.
+    // An optional Ref is nullable: when the input's next byte
+    // isn't in its first-byte set, the optional can SKIP, and the
+    // sequence continues to the NEXT child. Without this, a rule
+    // like `?<VIS>, ?<LIFE>, <TYPE>` would have a first-byte set
+    // limited to VIS's (l, p) because VIS isn't itself nullable —
+    // the engine's peek-and-skip would then wrongly exclude inputs
+    // starting with TYPE keywords (i, w, r, ...).
+    const Node& orig = g.node(id);
+    const bool orig_optional = orig.is_optional;
     NodeId resolved = g.resolve_ref(id);
     const Node& n = g.node(resolved);
 
@@ -297,6 +308,14 @@ FirstByteResult compute_node_first_bytes(
         result = any_byte_result();
         break;
     }
+
+    // An optional original node is nullable — its first-byte set
+    // is the union with "anything that comes after." The Sequence
+    // walker that called us uses `nullable` to decide whether to
+    // continue accumulating next-child bytes; making this true for
+    // any optional fixes the `?<VIS>, ?<LIFE>, <TYPE>` first-byte
+    // computation.
+    if (orig_optional) result.nullable = true;
 
     state[i] = 2;
     cache[i] = result;
@@ -941,8 +960,24 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 more = false;
                 break;
-            case NodeKind::Sequence:
             case NodeKind::Repeat:
+                // Repeat case: accept the just-completed iteration's
+                // mark (if any) before stepping. Each successful
+                // iteration commits its consumption; a fresh mark is
+                // pushed when the next iteration starts (in the
+                // Repeat case at the main switch). This is what makes
+                // a failing iteration roll back to the position
+                // BEFORE the iteration started — without it, a Choice
+                // inside the body that committed (accepted its own
+                // mark) would leave the cursor advanced even if a
+                // later required item failed.
+                if (top.has_mark()) {
+                    on_mark_accept();
+                    top.set_has_mark(false);
+                }
+                more = top.step_next();
+                break;
+            case NodeKind::Sequence:
             case NodeKind::Key:
             case NodeKind::Parse:
             case NodeKind::Raw:
@@ -1059,6 +1094,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
 
             if (popped.kind() == NodeKind::Repeat) {
+                // Reject the failed iteration's mark FIRST — this
+                // rolls the cursor back to the position before the
+                // iteration started. Without this, partial progress
+                // inside the failed iteration body (especially a
+                // Choice that committed before a later required item
+                // failed) leaves the cursor advanced and breaks the
+                // outer rule's continuation.
+                if (popped.has_mark()) {
+                    on_mark_reject();
+                    popped.set_has_mark(false);
+                }
                 // `repeat+` (min=1) form: the Repeat itself fails if too
                 // few iterations matched. Propagate the failure further up
                 // so an enclosing Choice/optional can react.
@@ -1361,8 +1407,41 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             break;
         }
 
-        case NodeKind::Sequence:
         case NodeKind::Repeat: {
+            if (top.has_current()) {
+                // Mark the start of each iteration so a failed body
+                // can roll back cleanly. Standard PEG repeat
+                // semantics: partial progress in a failed iteration
+                // must not affect the outer rule. Without this, a
+                // Choice inside the iteration body that committed
+                // (accepted its own mark) would leave the cursor
+                // advanced when a later required item in the body
+                // failed — the surrounding rule would then fail too,
+                // unable to roll back over the committed Choice.
+                if (!top.has_mark()) {
+                    sr.mark();
+                    pending_per_mark.emplace_back();
+                    top.set_has_mark(true);
+                }
+                push_or_skip_optional(top.current_child());
+            } else {
+                // No children left to process -- this frame is done.
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                popped.finish(pool);
+                fire_callbacks_for_frame(popped);
+                if (stack.empty()) {
+                    result_value = popped.result();
+                    parse_finished = true;
+                    break;
+                }
+                popped.pass_values_to(stack.back());
+                advance_after_child();
+            }
+            break;
+        }
+
+        case NodeKind::Sequence: {
             if (top.has_current()) {
                 push_or_skip_optional(top.current_child());
             } else {

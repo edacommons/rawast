@@ -515,6 +515,84 @@ def test_save_produces_output(sv_grammar):
         raise AssertionError(f"{len(failures)} save failures:\n{msg}")
 
 
+def test_class_declarations(sv_grammar):
+    """Class declarations parse to AST nodes — full semantic resolution
+    (extends-chain validation, constraint expression parsing, method
+    body type-checking) is downstream. Verifies the engine's repeat-
+    iteration rollback + first-byte-through-optionals fix that
+    landed alongside this test."""
+    cases = [
+        ("empty",        "class C; endclass\n"),
+        ("virtual",      "virtual class C; endclass\n"),
+        ("extends",      "class C extends Base; endclass\n"),
+        ("int property", "class C; int x; endclass\n"),
+        ("rand bit",     "class C; rand bit [7:0] data; endclass\n"),
+        ("user-typed",   "class C; my_t y; endclass\n"),
+        ("function",     "class C; function int foo(); endfunction endclass\n"),
+        ("task",         "class C; task bar(); endtask endclass\n"),
+        ("constraint",   "class C; rand int x; constraint c { x > 0; } endclass\n"),
+        ("transaction",  "class T extends uvm_obj; rand bit [7:0] data; constraint c { data > 0; } function new(); endfunction endclass\n"),
+    ]
+    for name, src in cases:
+        r = sv_grammar.parse_string(src)
+        d = r["descriptions"][0]
+        assert d["type"] == "class", f"{name}: expected type=class, got {d.get('type')!r}"
+
+
+def test_package_and_interface(sv_grammar):
+    """Package and interface declarations parse with module-item bodies."""
+    src = "package my_pkg;\n  typedef logic [7:0] byte_t;\n  parameter MAX = 8;\nendpackage\n"
+    r = sv_grammar.parse_string(src)
+    pkg = r["descriptions"][0]
+    assert pkg["type"] == "package"
+    assert pkg["name"] == "my_pkg"
+    src = "interface bus_if(input clk);\n  logic [7:0] data;\nendinterface\n"
+    r = sv_grammar.parse_string(src)
+    intf = r["descriptions"][0]
+    assert intf["type"] == "interface"
+    assert intf["name"] == "bus_if"
+
+
+def test_typedef_and_user_typed_decls(sv_grammar):
+    """typedef declarations + user-typed module-item and port decls.
+
+    `typedef` is currently a MODULE_ITEM (inside modules / packages /
+    classes), not a top-level DESCRIPTION — file-level typedefs need
+    to live inside a `package` block or be added to DESCRIPTION
+    later. The test puts the typedef inside the module to verify
+    the module-item path."""
+    src = (
+        "module m (input byte_t din, output byte_t dout);\n"
+        "  typedef logic [7:0] byte_t;\n"
+        "  byte_t buffer;\n"
+        "  assign dout = buffer;\n"
+        "endmodule\n"
+    )
+    r = sv_grammar.parse_string(src)
+    m = r["descriptions"][0]
+    assert m["type"] == "module"
+    # Ports use byte_t (user-typed port).
+    p0 = m["ports"]["ports"][0]
+    assert p0.get("direction") == "input"
+    assert p0.get("type_spec") == "byte_t"
+    # Module items: typedef + user_typed_decl + cont_assign.
+    item_types = [i.get("type") for i in m["items"]]
+    assert "typedef" in item_types
+    assert "user_typed_decl" in item_types
+
+
+def test_imports(sv_grammar):
+    """import statements with wildcard, named, and multi-entry forms."""
+    for src in [
+        "import pkg::*;\nmodule m; endmodule\n",
+        "import pkg::sym;\nmodule m; endmodule\n",
+        "import pkg1::*, pkg2::name;\nmodule m; endmodule\n",
+    ]:
+        r = sv_grammar.parse_string(src)
+        imp = r["descriptions"][0]
+        assert imp["type"] == "import"
+
+
 def test_define_then_module_use(sv_grammar):
     """Real-world common case: `define at top-level, then a module
     that uses the macro in a port range and an assignment."""
