@@ -463,21 +463,56 @@ def test_save_produces_output(sv_grammar):
     completes without error for each construct catches dispatch and
     state-machine regressions."""
     sources = [
+        # module structure
         "module m; endmodule\n",
         "module m; wire foo; endmodule\n",
         "module m; wire [7:0] bus; endmodule\n",
         "module m (input clk, output [3:0] q); endmodule\n",
+        "module m; reg r1, r2; endmodule\n",
+        # expressions
         "module m (output y); assign y = 1; endmodule\n",
         "module m (output y); assign y = a + b * c; endmodule\n",
         "module m (output y); assign y = (a); endmodule\n",
+        "module m (input s, output y); assign y = s ? 1 : 0; endmodule\n",
+        "module m (input a, output y); assign y = ~a; endmodule\n",
+        # always blocks + statements
+        "module m (input clk, output reg q); always @(posedge clk) q <= 1; endmodule\n",
+        "module m (input clk, output reg q); always @(posedge clk or negedge rst) q <= 1; endmodule\n",
+        "module m (input clk, output reg q); always @(*) q <= 1; endmodule\n",
+        "module m (input clk); always @(posedge clk) begin a <= 1; b <= 2; end endmodule\n",
+        "module m (input s, output reg y); always @(*) if (s) y = 1; else y = 0; endmodule\n",
+        "module m (input s, output reg y); always @(*) case (s) 1: y = 0; default: y = 1; endcase endmodule\n",
+        # system tasks
+        "module m; initial $display(\"hi\"); endmodule\n",
+        "module m; initial $display(42); endmodule\n",
+        "module m; initial $finish; endmodule\n",
+        # parameters + instantiation
+        "module m; parameter W = 8; endmodule\n",
+        "module m; localparam X = 1; endmodule\n",
+        "module m; counter u0(.clk(clk), .q(q)); endmodule\n",
+        # preprocessor
         "`define WIDTH 8\nmodule m; endmodule\n",
         "`include \"foo.vh\"\nmodule m; endmodule\n",
+        "`ifdef X\ninitial $display(\"x\");\n`endif\nmodule m; endmodule\n",
+        # macro use in various positions
+        "module m (output y); assign y = `WIDTH; endmodule\n",
+        "module m (output y); assign y = `WIDTH'd42; endmodule\n",
+        "module m (output y); assign y = `MAX(a, b); endmodule\n",
+        # full common case
+        "`define W 8\nmodule m (input clk, input [`W-1:0] d, output reg [`W-1:0] q); always @(posedge clk) q <= d; endmodule\n",
     ]
+    failures = []
     for src in sources:
         ast = sv_grammar.parse_string(src)
-        saved = sv_grammar.save(ast)
-        assert saved, f"save returned empty for {src!r}"
-        assert len(saved) > 0
+        try:
+            saved = sv_grammar.save(ast)
+            assert saved, f"save returned empty for {src!r}"
+            assert len(saved) > 0
+        except Exception as e:
+            failures.append((src, str(e)[:60]))
+    if failures:
+        msg = "\n".join(f"  {src!r}: {err}" for src, err in failures)
+        raise AssertionError(f"{len(failures)} save failures:\n{msg}")
 
 
 def test_define_then_module_use(sv_grammar):
