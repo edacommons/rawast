@@ -445,10 +445,30 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
     ValuePtr peek_value;
     std::string peek_key;
     if (s.has_pending() && s.top_dict()) {
-        auto it = s.top_dict()->dict->data().find(s.pending_name());
+        // Strip list-append suffix so `items[]` looks up the `items`
+        // array and peeks the next un-consumed element. Without this,
+        // a `repeat <X>:items[]=@` Choice dispatch can never find its
+        // discriminator (dict has `items`, not `items[]`). Falls back
+        // to scalar field lookup for non-list bindings.
+        bool is_list = false;
+        std::string field = strip_list_suffix(s.pending_name(), is_list);
+        auto it = s.top_dict()->dict->data().find(field);
         if (it != s.top_dict()->dict->data().end()) {
-            peek_value = it->second;
-            peek_key   = s.pending_name();
+            if (is_list) {
+                auto arr = as_array(it->second);
+                if (arr && !arr->data().empty()) {
+                    auto pit = s.top_dict()->list_progress.find(field);
+                    std::size_t idx = pit == s.top_dict()->list_progress.end()
+                                        ? 0 : pit->second;
+                    if (idx < arr->data().size()) {
+                        peek_value = arr->data()[idx];
+                        peek_key   = field;
+                    }
+                }
+            } else {
+                peek_value = it->second;
+                peek_key   = field;
+            }
         }
     } else if (s.has_q()) {
         peek_value = s.peek_q().value;

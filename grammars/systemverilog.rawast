@@ -110,7 +110,12 @@ PARAM_PORT_LIST: sequence dict {
   ")"
 }
 
-PARAM_DECL: sequence dict {
+// Non-container sequence: its emitted bindings flow into the
+// surrounding rule's dict (PARAM_DECL_STMT wraps it with a trailing
+// `;`; PARAM_PORT_LIST uses it directly). Save-side dispatch can't
+// handle a container=Dict Ref referenced without an outer binding —
+// non-container sidesteps that.
+PARAM_DECL: sequence {
   'parameter':@:type="param",
   ?<TYPE_SPEC>:type_spec=@,
   ?<RANGE>:range=@,
