@@ -1033,6 +1033,24 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
         ValuePtr v = r->value ? r->value : null_value();
+
+        // Subparse inverse: when a Parse terminal carries a
+        // subparse_start rule, the AST stores the structured
+        // sub-tree (from the subparse re-entry on the parse side),
+        // not the original captured string. To round-trip, save
+        // the sub-tree through the subparse rule first to recover
+        // the textual form, then pass that text through the
+        // Parse terminal's own unparse for any final formatting.
+        if (n.subparse_start.valid()) {
+            std::ostringstream sub_out;
+            SaveState sub_s;
+            sub_s.push_q({v, false, ""});
+            auto sub_r = do_consume(g, sub_out, n.subparse_start,
+                                    sub_s, 0, pretty);
+            if (!sub_r) return tl::unexpected(sub_r.error());
+            v = make_string(sub_out.str());
+        }
+
         auto u = p->unparse(*v);
         if (!u) return tl::unexpected(u.error());
         out << *u;
@@ -1048,6 +1066,22 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
         ValuePtr v = r->value ? r->value : null_value();
+
+        // Subparse inverse: if the Raw carries a subparse_start,
+        // the stored value is the structured sub-tree (from parse-
+        // side re-entry). Serialize it back through the subparse
+        // rule first to recover the text, then write that text.
+        if (n.subparse_start.valid()) {
+            std::ostringstream sub_out;
+            SaveState sub_s;
+            sub_s.push_q({v, false, ""});
+            auto sub_r = do_consume(g, sub_out, n.subparse_start,
+                                    sub_s, 0, pretty);
+            if (!sub_r) return tl::unexpected(sub_r.error());
+            out << sub_out.str();
+            return {};
+        }
+
         auto sv = as_string(v);
         if (!sv) {
             return tl::unexpected(SaveError{

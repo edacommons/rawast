@@ -488,23 +488,32 @@ TYPEDEF_BASE: choice {
 }
 
 // `enum [base_type] { label [= value], ... }` — enumerated type.
-// Body uses sv_balanced_braces so nested expressions in default
-// values (e.g. `A = {1, 2}`, function calls with parens, etc.)
-// don't terminate at the first `}` or `,`.
+// Body parsed DIRECTLY (no subparse) as a comma-separated list of
+// labels. Cleaner than capture-then-subparse: the grammar engine
+// handles structure naturally and save round-trips for free.
 ENUM_TYPE: sequence dict {
   'enum':@:type="enum_type",
   *:meta=@,
   "{",
-  sv_balanced_braces:body=@,
+  repeat+ <ENUM_LABEL>:labels[]=@ separator ",",
   "}"
 }
 
+ENUM_LABEL: sequence dict {
+  sv_identifier:name=@,
+  ?<ENUM_LABEL_VALUE>:value=@
+}
+
+ENUM_LABEL_VALUE: sequence dict { "=", <EXPR>:value=@ }
+
+// `[packed] struct [signing] { <fields> }` — struct/union types.
+// Body parsed directly as a sequence of field declarations.
 STRUCT_TYPE: sequence dict {
   ?'packed':is_packed=true,
   'struct':@:type="struct_type",
   *:meta=@,
   "{",
-  sv_balanced_braces:body=@,
+  repeat+ <STRUCT_FIELD>:fields[]=@,
   "}"
 }
 
@@ -513,9 +522,28 @@ UNION_TYPE: sequence dict {
   'union':@:type="union_type",
   *:meta=@,
   "{",
-  sv_balanced_braces:body=@,
+  repeat+ <STRUCT_FIELD>:fields[]=@,
   "}"
 }
+
+// Struct/union field: `<TYPE> [range] <NAME> [unpacked-dim] [= init];`.
+STRUCT_FIELD: sequence dict {
+  <STRUCT_FIELD_TYPE>:type_spec=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<STRUCT_FIELD_INIT>:init=@,
+  ";"
+}
+
+STRUCT_FIELD_TYPE: choice {
+  <TYPE_SPEC>,
+  <STRUCT_FIELD_USER_TYPE>
+}
+
+STRUCT_FIELD_USER_TYPE: sequence { sv_identifier }
+
+STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 
 // User-defined-typed declaration: `<typedef'd_name> [range] <names>;`.
 // Tried at module-item position AFTER all the built-in-keyword
@@ -2131,22 +2159,32 @@ CONSTRAINT_DECL: sequence dict {
 // ─── Miscellaneous module-item constructs (parse-only) ──────────────────
 
 // `modport NAME (input a, b, output c, ...);` — interface modport.
-// Lives in MODULE_ITEM so it can appear in interface bodies; module
-// bodies aren't supposed to have modports per LRM, but pure-parse
-// doesn't enforce that — host validates semantically.
 //
-// The body inside parens is direction-keyword + names, where each
-// direction group switches to a new direction. PEG can't cleanly
-// express "identifier until next direction keyword" without negative
-// lookahead, so the body is captured as raw text; host re-parses
-// into the structured `{direction, names: [...]}` form.
+// Body parsed directly as a list of direction-or-inherit entries.
+// Each entry is either `<dir> <name>` (direction-headed) or just
+// `<name>` (inheriting direction from the preceding entry). Host
+// walks left-to-right to apply inherited directions.
 MODPORT_DECL: sequence dict {
   'modport':@:type="modport",
   sv_identifier:name=@,
   "(",
-  *:body=@,
+  repeat+ <MODPORT_GROUP>:ports[]=@ separator ",",
   ")",
   ";"
+}
+
+MODPORT_GROUP: choice {
+  <MODPORT_GROUP_DIR>,
+  <MODPORT_GROUP_INHERIT>
+}
+
+MODPORT_GROUP_DIR: sequence dict {
+  <PORT_DIRECTION>:direction=@:type="modport_group",
+  sv_identifier:name=@
+}
+
+MODPORT_GROUP_INHERIT: sequence dict {
+  sv_identifier:name=@:type="modport_group_inherit"
 }
 
 // `let NAME(args) = expr;` — SV-1800 macro-like substitution. Body

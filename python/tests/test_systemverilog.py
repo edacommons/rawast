@@ -1048,6 +1048,56 @@ def test_more_coverage_extensions(sv_grammar):
         sv_grammar.parse_string(src)
 
 
+def test_enum_struct_modport_structured_bodies(sv_grammar):
+    """Enum / struct / union / modport bodies are now parsed into
+    fully-structured AST (not raw text). Bidirectional save
+    round-trip works."""
+    # Enum: labels with optional values
+    r = sv_grammar.parse_string("typedef enum logic [1:0] { READ = 0, WRITE = 1, IDLE } cmd_e;\n")
+    labels = r["descriptions"][0]["base"]["labels"]
+    assert len(labels) == 3
+    assert labels[0]["name"] == "READ"
+    assert "value" in labels[0]
+    assert labels[1]["name"] == "WRITE"
+    assert labels[2]["name"] == "IDLE"
+    assert "value" not in labels[2]
+    out = sv_grammar.save(r)
+    assert b"READ" in out
+    assert b"WRITE" in out
+    assert b"IDLE" in out
+
+    # Struct: fields with types
+    r = sv_grammar.parse_string("typedef struct packed { cmd_e cmd; bit [31:0] addr; } trans_t;\n")
+    fields = r["descriptions"][0]["base"]["fields"]
+    assert len(fields) == 2
+    assert fields[0]["name"] == "cmd"
+    assert fields[0]["type_spec"] == "cmd_e"
+    assert fields[1]["name"] == "addr"
+    assert fields[1]["type_spec"] == "bit"
+    assert "range" in fields[1]
+    out = sv_grammar.save(r)
+    assert b"trans_t" in out
+
+    # Union: same field structure as struct
+    r = sv_grammar.parse_string("typedef union { int i; real r; } u_t;\n")
+    fields = r["descriptions"][0]["base"]["fields"]
+    assert len(fields) == 2
+    assert fields[0]["name"] == "i"
+    assert fields[0]["type_spec"] == "int"
+
+    # Modport: direction-headed + inherited groups
+    r = sv_grammar.parse_string(
+        "interface i; modport m (input a, b, output c, d, inout e); endinterface\n"
+    )
+    ports = r["descriptions"][0]["items"][0]["ports"]
+    assert len(ports) == 5
+    assert ports[0] == {"direction": "input", "name": "a", "type": "modport_group"}
+    assert ports[1] == {"name": "b", "type": "modport_group_inherit"}
+    assert ports[2] == {"direction": "output", "name": "c", "type": "modport_group"}
+    assert ports[3] == {"name": "d", "type": "modport_group_inherit"}
+    assert ports[4] == {"direction": "inout", "name": "e", "type": "modport_group"}
+
+
 def test_uvm_style_endtoend(sv_grammar):
     """Real-world UVM-style testbench code with package + typedef
     enum/struct + class with rand/constraint/extern/virtual +
