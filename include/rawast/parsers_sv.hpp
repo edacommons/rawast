@@ -105,6 +105,20 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// Consume text until the closing `]` at OUTERMOST depth. Tracks
+// nesting of `[]`, `()`, and `{}` so commas, semicolons, and
+// inner brackets stay part of the captured run. Used for array
+// index/dimension suffixes that may contain nested types like
+// `[bit[31:0]]` (associative array keyed by a bit vector type)
+// where the inner `[31:0]` is part of the key type, not the outer
+// suffix terminator.
+class SvBalancedBracketsParser final : public Parser {
+public:
+    SvBalancedBracketsParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Consume a line of text, terminating at the next un-escaped newline.
 // Handles the standard `\` line-continuation: a backslash IMMEDIATELY
 // before a newline causes the parser to include both and keep going,

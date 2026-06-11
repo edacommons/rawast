@@ -260,6 +260,45 @@ SaveResult SvBalancedBracesParser::unparse(const Value& v) const {
         "SvBalancedBracesParser::unparse expects StringValue"});
 }
 
+// --- SvBalancedBracketsParser -------------------------------------------
+
+SvBalancedBracketsParser::SvBalancedBracketsParser()
+    : Parser("sv_balanced_brackets") {}
+
+ParseResult SvBalancedBracketsParser::parse(StreamReader& sr) {
+    sr.mark();
+    std::string out;
+    // Track `[]`, `()`, and `{}` depth. Stop at `]` at outermost
+    // depth. Used for array index suffixes like `[bit[31:0]]` where
+    // the inner bracket is part of the type expression, not the
+    // outer suffix terminator.
+    int brack_depth = 0;
+    int paren_depth = 0;
+    int brace_depth = 0;
+    while (auto c = sr.peek()) {
+        if (brack_depth == 0 && paren_depth == 0
+            && brace_depth == 0 && *c == ']') {
+            break;
+        }
+        if      (*c == '[') ++brack_depth;
+        else if (*c == ']') --brack_depth;
+        else if (*c == '(') ++paren_depth;
+        else if (*c == ')') --paren_depth;
+        else if (*c == '{') ++brace_depth;
+        else if (*c == '}') --brace_depth;
+        out.push_back(*c);
+        sr.get();
+    }
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult SvBalancedBracketsParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvBalancedBracketsParser::unparse expects StringValue"});
+}
+
 // --- SvLineTextParser ---------------------------------------------------
 
 SvLineTextParser::SvLineTextParser() : Parser("sv_line_text") {}
@@ -328,6 +367,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_balanced_braces", []() {
             return std::make_unique<SvBalancedBracesParser>();
+        }},
+        ParserSpec{"sv_balanced_brackets", []() {
+            return std::make_unique<SvBalancedBracketsParser>();
         }},
     };
     return g;

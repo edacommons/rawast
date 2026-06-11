@@ -181,9 +181,9 @@ PARAM_DECL_OR_LOCAL: choice {
   <PARAM_DECL_LOCALPARAM>,
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
-  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_IMPLICIT>,
-  <PARAM_DECL_USERTYPE>
+  <PARAM_DECL_VALUE>
 }
 
 // `localparam [type] NAME = expr` — non-overridable derived parameter.
@@ -204,8 +204,8 @@ PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
   <PARAM_DECL_USERTYPE>,
-  <PARAM_DECL_VALUE>,
-  <PARAM_DECL_IMPLICIT>
+  <PARAM_DECL_IMPLICIT>,
+  <PARAM_DECL_VALUE>
 }
 
 // `parameter <user_type_name> <NAME> [= <expr>]` — user-typed param.
@@ -372,12 +372,13 @@ PACKED_DIMENSIONS: sequence array {
 // All forms use square brackets but with distinct internals. We
 // capture them as raw text via `sv_balanced_braces` (which tracks
 // `()`/`{}`/`[]` depth) so any of the four cases parse uniformly.
-// For most uses (`[$]`, `[$:10]`, `[string]`, `[]`, `[16]`) the
-// content has no nested `]`, so `*` raw-consume to the literal
-// terminator works fine. Nested-bracket cases (rare in declarations)
-// would need a depth-tracking parser; deferred.
+// Bracket content is captured by `sv_balanced_brackets` which
+// tracks `[]`/`()`/`{}` depth so nested-bracket cases like
+// `[bit[31:0]]` (associative array keyed by a sized type) parse
+// uniformly. Covers all variants: `[$]`, `[$:10]`, `[string]`,
+// `[]`, `[16]`, and the nested forms.
 ARRAY_KIND_SUFFIX: sequence dict {
-  "[", *:kind=@, "]"
+  "[", sv_balanced_brackets:kind=@, "]"
 }
 
 // `[0:15] [0:7]` or `[3]` — unpacked dimensions for arrays. Each
@@ -1641,9 +1642,27 @@ CONCAT_OR_REPLICATION: choice {
   <CONCAT>
 }
 
-CONCAT: sequence dict {
+// Concat: `{ a, b, c }`. Two Choice forms — structured for plain
+// expression lists, raw-captured for concat bodies containing
+// preprocessor directives that interleave with the elements
+// (`` `ifdef ``/`` `endif `` mid-list, common in formal & UVM code).
+// PEG tries structured first; if directives break the EXPR
+// repeat, the alt rolls back and CONCAT_RAW captures the body
+// uniformly. Host re-parses if directive structure is needed.
+CONCAT: choice {
+  <CONCAT_STRUCTURED>,
+  <CONCAT_RAW>
+}
+
+CONCAT_STRUCTURED: sequence dict {
   "{":type="concat",
   repeat <EXPR>:elements[]=@ separator ",",
+  "}"
+}
+
+CONCAT_RAW: sequence dict {
+  "{":type="concat_with_directives",
+  sv_balanced_braces:body=@,
   "}"
 }
 
@@ -2684,16 +2703,18 @@ METHOD_CALL_STMT: sequence dict {
   ";"
 }
 
-// `virtual interface bus_if [#(params)] name [, name2, ...];` —
-// virtual-interface reference declaration. Used in testbench
-// classes to hold a handle to an interface instance.
+// `virtual [interface] <type_name> [#(params)] name [, name2, ...];` —
+// virtual-interface reference declaration. SV-1800 LRM allows the
+// `interface` keyword to be omitted when followed by a typedef'd
+// interface name. Used in testbench classes to hold a handle to
+// an interface instance.
 //
-// Body captured raw between `virtual interface` and the trailing
+// Body captured raw between `virtual [interface]` and the trailing
 // `;` so the optional `#(...)` parameter override and the
 // comma-separated identifier list are both handled by the host.
 VIRTUAL_INTERFACE_DECL: sequence dict {
   'virtual':@:type="virtual_interface",
-  'interface',
+  ?'interface',
   *:body=@,
   ";"
 }
