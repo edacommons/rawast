@@ -35,6 +35,7 @@ Priority order. Sections 1 and 2 are required; the rest are reference material t
    - `grammars/json.json` — minimal grammar (RFC 8259), good first example
    - `grammars/tcl.rawast` — demonstrates `subparse=` and rule-local `ignore` for embedded sub-languages
    - `grammars/lefdef.rawast` — full-scale grammar with shared sub-rules, multi-top-rule entry points, and the `*` primitive for opaque vendor blocks
+   - `grammars/systemverilog.rawast` — large mixed-content grammar (~2000 lines): preprocessor + statement chain + 14-level expression precedence + structured class/interface/package/program + comprehensive SVA / coverage / clocking. Good reference for choice-based dispatch on Choice alternatives sharing leading rules, inlining nested Choice alts in parent Choice for save dispatch, and using `*:body=@` for opaque sub-language bodies (constraint blocks, SVA properties, covergroup items)
 
 5. **[`EXAMPLES.md`](EXAMPLES.md)** — worked Python and CLI examples per capability.
 
@@ -78,6 +79,15 @@ Your output is a single .rawast file. Conventions:
   should emit `{op, args}`. Reach for the binding mechanism early; writing
   a "lower" / "normalize" step in code is the anti-pattern. See the
   "Design the grammar to emit your application's IR" section below.
+- **Parse structured lists DIRECTLY, don't capture-and-subparse.** For
+  comma- or semicolon-separated content (enum labels, struct fields,
+  modport ports, parameter lists, etc.), use the outer grammar's
+  `repeat+ <ITEM>:items[]=@ separator ","` primitives — not
+  `*:body=@:subparse="ITEMS"`. Subparse is the right tool when the
+  inner content is a genuinely DIFFERENT sub-language (SVA temporal
+  expressions, constraint distributions, embedded SQL); it's the
+  wrong tool when the inner is just a list. See the "Practical tips"
+  section below for the full heuristic.
 - Add a comment with the spec section number for each non-trivial rule.
 
 Before emitting, mentally walk the grammar through:
@@ -164,6 +174,33 @@ Most application languages can use the parenthesize-required approach for the ra
 If you find yourself writing code that walks the parsed AST and produces a different-shaped AST, ask: **what binding could the grammar have used to emit the right shape directly?** Most of the time the answer is "`:field=const` constant + `:args[]=@` list-append on the operand Refs" — and the grammar gets a few lines cleaner while losing an entire post-processing module.
 
 The grammar IS the schema for the application's IR. Use it.
+
+### When to inline a nested Choice in its parent (save dispatch)
+
+A common shape: `OUTER_CHOICE` has alternatives, one of which is `<INNER_CHOICE>` which itself has alternatives. On the parse side this works fine — the outer Choice tries alts, picks one, the inner Choice runs and picks an alt. On the save side, the dispatcher hits the outer Choice, tries to dispatch on the value's `type` discriminator, finds `INNER_CHOICE` as an alt, recurses, and the inner Choice has to dispatch on the SAME `type`. Depending on how many levels of nesting and how distinct the discriminators are, the dispatch can fail to find a unique alt.
+
+**Fix**: inline the inner Choice's alternatives directly into the outer Choice. Each alternative is a flat sibling of the outer Choice rather than a child of an intermediate Choice rule. Same parse behavior; save dispatch sees a single flat list of distinct alts.
+
+Example from the SystemVerilog grammar — class declarations were originally:
+
+```
+DESCRIPTION: choice { ..., <CLASS_DECL>, ... }
+CLASS_DECL:  choice { <CLASS_DECL_VIRTUAL>, <CLASS_DECL_PLAIN> }
+CLASS_DECL_VIRTUAL: sequence dict { 'virtual', 'class':@:type="class", ... }
+CLASS_DECL_PLAIN:   sequence dict {            'class':@:type="class", ... }
+```
+
+This worked for parse but broke save: both inner alternatives have the same `type="class"` discriminator, so the dispatcher couldn't tell them apart. The fix:
+
+```
+DESCRIPTION: choice { ..., <CLASS_DECL_VIRTUAL>, <CLASS_DECL_PLAIN>, ... }
+CLASS_DECL_VIRTUAL: sequence dict { 'virtual', 'class':@:type="class", ... }
+CLASS_DECL_PLAIN:   sequence dict {            'class':@:type="class", ... }
+```
+
+Both alternatives are now direct siblings of DESCRIPTION's Choice. The `'virtual'` Key on `CLASS_DECL_VIRTUAL` differentiates the parse-side match; on save, the dispatcher inspects the value for a `virtual` field that CLASS_DECL_VIRTUAL's const binding sets (the const `virtual=true`) and dispatches correctly. The intermediate `CLASS_DECL` Choice was removed.
+
+**Heuristic**: if two alternatives of an outer Choice share a discriminator (e.g. `type="class"`), and they're disambiguated by a leading `?'KEYWORD'` Key or a const binding rather than a unique `type` value, inline them both as siblings of the outer Choice. The intermediate Choice level only helps if the alternatives have genuinely distinct discriminators that the dispatcher can route on.
 
 ### A common reluctance: "won't a `choice` with shared prefixes be O(2^n) slow?"
 
@@ -321,6 +358,12 @@ This technique covers most "the grammar can't express my token" cases. Reach for
 **Always lint after generating a grammar.** Either via the CLI (`rawast lint <grammar>`) or programmatically (`Grammar.load(...).lint()`). The lint catches LL(1) ambiguity, the wildcard-Choice-type-emit anti-pattern, and `*` raw-consume misuse — three failure modes that are hard to diagnose at parse time but trivial to fix at grammar-design time. Feed lint output back into your agent as a follow-up turn so it can iterate.
 
 **Use `subparse` for embedded sub-languages.** If a value is itself a structured form (Tcl's `if { ... }` block, an embedded SQL fragment, a templating expression), capture the body as a literal string with the appropriate terminal parser, then call `Grammar.parse_string(body, start="SUBRULE")` from your agent code to recurse. Same engine, recursive call — that's how Tcl's runtime evaluates braced bodies, and rawast lets your agent do the same trick for any embedded language.
+
+Subparse is **bidirectional** — the engine round-trips the structured sub-tree back to text on save by serializing through the subparse rule first, then writing the result through the underlying parser. The AST stores the typed sub-tree; save reconstructs the bytes. Author the subparse rule as if it were a normal grammar; both directions Just Work.
+
+**Don't over-use subparse for plain structured lists.** A common over-engineering pattern: capture content between `{ ... }` as raw text, then add `:subparse="ITEMS"` to re-parse it into a list. If the content is just a comma- or semicolon-separated sequence (enum labels, struct fields, modport ports, parameter list, etc.), parse it DIRECTLY in the outer rule with `repeat+ <ITEM>:items[]=@ separator ","` — no capture, no re-entry, no subparse rule. The grammar engine handles structure inline and save round-trips naturally.
+
+Subparse is the right tool when the inner content is a genuinely DIFFERENT sub-language — different ignore policy, different operators, different lexical structure (SVA temporal expressions, constraint distributions, embedded SQL, regular-expression literals). It's the wrong tool when the inner is just a list with familiar separators. **Heuristic**: if you can write the rule body with `repeat`/`separator`/`?<X>`/`<EXPR>` primitives the outer grammar already uses, parse it directly. If the inner needs custom tokens or a different ignore policy, capture + subparse.
 
 **Use rule-local `ignore` for context shifts.** If part of your format treats whitespace differently from the rest (e.g. a quoted string interior where whitespace is literal data), declare a `RULE ignore:` override on that rule's body. The engine pushes the override on rule entry and pops on exit; the rest of the grammar is unchanged.
 

@@ -10,7 +10,7 @@ What rawast can do today. Most features were validated against a 3,132-file prod
 - **`repeat+N` quantifier** — extends the existing `repeat+` (min=1) shorthand to arbitrary minimum counts: `repeat+2 <X>` requires at least 2 iterations, `repeat+5 <X>` at least 5, etc. Useful for cardinality constraints — binary operators, EDA spec minimums.
 - **Bidirectional walk** — parse and save share one grammar definition. The save direction uses a stack-navigation walk with key-based Choice dispatch, wrapped-substructure descent, and catch-all alternatives. The `.rawast` meta-grammar can save its own parsed grammars back as canonical `.rawast` text (self-host save).
 - **Pretty-print attributes** — `indent`, `tab`, `space`, `newline`, `tail="…"` plus a `pretty=true/false` toggle let one grammar cover both compact and human-readable output.
-- **Subparse** — `:subparse="<RULE>"` on a Parse-terminal item re-invokes the parse loop on the captured string with a different rule as start. Same grammar, fresh ignore-stack, fully recursive. Used by the Tcl grammar to re-parse quoted strings for `$var` and `[cmd]` substitutions.
+- **Subparse (bidirectional)** — `:subparse="<RULE>"` on a Parse- or Raw-terminal item re-invokes the parse loop on the captured string with a different rule as start. On save, the structured sub-tree is serialized back through the subparse rule first to recover the textual form, then written through the underlying terminal's unparse. Same grammar, fresh ignore-stack, fully recursive, round-trips end-to-end. Used by the Tcl grammar to re-parse quoted strings for `$var` and `[cmd]` substitutions.
 - **Rule-local ignore overrides** — `RULE ignore X Y: …` attaches an ignore-list override to a rule. The parse driver pushes the override on rule entry, pops on exit. Rules without an override inherit the caller's active ignore. Combined with subparse, makes multi-context grammars (script + embedded expression + token internals) a single-file artefact.
 - **`*` raw-consume primitive** — `*:body=@, "STOP" newline` scans bytes until a literal sibling matches, bypassing the ignore-set. Vendor-extension bodies and other opaque content round-trip byte-for-byte. The loader and lint both reject a `*` not followed by a literal sibling in the same sequence.
 - **List-append binding** — `:name[]=@` captures multi-instance clauses losslessly without giving up the catcher-flatten convenience for single-instance ones.
@@ -42,10 +42,10 @@ What rawast can do today. Most features were validated against a 3,132-file prod
 
 ## Test suite
 
-253 tests in two layers:
+352 tests in two layers:
 
-- **237 C++ doctest** covering the engine, loader, JSON round-trip, GDSII round-trip, linter (LL(k) ambiguity, prefix-collision, shared-leading-ref exponential trap, wildcard-Choice anti-pattern, raw-consume), pretty-print, strict-key parse+save, `repeat+N` quantifier, the `use:` directive, subparse, per-rule ignore, list-append binding, the data-shape schema generator.
-- **45 Python pytest** covering Pydantic generator round-trip on a synthetic full-LEF-spec fixture plus four real Sky130 PDK files (the HD tech LEF, an OpenRAM SRAM, the `top_xres4v2` IO pad, and a multi-ANTENNA HD cell).
+- **241 C++ doctest** covering the engine, loader, JSON round-trip, GDSII round-trip, linter (LL(k) ambiguity, prefix-collision, shared-leading-ref exponential trap, wildcard-Choice anti-pattern, raw-consume), pretty-print, strict-key parse+save, `repeat+N` quantifier, the `use:` directive, subparse (bidirectional), per-rule ignore, list-append binding, Repeat per-iteration rollback, first-byte propagation through optionals, the data-shape schema generator.
+- **111 Python pytest** covering Pydantic generator round-trip on a synthetic full-LEF-spec fixture plus four real Sky130 PDK files (the HD tech LEF, an OpenRAM SRAM, the `top_xres4v2` IO pad, and a multi-ANTENNA HD cell), plus 56 SystemVerilog tests covering the comprehensive SV-1800 coverage (preprocessor, OOP idioms, SVA, coverage, clocking, randomization, structured AST shapes, multi-port shorthand, virtual interfaces, class type parameters, etc.).
 
 Plus 3,132 real production files across GDSII / LEF / DEF / Tcl parsing 100% end-to-end, of which a 1,013-file LEF + GDSII subset additionally `parse → save → reparse`s to a structurally equivalent value tree (1,013 / 1,013).
 
