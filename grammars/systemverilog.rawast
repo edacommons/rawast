@@ -246,6 +246,26 @@ PACKED_DIMENSIONS: sequence array {
   repeat+ <RANGE>
 }
 
+// SV-1800 dynamic/associative/queue bracket forms attached to a
+// declaration's variable name:
+//
+//   * `int q[$];`      — queue (unbounded)
+//   * `int q[$:10];`   — queue (bounded)
+//   * `int aa[string];` — associative array keyed by string
+//   * `int da[];`      — dynamic array (resizable, empty brackets)
+//   * `int arr[16];`   — fixed-size unpacked array
+//
+// All forms use square brackets but with distinct internals. We
+// capture them as raw text via `sv_balanced_braces` (which tracks
+// `()`/`{}`/`[]` depth) so any of the four cases parse uniformly.
+// For most uses (`[$]`, `[$:10]`, `[string]`, `[]`, `[16]`) the
+// content has no nested `]`, so `*` raw-consume to the literal
+// terminator works fine. Nested-bracket cases (rare in declarations)
+// would need a depth-tracking parser; deferred.
+ARRAY_KIND_SUFFIX: sequence dict {
+  "[", *:kind=@, "]"
+}
+
 // `[0:15] [0:7]` — unpacked dimensions for arrays/memories.
 UNPACKED_DIMENSIONS: sequence array {
   repeat+ <RANGE>
@@ -364,6 +384,7 @@ NET_SIGNING: choice { 'signed':@, 'unsigned':@ }
 
 NET_NAME: sequence dict {
   <IDENT_OR_MACRO>:name=@,
+  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
   ?<NET_INIT>
 }
 
@@ -386,12 +407,17 @@ REG_KIND: choice {
 
 REG_NAME: sequence dict {
   <IDENT_OR_MACRO>:name=@,
+  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
   ?<UNPACKED_DIMENSIONS>:packed=@,
   ?<NET_INIT>
 }
 
 INTEGER_DECL: sequence dict {
+  ?'const':is_const=true,
+  ?'var':is_var=true,
   <INTEGER_KIND>:kind=@:type="integer_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   repeat+ <REG_NAME>:names[]=@ separator ",",
   ";"
 }
@@ -881,19 +907,27 @@ BLOCK_ITEM: choice {
 }
 
 IF_STMT: sequence dict {
+  ?<UNIQUENESS>:uniqueness=@,
   'if':@:type="if",
   "(", <EXPR>:cond=@, ")",
   <STATEMENT>:then=@,
   ?<ELSE_CLAUSE>
 }
 
+// SV-1800 `unique` / `unique0` / `priority` modifier on if/case
+// statements — enforces that exactly one (or at most one) branch
+// matches. Pure parse: captured as a string; host enforces.
+UNIQUENESS: choice { 'unique0':@, 'unique':@, 'priority':@ }
+
 // Non-container sub-rule; its `else` binding flows up to the caller's
 // dict (the IF_STMT rule).
 ELSE_CLAUSE: sequence { 'else', <STATEMENT>:else=@ }
 
 CASE_STMT: sequence dict {
+  ?<UNIQUENESS>:uniqueness=@,
   <CASE_KIND>:kind=@:type="case",
   "(", <EXPR>:selector=@, ")",
+  ?'inside':is_inside=true,
   repeat+ <CASE_ITEM>:items[]=@,
   'endcase'
 }
@@ -983,7 +1017,24 @@ ASSIGN_STMT: sequence dict {
 }
 
 // Longest-first so `<=` wins over `<` and `=` is checked last.
+// Compound assignment forms (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`,
+// `|=`, `^=`, `<<=`, `>>=`, `<<<=`, `>>>=`) are SV-1800 extensions
+// to the original Verilog blocking/nonblocking pair. All emit
+// `assign_compound` with the operator preserved in the type slot
+// (host can dispatch on the type value).
 ASSIGN_OP: choice {
+  "<<<=":"assign_shl_arith",
+  ">>>=":"assign_shr_arith",
+  "<<=":"assign_shl",
+  ">>=":"assign_shr",
+  "+=":"assign_add",
+  "-=":"assign_sub",
+  "*=":"assign_mul",
+  "/=":"assign_div",
+  "%=":"assign_mod",
+  "&=":"assign_and",
+  "|=":"assign_or",
+  "^=":"assign_xor",
   "<=":"nonblocking_assign",
   "=":"blocking_assign"
 }
@@ -1853,14 +1904,18 @@ CLASS_CONSTRAINT_EXTERN: sequence dict {
   ";"
 }
 
-// `[local|protected] [static|automatic] [rand|randc] <TYPE> name [= expr];`
+// `[local|protected] [static|automatic] [const] [var] [rand|randc]
+// <TYPE> name [array_kind_suffix] [= expr];`
 CLASS_PROPERTY: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
   ?<LIFETIME>:lifetime=@,
+  ?'const':is_const=true,
+  ?'var':is_var=true,
   ?<RAND_QUAL>:rand=@,
   <TYPE_SPEC>:type_spec=@:type="class_property",
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
+  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
   ";"
 }
@@ -1873,11 +1928,13 @@ CLASS_PROPERTY: sequence dict {
 CLASS_USER_PROPERTY: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
   ?<LIFETIME>:lifetime=@,
+  ?'const':is_const=true,
   ?<RAND_QUAL>:rand=@,
   sv_identifier:type_spec=@:type="class_user_property",
   ?<PARAM_OVERRIDE>:params=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
+  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
   ";"
 }

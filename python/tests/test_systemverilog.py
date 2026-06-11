@@ -924,6 +924,85 @@ def test_qualified_class_extends(sv_grammar):
         sv_grammar.parse_string(src)
 
 
+def test_unique_priority_and_compound_assignments(sv_grammar):
+    """SV-1800 `unique`/`unique0`/`priority` modifier on if/case
+    statements, `case ... inside`, compound assignment operators."""
+    for src in [
+        "module m; always_comb unique if (a) y = 1; else y = 0; endmodule\n",
+        "module m; always_comb priority if (a) y = 1; else y = 0; endmodule\n",
+        "module m; always_comb unique case (sel) 0: y = a; 1: y = b; endcase endmodule\n",
+        "module m; always_comb priority case (sel) 0: y = a; 1: y = b; endcase endmodule\n",
+        "module m; always_comb case (1) inside 0: y = a; default: y = b; endcase endmodule\n",
+        "module m; initial x += 1; endmodule\n",
+        "module m; initial x -= 1; endmodule\n",
+        "module m; initial x *= 2; endmodule\n",
+        "module m; initial x <<= 4; endmodule\n",
+        "module m; initial x &= 0; endmodule\n",
+        "module m; initial x |= 1; endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_array_kind_suffixes(sv_grammar):
+    """SV-1800 dynamic / queue / associative-array bracket forms:
+    `[$]`, `[$:N]`, `[type]`, `[]`, `[N]`."""
+    for src in [
+        "class T; int q[$]; endclass\n",
+        "class T; int q[$:10]; endclass\n",
+        "class T; int aa[string]; endclass\n",
+        "class T; int da[]; endclass\n",
+        "class T; int arr[16]; endclass\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_multidim_iff_const_var(sv_grammar):
+    """Multi-dimensional packed arrays, `iff` event clause,
+    `const`/`var` keywords."""
+    for src in [
+        "module m; logic [7:0][3:0] mem; endmodule\n",
+        "module m; reg [15:0][7:0][3:0] cube; endmodule\n",
+        "module m; always @(posedge clk iff rst_n) q <= d; endmodule\n",
+        "module m; const int W = 8; endmodule\n",
+        "class C; var int x; endclass\n",
+        "class C; const int W = 8; endclass\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_user_type_function_return(sv_grammar):
+    """Function declarations with user-defined return types
+    (factory pattern)."""
+    for src in [
+        "class M; function M get_inst(); return inst; endfunction endclass\n",
+        "class M; static function M create(); return new(); endfunction endclass\n",
+        "module m; function automatic int foo(); endfunction endmodule\n",
+        "class C; function string get_name(); return name; endfunction endclass\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_for_loop_extensions(sv_grammar):
+    """SV-1800 for-loop extensions: declaration init, `i++` step."""
+    for src in [
+        "module m; initial for (int i = 0; i < 10; i++) arr[i] = i; endmodule\n",
+        "module m; initial for (int i = 0; i < 10; i--) arr[i] = i; endmodule\n",
+        "module m; initial for (i = 0; i < 10; i++) arr[i] = i; endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
+def test_parameterized_user_types(sv_grammar):
+    """User-defined parameterized types in declarations:
+    `mailbox#(int)`, `Stack#(8)`, etc."""
+    for src in [
+        "class T; mailbox#(int) mb; endclass\n",
+        "class T; Stack#(8) s; endclass\n",
+        "module m; Stack#(16) s; endmodule\n",
+    ]:
+        sv_grammar.parse_string(src)
+
+
 def test_uvm_style_endtoend(sv_grammar):
     """Real-world UVM-style testbench code with package + typedef
     enum/struct + class with rand/constraint/extern/virtual +
