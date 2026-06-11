@@ -278,10 +278,20 @@ bool values_equal_v2(const ValuePtr& a, const Value* b);
 ValuePtr discriminator_const_value(const Grammar& g, const Node& b) {
     if (b.kind == NodeKind::Value && !b.is_name) return b.value;
     if (b.kind == NodeKind::Key) {
+        // Explicit Value-child (the `'X':@` emit form): use that.
         for (NodeId kc : b.children) {
             const Node& kcn = g.node(g.resolve_ref(kc));
             if (kcn.kind == NodeKind::Value && kcn.value) return kcn.value;
         }
+        // Otherwise: the Key's own literal IS the discriminator value
+        // when paired with a V-name marker (the `"X":name=@` pattern,
+        // where the loaded shape is V-name + bare Key). The pair-walk
+        // in has_explicit_discriminator / can_consume only ever calls
+        // this on `b` AFTER seeing a V-name `a`, so returning the
+        // literal here is safe — structural Keys (`","`, `";"`) that
+        // aren't paired with a V-name simply don't reach this code
+        // path.
+        if (b.value) return b.value;
     }
     return nullptr;
 }
@@ -554,15 +564,57 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             // skipped. If no discriminator pair exists at all, the
             // alt is a dict-shaped catch-all (matches any dict).
             const auto& dict = *dynamic_cast<const DictValue*>(peek_value.get());
+            bool found_disc_match = false;
             for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
+                // Check the ORIGINAL child node (before resolve_ref) for
+                // is_optional — the flag is on the Ref, not the resolved
+                // rule body. An absent dict field for an optional pair
+                // shouldn't reject the alt.
+                const Node& b_orig = g.node(n.children[i + 1]);
                 const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
                 if (a.kind != NodeKind::Value || !a.is_name) continue;
                 auto name_sv = as_string(a.value);
                 if (!name_sv) continue;
                 auto m = discriminator_pair_matches(g, name_sv->data(), b, dict);
                 if (!m.has_value()) continue;  // not a discriminator
-                if (!*m) return false;          // discriminator mismatch
+                if (!*m) {
+                    // Optional pair + absent field: not a mismatch, skip.
+                    if (b_orig.is_optional
+                        && dict.data().find(name_sv->data()) == dict.data().end()) {
+                        continue;
+                    }
+                    return false;
+                }
+                found_disc_match = true;
+            }
+            if (found_disc_match) return true;
+            // No discriminator matched. Fall back to a field-presence
+            // check: every REQUIRED (non-optional) Value-name marker
+            // whose consumer would pull a value from this dict scope
+            // must have its field present. Without this, a rule like
+            // `sequence dict { <LOR>:lhs=@ }` would be treated as a
+            // catch-all (matches any dict) even when the dict lacks the
+            // `lhs` field — leading to "missing required field 'lhs'"
+            // failures downstream.
+            for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
+                const Node& a = g.node(g.resolve_ref(n.children[i]));
+                if (a.kind != NodeKind::Value || !a.is_name) continue;
+                auto name_sv = as_string(a.value);
+                if (!name_sv) continue;
+                bool is_list = false;
+                std::string field = strip_list_suffix(name_sv->data(), is_list);
+                const Node& b_orig = g.node(n.children[i + 1]);
+                if (b_orig.is_optional) continue;
+                // Constant (V-const) sibling doesn't pull from dict —
+                // it just produces a value. Skip.
+                const Node& b = g.node(g.resolve_ref(n.children[i + 1]));
+                if (b.kind == NodeKind::Value && !b.is_name) continue;
+                // Required field must exist (list-append OK with empty
+                // array since `repeat min=0` is the common case).
+                if (dict.data().find(field) == dict.data().end()) {
+                    return false;
+                }
             }
             return true;
         }
@@ -930,6 +982,18 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
 
         // Container=Dict / Container=Array: consume one value from
         // outer state, then dive in with a fresh substate.
+        //
+        // Optional-chain check FIRST: a `?<RULE>` where RULE's body
+        // is a container Sequence Dict (with its own discriminator)
+        // must NOT pull from the outer scope if its discriminator
+        // can't match — otherwise we pull a value that isn't ours
+        // and crash with "container Sequence with null value." Same
+        // shape as the container=None optional check above.
+        if ((n.is_optional || node_is_optional_chain(g, node_id))
+            && !can_consume(g, rid, s)) {
+            s.clear_pending();
+            return {};
+        }
         auto pulled = s.pull_value(/*is_optional=*/false);
         if (!pulled) return tl::unexpected(pulled.error());
         ValuePtr v = pulled->value;

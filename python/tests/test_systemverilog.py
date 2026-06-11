@@ -455,6 +455,31 @@ def test_macro_statement(sv_grammar):
     assert body["macro"]["name"] == "MY_ASSERT"
 
 
+def test_save_produces_output(sv_grammar):
+    """save() emits text for a range of SV constructs. Full re-parse
+    round-trip isn't asserted here — save currently emits whitespace-
+    collapsed output that needs an explicit pretty-print pass before
+    re-parsing (strict keywords need separators). Confirming that save
+    completes without error for each construct catches dispatch and
+    state-machine regressions."""
+    sources = [
+        "module m; endmodule\n",
+        "module m; wire foo; endmodule\n",
+        "module m; wire [7:0] bus; endmodule\n",
+        "module m (input clk, output [3:0] q); endmodule\n",
+        "module m (output y); assign y = 1; endmodule\n",
+        "module m (output y); assign y = a + b * c; endmodule\n",
+        "module m (output y); assign y = (a); endmodule\n",
+        "`define WIDTH 8\nmodule m; endmodule\n",
+        "`include \"foo.vh\"\nmodule m; endmodule\n",
+    ]
+    for src in sources:
+        ast = sv_grammar.parse_string(src)
+        saved = sv_grammar.save(ast)
+        assert saved, f"save returned empty for {src!r}"
+        assert len(saved) > 0
+
+
 def test_define_then_module_use(sv_grammar):
     """Real-world common case: `define at top-level, then a module
     that uses the macro in a port range and an assignment."""
