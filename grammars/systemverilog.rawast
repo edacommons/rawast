@@ -236,6 +236,16 @@ RANGE: sequence dict {
   "[", <EXPR>:msb=@, ":", <EXPR>:lsb=@, "]"
 }
 
+// Multiple packed dimensions: `[7:0][3:0][1:0]`. Used in NET_DECL,
+// REG_DECL, INTEGER_DECL, USER_TYPED_DECL — anywhere a single
+// `?<RANGE>` field is currently used, the alternative form
+// `?<PACKED_DIMENSIONS>` lets the host accept multi-dim packed
+// arrays. Kept as a separate rule (not just `repeat <RANGE>`) so
+// existing single-range usage isn't disturbed.
+PACKED_DIMENSIONS: sequence array {
+  repeat+ <RANGE>
+}
+
 // `[0:15] [0:7]` — unpacked dimensions for arrays/memories.
 UNPACKED_DIMENSIONS: sequence array {
   repeat+ <RANGE>
@@ -340,7 +350,7 @@ PORT_DECL_STMT: sequence dict {
 NET_DECL: sequence dict {
   <NET_KIND>:kind=@:type="net_decl",
   ?<NET_SIGNING>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   repeat+ <NET_NAME>:names[]=@ separator ",",
   ";"
 }
@@ -365,7 +375,7 @@ NET_INIT: sequence { "=", <EXPR>:initial=@ }
 REG_DECL: sequence dict {
   <REG_KIND>:kind=@:type="reg_decl",
   ?<NET_SIGNING>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   repeat+ <REG_NAME>:names[]=@ separator ",",
   ";"
 }
@@ -462,8 +472,9 @@ UNION_TYPE: sequence dict {
 // no symbol-table lookup at parse time.
 USER_TYPED_DECL: sequence dict {
   sv_identifier:type_spec=@:type="user_typed_decl",
+  ?<PARAM_OVERRIDE>:params=@,
   ?<NET_SIGNING>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   repeat+ <NET_NAME>:names[]=@ separator ",",
   ";"
 }
@@ -475,6 +486,7 @@ PARAM_DECL_STMT: sequence dict {
 
 LOCALPARAM_DECL_STMT: sequence dict {
   'localparam':@:type="localparam",
+  ?<TYPE_SPEC>:type_spec=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
   "=", <EXPR>:value=@,
@@ -574,8 +586,13 @@ EVENT_EXPR: sequence array {
 
 EVENT_PRIMARY: sequence dict {
   ?<EDGE>:edge=@,
-  <EXPR>:signal=@
+  <EXPR>:signal=@,
+  ?<EVENT_IFF>:iff=@
 }
+
+// `iff <expr>` — event-gating predicate. Per SV-1800: the event
+// fires only when expr evaluates true.
+EVENT_IFF: sequence dict { 'iff':@, <EXPR>:cond=@ }
 
 EDGE: choice { 'posedge':@, 'negedge':@, 'edge':@ }
 
@@ -899,12 +916,42 @@ CASE_ITEM: sequence dict {
 FOR_STMT: sequence dict {
   'for':@:type="for",
   "(",
-  <ASSIGNMENT_PAIR>:init=@, ";",
+  <FOR_INIT>:init=@, ";",
   <EXPR>:cond=@, ";",
-  <ASSIGNMENT_PAIR>:step=@,
+  <FOR_STEP>:step=@,
   ")",
   <STATEMENT>:body=@
 }
+
+// For-loop init can be an assignment OR a declaration with init
+// (`int i = 0` or `Driver drv = new()`). Declaration form
+// tried first so `int i = 0` is recognized as a typed loop
+// variable, not as a malformed assignment.
+FOR_INIT: choice {
+  <FOR_INIT_DECL>,
+  <ASSIGNMENT_PAIR>
+}
+
+FOR_INIT_DECL: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="for_init_decl",
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
+}
+
+// For-loop step is typically `i++`, `i--`, or `i = i + 1`.
+// Plus an inline expression form so `i++` and `i--` parse.
+FOR_STEP: choice {
+  <ASSIGNMENT_PAIR>,
+  <FOR_STEP_INCDEC>
+}
+
+FOR_STEP_INCDEC: sequence dict {
+  <LVALUE>:lhs=@:type="for_step_incdec",
+  <INC_DEC_OP>:op=@
+}
+
+INC_DEC_OP: choice { "++":@, "--":@ }
 
 WHILE_STMT: sequence dict {
   'while':@:type="while",
@@ -1723,7 +1770,8 @@ CLASS_ITEM: choice {
   <CLASS_EXTERN_FUNCTION>,
   <CLASS_PURE_VIRTUAL_TASK>,
   <CLASS_EXTERN_TASK>,
-  <CLASS_FUNCTION>,
+  <CLASS_FUNCTION_TYPED>,
+  <CLASS_FUNCTION_VOID>,
   <CLASS_TASK>,
   <CLASS_CONSTRAINT_EXTERN>,
   <CONSTRAINT_DECL>,
@@ -1827,6 +1875,7 @@ CLASS_USER_PROPERTY: sequence dict {
   ?<LIFETIME>:lifetime=@,
   ?<RAND_QUAL>:rand=@,
   sv_identifier:type_spec=@:type="class_user_property",
+  ?<PARAM_OVERRIDE>:params=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
@@ -1847,14 +1896,37 @@ CLASS_PROPERTY_INIT: sequence dict { "=", <EXPR>:value=@ }
 // `:type=` const binding works regardless of which optional was
 // skipped because it's an explicit V-name + V-const pair, not a
 // "use the parser's emission" binding.
-CLASS_FUNCTION: sequence dict {
+// Split into TYPED (with explicit return type — keyword or
+// user-defined) and VOID (no return type, just method name) so
+// `function int foo()`, `function M get()`, and `function bar()`
+// all parse correctly. TYPED tried first; falls through to VOID
+// when there's only one identifier between `function` and `(`.
+CLASS_FUNCTION: choice {
+  <CLASS_FUNCTION_TYPED>,
+  <CLASS_FUNCTION_VOID>
+}
+
+CLASS_FUNCTION_TYPED: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
   ?'virtual':is_virtual=true,
-  ?'extern':is_extern=true,
+  ?'static':is_static=true,
+  'function':type="class_function_typed",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:return_type=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endfunction',
+  ?<END_LABEL>:end_label=@
+}
+
+CLASS_FUNCTION_VOID: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?'virtual':is_virtual=true,
   ?'static':is_static=true,
   'function':type="class_function",
   ?<LIFETIME>:lifetime=@,
-  ?<TYPE_SPEC>:return_type=@,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
