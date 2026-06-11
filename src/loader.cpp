@@ -470,16 +470,34 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 }
 
                 // Conditional bindings: when the expr is optional AND
-                // there are CONST bindings (e.g. `?X:flag=true`), wrap
-                // the whole [@-bindings, expr, const-bindings] block in
-                // a new sequence and move is_optional onto the wrapper.
-                // Const bindings emit unconditionally as siblings, so
-                // without the wrap they'd fire even when the optional
-                // rewinds. At-bindings alone (`?X:name=@`) work without
-                // wrap because the V-name's pending gets overwritten
-                // by the next field's V-name on the parse side.
+                // there are any bindings (at-binding `:name=@` or
+                // const-binding `:name=val`), wrap the whole
+                // [@-bindings, expr, const-bindings] block in a new
+                // sequence and move is_optional onto the wrapper.
+                //
+                // BOTH binding kinds need the wrap when the surrounding
+                // optional may skip:
+                //
+                //   * Const bindings emit unconditionally as siblings, so
+                //     without the wrap they'd fire even when the optional
+                //     rewinds. (Pre-existing reason for the wrap.)
+                //
+                //   * At-bindings leave a V-name marker in the parent's
+                //     emitted_ buffer. If the optional is skipped, the
+                //     V-name stays orphaned — the NEXT emitted value
+                //     pairs with it, corrupting the AST. The previous
+                //     "next field's V-name overwrites" assumption fails
+                //     whenever the next sibling is a Key with `:@`
+                //     (which emits a value before its own bindings'
+                //     V-names) or any other emitter that produces a
+                //     value without a preceding V-name. Symptom: a
+                //     skipped `?<VIS>:visibility=@` paired with a
+                //     following `'function':@:type="…"` produces
+                //     `{visibility: "function"}` instead of leaving
+                //     visibility absent.
                 const bool wrap_optional =
-                    g.node(*expr_child).is_optional && !const_bindings.empty();
+                    g.node(*expr_child).is_optional
+                    && (!at_bindings.empty() || !const_bindings.empty());
                 // Choice target: a binding-wrapped item must be ONE
                 // alternative (not split into V-name + expr siblings,
                 // which the Choice would treat as separate alts). Wrap
@@ -517,6 +535,39 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     NodeId vn = g.new_value(make_string(name));
                     g.set_name(vn);
                     g.node(append_to).children.push_back(vn);
+                }
+
+                // (1a) Auto-emit for Keys: when a Key has at-bindings
+                // (`'X':name=@`) but no explicit `emit: true` flag,
+                // the binding's `@` reference would resolve to nothing
+                // (Key without a Value-child emits no value), leaving
+                // the V-name marker orphaned. Auto-add the Value-child
+                // so the Key's literal text becomes the binding's
+                // value — same effect as the `'X':@:name=@` form, just
+                // without requiring the author to write the redundant
+                // `:@`. Idempotent: if emit was already set, the
+                // Value-child is already there and we don't add a
+                // duplicate.
+                if (!at_bindings.empty()) {
+                    // Inspect expr's kind and (if Key) extract its key
+                    // text BEFORE calling g.new_value() — `new_value`
+                    // appends to `nodes_`, which may reallocate the
+                    // backing vector and invalidate every `Node&`
+                    // reference we held. After the allocation, re-
+                    // fetch the node by NodeId (vector index) to push
+                    // the new Value-child onto its children list.
+                    NodeKind kind = g.node(*expr_child).kind;
+                    ValuePtr key_value = g.node(*expr_child).value;
+                    bool children_empty = g.node(*expr_child).children.empty();
+                    if (kind == NodeKind::Key && key_value && children_empty) {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(key_value)) {
+                            NodeId vc = g.new_value(make_string(sv->data()));
+                            // Re-fetch through Grammar::node(id) AFTER
+                            // new_value — same NodeId, but the backing
+                            // storage may have moved.
+                            g.node(*expr_child).children.push_back(vc);
+                        }
+                    }
                 }
 
                 // (2) The expr.
