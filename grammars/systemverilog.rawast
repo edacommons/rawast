@@ -876,14 +876,31 @@ INSTANCE: sequence dict {
   ")"
 }
 
+// Order matters: PORT_BINDING_NAMED (`.name(expr)`) tried before
+// PORT_BINDING_IMPLICIT (`.name` — same-name shorthand, SV-1800
+// §23.3.3.4) because the implicit form is a prefix of the named
+// form. PORT_BINDING_WILDCARD handles `.*` (connect-all-by-name).
 PORT_BINDING: choice {
+  <PORT_BINDING_WILDCARD>,
   <PORT_BINDING_NAMED>,
+  <PORT_BINDING_IMPLICIT>,
   <PORT_BINDING_POSITIONAL>
 }
 
 PORT_BINDING_NAMED: sequence dict {
   ".", sv_identifier:port=@:style="named",
   "(", ?<EXPR>:signal=@, ")"
+}
+
+// `.name` — shorthand for `.name(name)`. Common in testbench
+// instantiations where the local wire matches the port name.
+PORT_BINDING_IMPLICIT: sequence dict {
+  ".", sv_identifier:port=@:style="implicit"
+}
+
+// `.*` — connect all remaining ports by name. SV-1800 §23.3.3.5.
+PORT_BINDING_WILDCARD: sequence dict {
+  ".", "*":style="wildcard"
 }
 
 PORT_BINDING_POSITIONAL: sequence dict {
@@ -1295,9 +1312,11 @@ SYSTEM_TASK_CALL: sequence dict {
   ";"
 }
 
-// Regular task call: `task_name(args);` — identifier without `$`.
+// Regular task call: `[pkg::]task_name(args);` — identifier without
+// `$`. Uses `sv_qualified_type` so package-qualified forms
+// (`env_dpi::env_initial(...)`) match without a parallel rule.
 TASK_CALL: sequence dict {
-  sv_identifier:name=@:type="task_call",
+  sv_qualified_type:name=@:type="task_call",
   <TASK_ARG_LIST>:args=@,
   ";"
 }
