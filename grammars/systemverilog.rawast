@@ -1150,12 +1150,26 @@ STATEMENT: choice {
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
   <SYSTEM_TASK_CALL>,
+  <VOID_CAST_STMT>,
   <METHOD_CALL_STMT>,
   <TASK_CALL>,
   <DISABLE_STMT>,
   <WAIT_STMT>,
   <DELAY_OR_EVENT_STMT>,
   <NULL_STMT>
+}
+
+// `void'(expr);` — SV idiom for "call expr (typically a function)
+// and discard its return value." Pure statement form (the
+// expression-context `void'(...)` cast is already handled by
+// TYPE_CAST_IDENT). Tried in STATEMENT before METHOD_CALL_STMT /
+// TASK_CALL so the leading `void` keyword wins over those eager
+// identifier-shaped alternatives.
+VOID_CAST_STMT: sequence dict {
+  'void':type="void_cast_stmt",
+  "'",
+  "(", <EXPR>:value=@, ")",
+  ";"
 }
 
 // Local variable declaration inside a procedural block (begin/end
