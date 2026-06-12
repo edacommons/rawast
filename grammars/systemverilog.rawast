@@ -1007,12 +1007,27 @@ FUNCTION_DECL: sequence dict {
 
 LIFETIME: choice { 'automatic':@, 'static':@ }
 
+// SV LRM allows `function NAME` (implicit-logic return),
+// `function logic [7:0] NAME` (typed return), `function int unsigned
+// NAME` (signed integer atom), `function pkg::Type NAME` (qualified
+// user type), and `function MyType NAME` (bare user type). One
+// sequence dict captures the common shape; choose alternatives
+// (range-only with signing) are handled by leaving every slot
+// optional.
 FUNCTION_RETURN: choice {
-  <TYPE_SPEC>,
-  sequence dict {
-    ?<RANGE>:range=@,
-    ?<NET_SIGNING>:signing=@
-  }
+  <FUNCTION_RETURN_TYPED>,
+  <FUNCTION_RETURN_RANGED>
+}
+
+FUNCTION_RETURN_TYPED: sequence dict {
+  sv_qualified_type:type_spec=@:type="function_return",
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@
+}
+
+FUNCTION_RETURN_RANGED: sequence dict {
+  <RANGE>:range=@:type="function_return_ranged",
+  ?<NET_SIGNING>:signing=@
 }
 
 TASK_PORT_LIST: sequence dict {
@@ -2327,7 +2342,8 @@ CLASS_FUNCTION_TYPED: sequence dict {
   ?'static':is_static=true,
   'function':type="class_function_typed",
   ?<LIFETIME>:lifetime=@,
-  sv_identifier:return_type=@,
+  sv_qualified_type:return_type=@,
+  ?<SIGNING_KW>:return_signing=@,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
