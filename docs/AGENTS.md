@@ -373,6 +373,22 @@ Subparse is the right tool when the inner content is a genuinely DIFFERENT sub-l
 
 **Default keywords to strict (`'token'`).** When the format spec defines a reserved-word vocabulary that mustn't collide with identifiers — language keywords, section names, named clauses — author them as `'KEYWORD'` (single-quote, word-bounded) rather than `"KEYWORD"` (byte-prefix). Catches a whole class of bugs at parse time: byte-prefix `"not"` silently matches the prefix of `"notch"`, leaving `"ch"` as a phantom identifier; strict `'not'` correctly rejects, so a Choice over `'not'` / `notch` dispatches to the right branch without depending on hand-ordering. The cost of strict is one peek per match; the benefit is a class of bugs that doesn't reach runtime.
 
+**Diagnose grammar gaps with `RAWAST_TRACE`, not bisection.** When a parse fails with `unexpected content after start rule completed (byte N, line L, column C)`, the engine has told you *where* it stopped but not *why*. Resist the urge to manually shrink the input until you find the breaking construct — set `RAWAST_TRACE=1` in the environment and re-run the same parse. The trace dumps every frame the engine pushed, every alternative tried, and the exact failure message for each one, indented by stack depth. Read from the bottom (the deepest failures) upward to see which rule got the furthest before bailing.
+
+A typical session for diagnosing one failing file:
+
+```sh
+RAWAST_TRACE=1 python -c "
+import rawast
+g = rawast.Grammar.load('grammars/systemverilog.rawast')
+g.parse_file('the_failing_file.sv')
+" 2>&1 | tail -80
+```
+
+The last 30–80 lines usually contain enough context: which named rule was active, which alternative of which choice failed, and the literal/parser-name the engine was trying to match. Once you see `FAIL: expected literal 'unsigned'` inside `unwind PARAM_DECL_USERTYPE` you know the gap: `PARAM_DECL_USERTYPE` doesn't accept the `int unsigned` form.
+
+Tracing scales from one file to dozens — pipe through `grep -E 'unwind|FAIL'` to skim only the failures across a large run. Zero runtime cost when the env var is unset (one bool check at each instrumentation site).
+
 ## When NOT to use rawast for agent work
 
 - **The format is unstructured.** Free prose with no scope hierarchy is a job for the LLM directly, not a parser.
