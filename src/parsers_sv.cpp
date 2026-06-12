@@ -414,13 +414,47 @@ SvEolParser::SvEolParser() : Parser("sv_eol") {}
 
 ParseResult SvEolParser::parse(StreamReader& sr) {
     sr.mark();
+
+    // Tolerate a trailing line comment on the same line — `\`endif`,
+    // `\`define`, `\`else` etc. are frequently followed by `// note`.
+    // Spaces/tabs before the comment, the comment itself (up to but
+    // not including the newline), then the actual newline.
+    std::string out;
+    while (auto c = sr.peek()) {
+        if (*c != ' ' && *c != '\t') break;
+        sr.get();
+    }
     auto first = sr.peek();
     if (!first) {
         sr.reject();
         return tl::unexpected(ParseError{
             sr.position(), "sv_eol: at EOF"});
     }
-    std::string out;
+    // Optional `// …` line comment — consume up to (but not
+    // including) the next newline.
+    if (*first == '/' ) {
+        sr.mark();
+        sr.get();
+        auto next = sr.peek();
+        if (next && *next == '/') {
+            sr.get();
+            while (auto c = sr.peek()) {
+                if (*c == '\n' || *c == '\r') break;
+                sr.get();
+            }
+            sr.accept();
+            first = sr.peek();
+        } else {
+            // Not a line comment after all — rewind the lookahead.
+            sr.reject();
+            first = sr.peek();
+        }
+    }
+    if (!first) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(), "sv_eol: at EOF"});
+    }
     if (*first == '\r') {
         out.push_back(*first);
         sr.get();

@@ -71,15 +71,12 @@ DESCRIPTIONS: sequence array {
   repeat <DESCRIPTION>
 }
 
-// Flat Choice — directives are inlined directly (not nested through
-// DIRECTIVE) so save dispatch can find the `:type=` discriminator on
-// each alternative without recursing into a nested Choice.
+// Flat Choice. Preprocessor directives (`define / `undef / `include /
+// `ifdef / `ifndef) are NOT part of this list — the SV grammar is
+// designed for input that's already been through the preprocessor
+// pipeline. Load the `sv_preprocessor` grammar separately and run
+// the source through it before handing the result to this parser.
 DESCRIPTION: choice {
-  <DEFINE>,
-  <UNDEF>,
-  <INCLUDE>,
-  <IFDEF>,
-  <IFNDEF>,
   <SV_ATTRIBUTE>,
   <DPI_IMPORT>,
   <DPI_EXPORT>,

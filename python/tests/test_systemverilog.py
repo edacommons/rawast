@@ -275,55 +275,11 @@ def test_module_with_comments(sv_grammar):
 # ─── Preprocessor — recognition only, no expansion ────────────────────
 
 
-def test_preprocessor_define(sv_grammar):
-    """`define is captured as a directive AST node. The body is raw
-    text up to the next un-escaped newline."""
-    src = "`define WIDTH 8\nmodule m; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    d = r["descriptions"][0]
-    assert d["type"] == "define"
-    assert d["name"] == "WIDTH"
-    assert d["body"] == "8"
-
-
-def test_preprocessor_define_with_continuation(sv_grammar):
-    """Backslash-newline line continuation extends the body across
-    multiple source lines."""
-    src = "`define MULTI first \\\n  second\nmodule m; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    d = r["descriptions"][0]
-    assert d["type"] == "define"
-    assert d["name"] == "MULTI"
-    # The body preserves the backslash + newline + continuation text.
-    assert "first" in d["body"]
-    assert "second" in d["body"]
-
-
-def test_preprocessor_include(sv_grammar):
-    src = '`include "definitions.vh"\nmodule m; endmodule\n'
-    r = sv_grammar.parse_string(src)
-    d = r["descriptions"][0]
-    assert d["type"] == "include"
-    assert d["file"] == "definitions.vh"
-
-
-def test_preprocessor_ifdef(sv_grammar):
-    """`ifdef body is captured as raw text up to `endif. The host
-    evaluates the condition and re-parses the active branch."""
-    src = "`ifdef SYNTHESIS\ninitial $display(\"syn\");\n`endif\nmodule m; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    d = r["descriptions"][0]
-    assert d["type"] == "ifdef"
-    assert d["cond"] == "SYNTHESIS"
-    assert "initial" in d["body"]
-
-
-def test_preprocessor_undef(sv_grammar):
-    src = "`undef WIDTH\nmodule m; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    d = r["descriptions"][0]
-    assert d["type"] == "undef"
-    assert d["name"] == "WIDTH"
+# Preprocessor directives (`define / `undef / `include / `ifdef / `ifndef)
+# are no longer parsed by the SV grammar — they're handled by the
+# `sv_preprocessor` grammar before the source reaches systemverilog.
+# Coverage for those lives in tests/test_preprocessor.cpp and
+# python/tests/test_preprocessor.py.
 
 
 def test_macro_use_in_expression(sv_grammar):
@@ -490,16 +446,12 @@ def test_save_produces_output(sv_grammar):
         "module m; parameter W = 8; endmodule\n",
         "module m; localparam X = 1; endmodule\n",
         "module m; counter u0(.clk(clk), .q(q)); endmodule\n",
-        # preprocessor
-        "`define WIDTH 8\nmodule m; endmodule\n",
-        "`include \"foo.vh\"\nmodule m; endmodule\n",
-        "`ifdef X\ninitial $display(\"x\");\n`endif\nmodule m; endmodule\n",
-        # macro use in various positions
+        # macro use in various positions (inline `\`MACRO` references
+        # the SV grammar still recognizes via MACRO_USE — these aren't
+        # full preprocessor directives, just identifier-shaped tokens)
         "module m (output y); assign y = `WIDTH; endmodule\n",
         "module m (output y); assign y = `WIDTH'd42; endmodule\n",
         "module m (output y); assign y = `MAX(a, b); endmodule\n",
-        # full common case
-        "`define W 8\nmodule m (input clk, input [`W-1:0] d, output reg [`W-1:0] q); always @(posedge clk) q <= d; endmodule\n",
     ]
     failures = []
     for src in sources:
@@ -1178,24 +1130,20 @@ endmodule
 
 
 def test_define_then_module_use(sv_grammar):
-    """Real-world common case: `define at top-level, then a module
-    that uses the macro in a port range and an assignment."""
+    """Real-world common case: a module that uses a macro in a port
+    range and an assignment. The `\`define` directive used to live at
+    top level here; it now belongs in the preprocessor pipeline.
+    What the SV grammar still has to handle is the inline
+    `\`MACRO`/`\`MACRO()` references inside expressions."""
     src = (
-        "`define WIDTH 8\n"
         "module m (output [`WIDTH-1:0] y);\n"
         "  assign y = `WIDTH;\n"
         "endmodule\n"
     )
     r = sv_grammar.parse_string(src)
-    # First description: the directive.
     d0 = r["descriptions"][0]
-    assert d0["type"] == "define"
-    assert d0["name"] == "WIDTH"
-    # Second description: the module.
-    d1 = r["descriptions"][1]
-    assert d1["type"] == "module"
-    # The port range MSB is an EXPR containing a macro_use.
-    port = d1["ports"]["ports"][0]
+    assert d0["type"] == "module"
+    port = d0["ports"]["ports"][0]
     range_msb_str = str(port["range"])
     assert "macro_use" in range_msb_str
     assert "WIDTH" in range_msb_str

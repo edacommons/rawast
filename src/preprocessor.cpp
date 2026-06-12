@@ -262,6 +262,24 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
 
     if (auto arr = std::dynamic_pointer_cast<ArrayValue>(v)) {
         for (const auto& child : arr->data()) {
+            // Skip pure-whitespace strings: these are emissions from
+            // terminals like `sv_eol` matched inside a sequence-array
+            // sub-rule (e.g. PP_ELSE_CLAUSE's `\`else, sv_eol, repeat
+            // <PP_ITEM>`). They've already been consumed at parse
+            // time; walking them would advance the cursor forward to
+            // the next matching whitespace in source and skip real
+            // content.
+            if (auto s = std::dynamic_pointer_cast<StringValue>(child)) {
+                bool only_ws = true;
+                for (char c : s->data()) {
+                    if (c != ' ' && c != '\t'
+                        && c != '\n' && c != '\r') {
+                        only_ws = false;
+                        break;
+                    }
+                }
+                if (only_ws) continue;
+            }
             walk(child, out, src_cursor, source, parent_span_id);
         }
         return;
@@ -273,15 +291,26 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
         if (type == "text") {
             auto text = dict_string_or_empty(*dict, "text");
             if (!text.empty()) {
-                // Find this captured text in source from cursor.
-                // The grammar's ignore policy may have skipped some
-                // leading whitespace; the find() catches that and
-                // gives us the true source offset.
+                // Find the captured text in source. `origin` is where
+                // sv_pp_text_line started consuming — usually AFTER any
+                // whitespace the grammar's `ignore linespace` policy
+                // already ate. To preserve indentation in the output,
+                // back up to the start of the current line (previous
+                // `\n` + 1, or 0 if we're on the first line) and emit
+                // everything from there through origin + text length.
                 std::size_t origin = locate_item(source, src_cursor, text);
-                record_span(parent_span_id, origin,
-                            text.size(), out.size(), "text");
-                out += text;
-                src_cursor = origin + text.size();
+                std::size_t line_start = origin;
+                while (line_start > src_cursor && line_start > 0
+                       && source[line_start - 1] != '\n'
+                       && source[line_start - 1] != '\r') {
+                    --line_start;
+                }
+                std::size_t end = origin + text.size();
+                std::size_t emit_len = end - line_start;
+                record_span(parent_span_id, line_start,
+                            emit_len, out.size(), "text");
+                out.append(source, line_start, emit_len);
+                src_cursor = end;
             }
             return;
         }
