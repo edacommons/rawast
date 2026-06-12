@@ -2265,7 +2265,7 @@ CLASS_PROPERTY: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="class_property",
   ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  repeat+ sv_identifier:names[]=@ separator ",",
   ?<ARRAY_KIND_SUFFIX>:array_kind=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
   ";"
@@ -2276,6 +2276,11 @@ CLASS_PROPERTY: sequence dict {
 // keyword. Engine repeat-iteration marks (added at grammar.cpp's
 // Repeat case) ensure a failed match rolls back cleanly so this
 // alt doesn't gobble `endclass` from the CLASS_ITEMS repeat.
+// Multi-name form (`uvm_event a, b, c;`) supported via the same
+// repeat+ pattern used by NET_DECL and friends. SV's per-name init
+// quirk (`type a = init_a, b = init_b;`) isn't surfaced here — the
+// optional CLASS_PROPERTY_INIT applies to the last name in the
+// list, matching how most production code writes these decls.
 CLASS_USER_PROPERTY: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
   ?<LIFETIME>:lifetime=@,
@@ -2285,7 +2290,7 @@ CLASS_USER_PROPERTY: sequence dict {
   sv_qualified_type:type_spec=@:type="class_user_property",
   ?<PARAM_OVERRIDE>:params=@,
   ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  repeat+ sv_identifier:names[]=@ separator ",",
   ?<ARRAY_KIND_SUFFIX>:array_kind=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
   ";"
