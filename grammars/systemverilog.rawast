@@ -2326,7 +2326,7 @@ CLASS_PROPERTY: sequence dict {
   ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
   repeat+ sv_identifier:names[]=@ separator ",",
-  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
   ";"
 }
@@ -2351,7 +2351,7 @@ CLASS_USER_PROPERTY: sequence dict {
   ?<PARAM_OVERRIDE>:params=@,
   ?<PACKED_DIMENSIONS>:range=@,
   repeat+ sv_identifier:names[]=@ separator ",",
-  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
   ";"
 }
