@@ -312,6 +312,53 @@ TEST_CASE("function-like: PP_MACRO_USE does not eat `endif terminator") {
     CHECK(out.find("after") != std::string::npos);
 }
 
+// ─── Token paste + stringification ──────────────────────────────────────
+
+TEST_CASE("paste: `` joins adjacent tokens after substitution") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define MK(x) prefix_``x\n");
+    auto out = pp.process("`MK(value)\n");
+    // x → value, then prefix_``value → prefix_value
+    CHECK(out.find("prefix_value") != std::string::npos);
+    CHECK(out.find("`") == std::string::npos);  // no backticks survive
+}
+
+TEST_CASE("paste: `` between two params") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define JOIN(a, b) a``b\n");
+    auto out = pp.process("`JOIN(foo, bar)\n");
+    CHECK(out.find("foobar") != std::string::npos);
+}
+
+TEST_CASE("stringify: `\"...`\" becomes a string literal") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define STR(x) `\"value: x`\"\n");
+    auto out = pp.process("`STR(42)\n");
+    // x substitutes inside `\"...`\"; outer markers become `"..."`.
+    CHECK(out.find("\"value: 42\"") != std::string::npos);
+}
+
+TEST_CASE("stringify: works on object-like macros too") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define TAG `\"hello`\"\n");
+    auto out = pp.process("`TAG\n");
+    CHECK(out.find("\"hello\"") != std::string::npos);
+}
+
+TEST_CASE("paste + stringify: combined in UVM-style macro") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    // UVM-style: builds a stringified prefix-suffix combo.
+    pp.process("`define INFO(tag, msg) print(`\"tag``: msg`\")\n");
+    auto out = pp.process("`INFO(MOD, ready)\n");
+    // tag → MOD, msg → ready. Then `\"MOD``: ready`\" → "MOD: ready".
+    CHECK(out.find("\"MOD: ready\"") != std::string::npos);
+}
+
 // ─── \`include directive ────────────────────────────────────────────────
 
 namespace {

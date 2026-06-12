@@ -380,28 +380,51 @@ std::vector<std::string> split_params(const std::string& body) {
 }
 
 // Substitute parameter identifiers in `body` with the corresponding
-// arg values. Scans body for identifier tokens; if the identifier
-// matches a param name, replace with the arg. All other bytes
-// (operators, literals, whitespace) are copied verbatim.
+// arg values, also handling SV preprocessor token operators:
 //
-// Phase 2.1 scope: simple identifier substitution. Token paste
-// (\`\`) and stringification (\`"...\`") arrive in Phase 2.5.
+//   `\`\``       — token paste: remove the operator; adjacent
+//                  tokens fuse because there's no whitespace
+//                  between them.
+//   `\`"…\`"`    — stringification: replace each `\`"` with a
+//                  literal `"`. Param substitution inside the
+//                  delimiters happens via the same scan; the
+//                  enclosed text becomes a string literal at
+//                  expansion time.
+//
+// Phase 2.5 scope: structural support. Escape edge cases inside
+// `\`"…\`"` (a stray `"` in an arg) are left to host parsing —
+// the SV LRM is permissive here too.
 std::string substitute_params(const std::string& body,
                               const std::vector<std::string>& params,
                               const std::vector<std::string>& args) {
-    if (params.size() != args.size() || params.empty()) {
-        return body;
-    }
     std::unordered_map<std::string, std::string> map;
-    for (std::size_t i = 0; i < params.size(); ++i) {
-        std::string arg = args[i];
-        trim_horiz(arg);
-        map[params[i]] = std::move(arg);
+    bool has_params = (params.size() == args.size()) && !params.empty();
+    if (has_params) {
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            std::string arg = args[i];
+            trim_horiz(arg);
+            map[params[i]] = std::move(arg);
+        }
     }
     std::string out;
     out.reserve(body.size());
     std::size_t i = 0;
     while (i < body.size()) {
+        // `\`"` — stringification marker (open or close). Emit a
+        // literal `"`; the contents between the open and close
+        // markers are subject to the same param substitution loop.
+        if (i + 1 < body.size() && body[i] == '`' && body[i + 1] == '"') {
+            out.push_back('"');
+            i += 2;
+            continue;
+        }
+        // `\`\`` — token paste. Drop the two backticks; adjacent
+        // tokens naturally concatenate because no whitespace
+        // separates them.
+        if (i + 1 < body.size() && body[i] == '`' && body[i + 1] == '`') {
+            i += 2;
+            continue;
+        }
         unsigned char uc = static_cast<unsigned char>(body[i]);
         if (std::isalpha(uc) || body[i] == '_') {
             std::size_t start = i;
@@ -414,7 +437,7 @@ std::string substitute_params(const std::string& body,
             }
             std::string ident = body.substr(start, i - start);
             auto it = map.find(ident);
-            if (it != map.end()) out += it->second;
+            if (has_params && it != map.end()) out += it->second;
             else out += ident;
         } else {
             out.push_back(body[i]);
@@ -663,20 +686,22 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     if (it != state_.macros.end()) {
         const auto& macro = it->second;
         std::string substituted;
-        if (macro.is_function_like) {
-            if (macro.params.size() == args.size()) {
-                substituted = substitute_params(macro.body, macro.params, args);
-            } else {
-                // Arity mismatch — warn and use body verbatim.
-                state_.warnings.push_back(
-                    {"macro `" + name + " expects " +
-                     std::to_string(macro.params.size()) +
-                     " args, got " + std::to_string(args.size()),
-                     state_.current_file, state_.current_line});
-                substituted = macro.body;
-            }
+        if (macro.is_function_like && macro.params.size() != args.size()) {
+            // Arity mismatch — warn; still run substitute_params to
+            // process \`"…\`" stringification and \`\` token paste,
+            // which should fire regardless of param substitution.
+            state_.warnings.push_back(
+                {"macro `" + name + " expects " +
+                 std::to_string(macro.params.size()) +
+                 " args, got " + std::to_string(args.size()),
+                 state_.current_file, state_.current_line});
+            substituted = substitute_params(macro.body, {}, {});
         } else {
-            substituted = macro.body;
+            // Function-like with matching arity OR object-like
+            // (no params). The substitution helper handles both
+            // cases — empty params means identifier passes through
+            // but token operators still fire.
+            substituted = substitute_params(macro.body, macro.params, args);
         }
         // Recursively expand inline macro uses inside the body.
         // The current macro's own name is added to active_expansions
