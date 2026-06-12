@@ -62,6 +62,46 @@ struct PpWarning {
     int         line = 0;
 };
 
+// One node in the source-provenance graph. Spans form a parent-
+// linked tree (DAG if a macro body is expanded from multiple call
+// sites, but treated as a tree per usage). Every byte in the
+// preprocessed output traces back through a chain of Spans to its
+// originating root.
+//
+// Spans serve two roles:
+//
+//   1. Output spans (out_offset != NoOutput) cover ranges of the
+//      preprocessed output stream. The walker emits these as it
+//      processes input.
+//
+//   2. Source-structure spans (out_offset == NoOutput) describe
+//      where input bytes live (root input file, included files,
+//      macro definition bodies). Other spans reference them as
+//      parents.
+//
+// stack_at(out_offset) finds the leaf Span covering that offset
+// and walks the parent chain to build a full source-frame list.
+struct Span {
+    static constexpr std::uint32_t NoParent = ~static_cast<std::uint32_t>(0);
+    static constexpr std::size_t   NoOutput = ~static_cast<std::size_t>(0);
+
+    std::uint32_t id            = 0;
+    std::uint32_t parent_id     = NoParent;
+    std::size_t   parent_offset = 0;        // byte offset within parent
+    std::size_t   length        = 0;
+    std::size_t   out_offset    = NoOutput; // byte in preprocessed output (or NoOutput)
+    std::string   name;                     // "original.sv", "macro UVM_INFO body", etc.
+};
+
+// One layer in a source-provenance stack. `where` is the span's
+// `name` field, `offset` is the byte offset within that span. The
+// leaf frame is the immediate source of the byte queried; the
+// root frame is the ultimate origin (typically an input file).
+struct SourceFrame {
+    std::string where;
+    std::size_t offset = 0;
+};
+
 // Mutable state accumulated across one or more preprocessor runs.
 // Owned by the Preprocessor class. Inspectable through the
 // Preprocessor's accessor methods so tooling can post-mortem the
@@ -108,6 +148,12 @@ struct PreprocessorState {
     // Walker bumps it as it crosses newlines in the text passed
     // through and through `\`include` re-entries.
     int current_line = 1;
+
+    // Source-provenance graph. spans[0] is reserved for the active
+    // root span (created at the start of each process / process_file
+    // call); subsequent entries are children. Lookup via
+    // Preprocessor::stack_at walks parent_id from a leaf up.
+    std::vector<Span> spans;
 };
 
 // Forward declaration so Preprocessor can hold a Grammar reference
@@ -203,6 +249,18 @@ public:
     const std::vector<PpWarning>&
     warnings() const noexcept { return state_.warnings; }
 
+    const std::vector<Span>&
+    spans() const noexcept { return state_.spans; }
+
+    // Build a source-provenance frame stack for a byte offset in the
+    // preprocessed output. The leaf frame describes the immediate
+    // source; subsequent frames walk up the parent chain to the
+    // ultimate root (typically the entry input file). Returns an
+    // empty vector if the offset is past the end of recorded spans
+    // (e.g. synthetic content with no provenance).
+    std::vector<SourceFrame>
+    stack_at(std::size_t out_offset) const;
+
     // ─── Query ──────────────────────────────────────────────────────
 
     bool is_defined(const std::string& name) const noexcept;
@@ -217,19 +275,44 @@ public:
 private:
     // Walk the value tree produced by parsing through pp_grammar_,
     // dispatching on the `type` field that role-bearing rules emit.
-    // Appends emitted text to `out`. Recurses into arrays (PP_FILE
-    // items, conditional bodies) and dispatches dicts based on
-    // their `type` field. Strings pass through verbatim — convenient
-    // for grammars that emit raw text segments without wrapping.
-    void walk(const ValuePtr& v, std::string& out);
+    // Appends emitted text to `out`. Tracks the cursor into the
+    // ORIGINAL source so each emitted run can record its provenance
+    // span. `parent_span_id` is the parent Span every emitted span
+    // should reference (the root input span for top-level walks; a
+    // macro-body span when expansion lands in Phase 2.1).
+    void walk(const ValuePtr& v, std::string& out,
+              std::size_t& src_cursor,
+              const std::string& source,
+              std::uint32_t parent_span_id);
 
     // Per-role handlers. Defined here rather than as free functions
     // so they have direct access to state_ and opts_.
     void handle_define(const class DictValue& d);
     void handle_undef(const class DictValue& d);
-    void handle_macro_use(const class DictValue& d, std::string& out);
+    void handle_macro_use(const class DictValue& d, std::string& out,
+                          std::size_t& src_cursor,
+                          const std::string& source,
+                          std::uint32_t parent_span_id);
     void handle_ifdef(const class DictValue& d, std::string& out,
+                      std::size_t& src_cursor,
+                      const std::string& source,
+                      std::uint32_t parent_span_id,
                       bool invert);
+
+    // Helpers for advancing src_cursor past consumed-but-not-emitted
+    // source spans (directives like \`define / \`undef, dropped
+    // ifdef bodies, the structural lines of conditional blocks).
+    // Defined in the .cpp file.
+
+    // Record an emitted run as a new Span entry. The new span is a
+    // child of `parent_span_id` at `parent_offset`, sits in the
+    // preprocessed output at `out_offset`, and is `length` bytes long.
+    // Returns the new span's id.
+    std::uint32_t record_span(std::uint32_t parent_id,
+                              std::size_t parent_offset,
+                              std::size_t length,
+                              std::size_t out_offset,
+                              std::string name);
 
     const Grammar&    pp_grammar_;
     PpOptions         opts_;

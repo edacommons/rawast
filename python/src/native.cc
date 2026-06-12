@@ -532,7 +532,50 @@ NB_MODULE(_native, m) {
                 }
                 return out;
             },
-            "Accumulated warnings as a list of {message, file, line} dicts.");
+            "Accumulated warnings as a list of {message, file, line} dicts.")
+
+        .def_prop_ro("spans",
+            [](const rawast::Preprocessor& pp) {
+                nb::list out;
+                for (const auto& s : pp.spans()) {
+                    nb::dict d;
+                    d["id"] = s.id;
+                    d["parent_id"] = (s.parent_id == rawast::Span::NoParent)
+                        ? nb::cast<nb::object>(nb::none())
+                        : nb::cast<nb::object>(nb::int_(s.parent_id));
+                    d["parent_offset"] = s.parent_offset;
+                    d["length"] = s.length;
+                    d["out_offset"] = (s.out_offset == rawast::Span::NoOutput)
+                        ? nb::cast<nb::object>(nb::none())
+                        : nb::cast<nb::object>(nb::int_(s.out_offset));
+                    d["name"] = s.name;
+                    out.append(d);
+                }
+                return out;
+            },
+            "All source-provenance spans recorded by the last process() / "
+            "process_file() call. Each entry is a dict {id, parent_id, "
+            "parent_offset, length, out_offset, name}. parent_id and "
+            "out_offset are None for root spans / source-structure spans "
+            "respectively.")
+
+        .def("stack_at",
+            [](const rawast::Preprocessor& pp, std::size_t out_offset) {
+                nb::list out;
+                for (const auto& f : pp.stack_at(out_offset)) {
+                    nb::dict d;
+                    d["where"] = f.where;
+                    d["offset"] = f.offset;
+                    out.append(d);
+                }
+                return out;
+            },
+            nb::arg("out_offset"),
+            "Build the source-provenance frame stack for a byte offset in "
+            "the preprocessed output. Returns a list of {where, offset} "
+            "dicts ordered leaf-first (immediate source first, ultimate "
+            "root last). Empty list if the offset is outside any recorded "
+            "span.");
 
     m.attr("__version__") = "0.1.7";
 }

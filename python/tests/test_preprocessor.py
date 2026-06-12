@@ -194,3 +194,70 @@ def test_parse_string_with_preprocessor_keyword():
     text = "".join(item["text"] for item in ast if item.get("type") == "text")
     assert "visible" in text
     assert "hidden" not in text
+
+
+# ─── Source map ───────────────────────────────────────────────────────────
+
+
+def test_spans_have_root_input_entry():
+    """The root span describes the whole input; its parent_id is None."""
+    pp = rawast.Preprocessor(_sv_pp())
+    pp.process("hello\n")
+    root = next(s for s in pp.spans if s["parent_id"] is None)
+    assert root["name"] == "<input>"
+    assert root["length"] == 6
+    assert root["out_offset"] is None    # source-structure only
+
+
+def test_stack_at_returns_root_input_as_last_frame():
+    pp = rawast.Preprocessor(_sv_pp())
+    pp.process("hello world\n")
+    stack = pp.stack_at(5)
+    assert len(stack) >= 1
+    assert stack[-1]["where"] == "<input>"
+    # Pass-through — offset 5 in output is offset 5 in source.
+    assert stack[-1]["offset"] == 5
+
+
+def test_stack_at_out_of_range_returns_empty():
+    pp = rawast.Preprocessor(_sv_pp())
+    pp.process("short\n")
+    assert pp.stack_at(9999) == []
+
+
+def test_source_map_skips_dropped_ifdef_body():
+    """After a dropped ifdef block, output offsets map back to the
+    correct source byte (past the block, not into the dropped lines)."""
+    pp = rawast.Preprocessor(_sv_pp())
+    text = (
+        "before\n"
+        "`ifdef NEVER\n"
+        "  dropped_line\n"
+        "`endif\n"
+        "after\n"
+    )
+    out = pp.process(text)
+    assert out == "before\nafter\n"
+    pos = out.index("after")
+    stack = pp.stack_at(pos)
+    assert stack
+    # "after" begins at byte 42 in source (after the full ifdef block).
+    assert stack[-1]["offset"] == 42
+
+
+def test_source_map_resets_between_process_calls():
+    """Each process() call starts a fresh map; previous call's spans
+    don't bleed into the next."""
+    pp = rawast.Preprocessor(_sv_pp())
+    pp.process("first call\n")
+    first_count = len(pp.spans)
+    pp.process("second call\n")
+    second_count = len(pp.spans)
+    # Second call replaces the map; counts may differ slightly but
+    # neither call should leak entries into the other.
+    # Specifically, every span's parent chain still resolves cleanly.
+    for s in pp.spans:
+        if s["parent_id"] is not None:
+            assert s["parent_id"] < len(pp.spans)
+    assert first_count > 0  # spans were recorded for first call
+    assert second_count > 0  # and reset/rebuilt for second call

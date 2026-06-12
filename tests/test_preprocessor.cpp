@@ -215,6 +215,110 @@ TEST_CASE("sv_preprocessor: predefined option seeds macro state at construction"
     CHECK(out.find("sim_only") != std::string::npos);
 }
 
+// ─── Source map tests ───────────────────────────────────────────────────
+
+TEST_CASE("source map: plain text passes through with provenance") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process("hello world\n");
+    CHECK(out == "hello world\n");
+    // At least one output span exists covering the emitted text.
+    bool found_output = false;
+    for (const auto& s : pp.spans()) {
+        if (s.out_offset != Span::NoOutput) {
+            found_output = true;
+            CHECK(s.length == 12);  // "hello world\n"
+            CHECK(s.parent_offset == 0);
+        }
+    }
+    CHECK(found_output);
+}
+
+TEST_CASE("source map: stack_at returns the input file as root") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("first line\nsecond line\n");
+    auto stack = pp.stack_at(5);   // somewhere in "first line"
+    REQUIRE(stack.size() >= 1);
+    // Root frame is the input.
+    CHECK(stack.back().where == "<input>");
+}
+
+TEST_CASE("source map: stack_at maps to the correct source offset") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("abcdef\n");
+    auto stack = pp.stack_at(3);
+    REQUIRE(!stack.empty());
+    // Direct passthrough — output offset 3 corresponds to source offset 3.
+    CHECK(stack.back().offset == 3);
+}
+
+TEST_CASE("source map: directive lines are consumed without output span") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    // "`define X 1\nhello\n" — directive is consumed (no output), then "hello\n" emitted.
+    auto out = pp.process("`define X 1\nhello\n");
+    CHECK(out == "hello\n");
+    // The "hello\n" emitted at out_offset=0 should map to source offset 12
+    // (past "`define X 1\n" which is 12 bytes).
+    auto stack = pp.stack_at(0);
+    REQUIRE(!stack.empty());
+    CHECK(stack.back().offset == 12);
+}
+
+TEST_CASE("source map: dropped ifdef body does not emit spans") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "before\n"
+        "`ifdef NEVER\n"
+        "  dropped_line\n"
+        "`endif\n"
+        "after\n");
+    CHECK(out == "before\nafter\n");
+    // "after\n" should map back to its actual source position
+    // past the ifdef block. The block consumes:
+    //   "before\n"        bytes 0-6
+    //   "`ifdef NEVER\n"  bytes 7-19
+    //   "  dropped_line\n" bytes 20-34
+    //   "`endif\n"        bytes 35-41
+    //   "after\n"         bytes 42-47
+    auto pos = out.find("after");
+    auto stack = pp.stack_at(pos);
+    REQUIRE(!stack.empty());
+    CHECK(stack.back().offset == 42);
+}
+
+TEST_CASE("source map: stack_at returns empty for out-of-range offset") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("text\n");
+    auto stack = pp.stack_at(9999);
+    CHECK(stack.empty());
+}
+
+TEST_CASE("source map: ifdef-taken body preserves provenance per-chunk") {
+    PpOptions opts;
+    opts.predefined = "`define RVFI\n";
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g, std::move(opts));
+
+    auto out = pp.process(
+        "before\n"
+        "`ifdef RVFI\n"
+        "  inside\n"
+        "`endif\n");
+    auto pos = out.find("inside");
+    auto stack = pp.stack_at(pos);
+    REQUIRE(!stack.empty());
+    // Source byte offset of "inside" in this input:
+    //   "before\n"      bytes 0-6
+    //   "`ifdef RVFI\n" bytes 7-18 (12 bytes)
+    //   "  inside\n"    bytes 19-27 — "inside" starts at byte 21.
+    CHECK(stack.back().offset == 21);
+}
+
 TEST_CASE("PpRole: enum round-trips for every named role") {
     CHECK(parse_pp_role("define").value() ==    PpRole::Define);
     CHECK(parse_pp_role("undef").value() ==     PpRole::Undef);
