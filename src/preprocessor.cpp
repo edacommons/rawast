@@ -417,7 +417,150 @@ std::string substitute_params(const std::string& body,
     return out;
 }
 
+// Scan from `cursor` over an identifier-shaped run (start char
+// alpha/underscore, continuation alpha/digit/underscore/$).
+// Returns the offset just past the identifier; equals `cursor` if
+// nothing identifier-shaped is present.
+std::size_t scan_identifier(const std::string& text, std::size_t cursor) {
+    if (cursor >= text.size()) return cursor;
+    unsigned char first = static_cast<unsigned char>(text[cursor]);
+    if (!std::isalpha(first) && text[cursor] != '_') return cursor;
+    ++cursor;
+    while (cursor < text.size()) {
+        unsigned char c = static_cast<unsigned char>(text[cursor]);
+        if (!std::isalnum(c) && text[cursor] != '_' && text[cursor] != '$') {
+            break;
+        }
+        ++cursor;
+    }
+    return cursor;
+}
+
+// Scan a parenthesised, depth-balanced argument list starting at
+// `cursor` (which must point at `(`). Splits args at depth-0
+// commas. Returns the offset just past the closing `)` and
+// populates `args`. If the list is unbalanced, returns `cursor`
+// unchanged and leaves `args` empty (caller treats as no-args).
+std::size_t scan_args(const std::string& text, std::size_t cursor,
+                      std::vector<std::string>& args) {
+    if (cursor >= text.size() || text[cursor] != '(') return cursor;
+    int depth = 1;
+    std::size_t k = cursor + 1;
+    std::size_t arg_start = k;
+    while (k < text.size() && depth > 0) {
+        char c = text[k];
+        if (c == '(') ++depth;
+        else if (c == ')') {
+            --depth;
+            if (depth == 0) {
+                args.push_back(text.substr(arg_start, k - arg_start));
+                ++k;
+                return k;
+            }
+        } else if (c == ',' && depth == 1) {
+            args.push_back(text.substr(arg_start, k - arg_start));
+            arg_start = k + 1;
+        }
+        ++k;
+    }
+    // Unbalanced — restore the not-found state.
+    args.clear();
+    return cursor;
+}
+
 } // namespace
+
+std::string Preprocessor::expand_recursive(const std::string& text) {
+    if (state_.current_depth >= opts_.max_expansion_depth) {
+        state_.warnings.push_back(
+            {"preprocessor: max_expansion_depth (" +
+             std::to_string(opts_.max_expansion_depth) +
+             ") reached; emitting verbatim",
+             state_.current_file, state_.current_line});
+        return text;
+    }
+
+    std::string out;
+    out.reserve(text.size());
+    std::size_t i = 0;
+    while (i < text.size()) {
+        char c = text[i];
+        if (c != '`') {
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        // Found `\``. Scan the identifier that follows.
+        std::size_t name_start = i + 1;
+        std::size_t name_end = scan_identifier(text, name_start);
+        if (name_end == name_start) {
+            // Bare backtick — not a macro use. Emit verbatim.
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        std::string name = text.substr(name_start, name_end - name_start);
+
+        // Blue-paint guard — break cycles by leaving the call site
+        // verbatim if the same name is already being expanded.
+        if (state_.active_expansions.count(name)) {
+            out.append(text, i, name_end - i);
+            i = name_end;
+            continue;
+        }
+
+        auto it = state_.macros.find(name);
+        if (it == state_.macros.end()) {
+            // Undefined in nested context — leave verbatim. The
+            // top-level `on_undefined` policy applies at the
+            // PP_MACRO_USE walker entry; nested undefined uses
+            // pass through so the host parser still sees them.
+            out.append(text, i, name_end - i);
+            i = name_end;
+            continue;
+        }
+
+        const auto& macro = it->second;
+        std::vector<std::string> args;
+        std::size_t after_args = name_end;
+        if (macro.is_function_like && name_end < text.size()
+            && text[name_end] == '(') {
+            after_args = scan_args(text, name_end, args);
+            if (after_args == name_end) {
+                // Unbalanced parens — give up on this expansion.
+                out.append(text, i, name_end - i);
+                i = name_end;
+                continue;
+            }
+        }
+
+        std::string body = macro.body;
+        if (macro.is_function_like) {
+            if (macro.params.size() == args.size()) {
+                body = substitute_params(body, macro.params, args);
+            } else {
+                state_.warnings.push_back(
+                    {"macro `" + name + " expects " +
+                     std::to_string(macro.params.size()) +
+                     " args, got " + std::to_string(args.size()),
+                     state_.current_file, state_.current_line});
+                // emit substituted-anyway body verbatim — caller
+                // can decide whether this is acceptable.
+            }
+        }
+
+        // Recurse with blue paint on this name.
+        state_.active_expansions.insert(name);
+        ++state_.current_depth;
+        std::string expanded = expand_recursive(body);
+        --state_.current_depth;
+        state_.active_expansions.erase(name);
+
+        out += expanded;
+        i = after_args;
+    }
+    return out;
+}
 
 void Preprocessor::handle_define(const DictValue& d) {
     MacroDef m;
@@ -512,22 +655,31 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     auto it = state_.macros.find(name);
     if (it != state_.macros.end()) {
         const auto& macro = it->second;
-        std::string emitted;
+        std::string substituted;
         if (macro.is_function_like) {
             if (macro.params.size() == args.size()) {
-                emitted = substitute_params(macro.body, macro.params, args);
+                substituted = substitute_params(macro.body, macro.params, args);
             } else {
-                // Arity mismatch — warn and emit body verbatim.
+                // Arity mismatch — warn and use body verbatim.
                 state_.warnings.push_back(
                     {"macro `" + name + " expects " +
                      std::to_string(macro.params.size()) +
                      " args, got " + std::to_string(args.size()),
                      state_.current_file, state_.current_line});
-                emitted = macro.body;
+                substituted = macro.body;
             }
         } else {
-            emitted = macro.body;
+            substituted = macro.body;
         }
+        // Recursively expand inline macro uses inside the body.
+        // The current macro's own name is added to active_expansions
+        // before recursing so `\`A`-in-`\`A`-body becomes a verbatim
+        // emit instead of infinite recursion.
+        state_.active_expansions.insert(name);
+        ++state_.current_depth;
+        std::string emitted = expand_recursive(substituted);
+        --state_.current_depth;
+        state_.active_expansions.erase(name);
         emit_expansion(emitted, "macro " + name + " expansion");
         src_cursor = use_src_end;
         return;

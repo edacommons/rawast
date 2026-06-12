@@ -310,6 +310,97 @@ TEST_CASE("function-like: PP_MACRO_USE does not eat `endif terminator") {
     CHECK(out.find("after") != std::string::npos);
 }
 
+// ─── Recursive expansion + blue painting ────────────────────────────────
+
+TEST_CASE("recursive: object-like macro body references another macro") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define INNER 42\n");
+    pp.process("`define OUTER `INNER\n");
+    auto out = pp.process("`OUTER\n");
+    CHECK(out.find("42") != std::string::npos);
+    CHECK(out.find("`INNER") == std::string::npos);
+}
+
+TEST_CASE("recursive: function-like wraps function-like") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define INNER(x) ((x))\n");
+    pp.process("`define OUTER(y) `INNER(y)\n");
+    auto out = pp.process("`OUTER(7)\n");
+    // OUTER(7) → INNER(7) → ((7))
+    CHECK(out.find("((7))") != std::string::npos);
+    CHECK(out.find("`INNER") == std::string::npos);
+}
+
+TEST_CASE("recursive: deep object-like chain expands all the way") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define A `B\n");
+    pp.process("`define B `C\n");
+    pp.process("`define C done\n");
+    auto out = pp.process("`A\n");
+    CHECK(out.find("done") != std::string::npos);
+    CHECK(out.find("`B") == std::string::npos);
+    CHECK(out.find("`C") == std::string::npos);
+}
+
+TEST_CASE("recursive: direct self-reference is broken by blue paint") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define LOOP `LOOP\n");
+    // Without blue paint this would infinite-loop. With it, the
+    // inner `\`LOOP` falls back to verbatim.
+    auto out = pp.process("`LOOP\n");
+    CHECK(out.find("`LOOP") != std::string::npos);  // verbatim survival
+}
+
+TEST_CASE("recursive: mutual recursion breaks at the second hop") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define A `B\n");
+    pp.process("`define B `A\n");
+    auto out = pp.process("`A\n");
+    // A expands to body "`B" → B's body is "`A" → A is in active set → verbatim "`A".
+    CHECK(out.find("`A") != std::string::npos);
+}
+
+TEST_CASE("recursive: max depth aborts with a warning, leaves verbatim") {
+    PpOptions opts;
+    opts.max_expansion_depth = 3;
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g, std::move(opts));
+    // Chain `A → `B → `C → `D — three macro chains, depth budget = 3.
+    pp.process("`define A `B\n");
+    pp.process("`define B `C\n");
+    pp.process("`define C `D\n");
+    pp.process("`define D done\n");
+    pp.process("`A\n");
+    bool found_depth_warn = false;
+    for (const auto& w : pp.warnings()) {
+        if (w.message.find("max_expansion_depth") != std::string::npos) {
+            found_depth_warn = true;
+            break;
+        }
+    }
+    CHECK(found_depth_warn);
+}
+
+TEST_CASE("recursive: undefined macro inside body passes through verbatim") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    // Note: body must NOT start with `(` or the walker would
+    // interpret it as a function-like parameter list (the SV LRM
+    // distinction relies on whitespace the grammar's ignore policy
+    // has already eaten — function-like vs object-like with a
+    // body that begins with `(` is the known Phase 2.1 ambiguity).
+    pp.process("`define WRAPPER value_`UNKNOWN_done\n");
+    auto out = pp.process("`WRAPPER\n");
+    // UNKNOWN_done never defined → kept as `\`UNKNOWN_done` so the
+    // host parser can decide what to do.
+    CHECK(out.find("`UNKNOWN_done") != std::string::npos);
+}
+
 // ─── Source map tests ───────────────────────────────────────────────────
 
 TEST_CASE("source map: plain text passes through with provenance") {

@@ -299,6 +299,15 @@ private:
                       std::uint32_t parent_span_id,
                       bool invert);
 
+    // Recursively expand inline `\`MACRO` / `\`MACRO(args)` references
+    // within a body string, applying parameter substitution and
+    // blue-paint cycle protection. Returns the fully expanded text.
+    // Adds macro names to state_.active_expansions while their bodies
+    // are being expanded; bumps state_.current_depth for the duration
+    // and aborts (with a warning + verbatim passthrough) if the
+    // configured max_expansion_depth is reached.
+    std::string expand_recursive(const std::string& text);
+
     // Helpers for advancing src_cursor past consumed-but-not-emitted
     // source spans (directives like \`define / \`undef, dropped
     // ifdef bodies, the structural lines of conditional blocks).
