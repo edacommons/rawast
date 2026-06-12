@@ -30,6 +30,7 @@ public:
     NodeKind kind() const noexcept { return kind_; }
     Container container() const noexcept { return container_; }
     bool is_optional() const noexcept { return is_optional_; }
+    bool is_negative() const noexcept { return is_negative_; }
     bool is_name() const noexcept { return is_name_; }
     bool has_separator() const noexcept { return has_separator_; }
     bool is_backtrack() const noexcept { return is_backtrack_; }
@@ -47,11 +48,27 @@ public:
     bool has_mark() const noexcept { return has_mark_; }
     void set_has_mark(bool v) noexcept { has_mark_ = v; }
 
+    // Negative-lookahead bookkeeping. The neg-mark is the stream mark
+    // taken at the moment a `!X` frame is pushed; on either the inner
+    // matching or failing, the driver rejects this mark to restore the
+    // cursor to that point (a successful `!X` consumes nothing; a
+    // failing `!X` also consumes nothing, just for a different reason).
+    // Kept separate from has_mark_ so a `!<CHOICE>` where the inner
+    // Choice has its own backtrack mark doesn't collide — the two
+    // marks serve different purposes and target different positions.
+    bool has_neg_mark() const noexcept { return has_neg_mark_; }
+    void set_has_neg_mark(bool v) noexcept { has_neg_mark_ = v; }
+
     // Force the Frame's is_optional flag on. Used by push_node when a
     // Ref in the resolution chain carried is_optional=true that the
     // resolved Node itself doesn't have (so `?<RULE>` correctly makes
     // that one ref-site optional without mutating the rule).
     void force_optional() noexcept { is_optional_ = true; }
+
+    // Force the Frame's is_negative flag on. Mirrors force_optional —
+    // used by push_node when a `!<RULE>` ref-site needs to mark the
+    // resolved body's frame negative without mutating the rule itself.
+    void force_negative() noexcept { is_negative_ = true; }
 
     void add_value(ValuePtr v, bool is_name);
 
@@ -81,10 +98,12 @@ private:
     NodeKind kind_;
     Container container_;
     bool is_optional_;
+    bool is_negative_;
     bool is_name_;
     bool has_separator_;
     bool is_backtrack_;
     bool has_mark_ = false;
+    bool has_neg_mark_ = false;
     std::vector<NodeId> children_;
     std::size_t child_idx_ = 0;
     std::uint32_t iter_count_ = 0;

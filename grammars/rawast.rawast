@@ -52,6 +52,7 @@ RULE_BODY: sequence dict {
   ?<RULE_IGNORE_ATTR>,
   ":",
   ?"?":optional=true,
+  ?"!":negative=true,
   <EXPR>,
   ?<BINDINGS>:bindings=@,
   repeat <POSTFIX_ATTR>
@@ -69,8 +70,12 @@ IGNORE_LIST: sequence array { repeat qualified_identifier }
 // ─── Items ──────────────────────────────────────────────────────────────
 
 // An item carries an expression, optional bindings, and postfix attrs.
+// Prefix `?` makes the item optional; prefix `!` is a negative
+// lookahead — the engine succeeds (consuming nothing) iff the inner
+// FAILS at the current cursor, and fails iff the inner matches.
 ITEM: sequence dict {
   ?"?":optional=true,
+  ?"!":negative=true,
   <EXPR>,
   ?<BINDINGS>:bindings=@,
   repeat <POSTFIX_ATTR>

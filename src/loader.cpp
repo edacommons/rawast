@@ -801,6 +801,7 @@ populate(Grammar& g, NodeId target, const Value& body) {
         n.kind = NodeKind::Ref;
         n.value = make_string(*name_r);
         if (dict_bool(*dv, "optional")) g.set_optional(target);
+        if (dict_bool(*dv, "negative")) g.set_negative(target);
         return {};
     }
 
@@ -809,6 +810,15 @@ populate(Grammar& g, NodeId target, const Value& body) {
     // Universal "optional" field applies to any node kind from here on.
     if (dict_bool(*dv, "optional")) {
         g.set_optional(target);
+    }
+
+    // Universal "negative" field — surface form `!X` in .rawast. The
+    // engine inverts the inner's success/failure at this node (succeed
+    // empty if inner fails, fail if inner succeeds) and consumes zero
+    // bytes either way. See compute_node_first_bytes and the
+    // is_negative branches in parse_from.
+    if (dict_bool(*dv, "negative")) {
+        g.set_negative(target);
     }
 
     // "backtrack" field — opt-in structural rewind, currently only

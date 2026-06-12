@@ -100,6 +100,14 @@ public:
     // immutable. Marks a Parse child as producing a dict-key name.
     bool is_name       = false;
     bool is_optional   = false;
+    // Negative-lookahead marker: the node matches IFF its inner
+    // production would FAIL at the current cursor, and consumes zero
+    // input either way. Surface form `!X` in .rawast (where X is a
+    // Ref, Key, or strict-Key item). Mutually meaningful with
+    // is_optional only on Refs that resolve to the same body via the
+    // chain — the parser distinguishes the two via separate frame
+    // flags and separate stream marks, so they don't collide.
+    bool is_negative   = false;
     bool has_separator = false;  // If true, children[0] is the separator.
 
     // Repeat-only: minimum number of successful iterations required. Default

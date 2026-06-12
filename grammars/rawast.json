@@ -112,6 +112,17 @@
         ]
       },
       {
+        "type": "key",
+        "key": "!",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "negative",
+            "value": true
+          }
+        ]
+      },
+      {
         "type": "EXPR"
       },
       {
@@ -461,6 +472,17 @@
         "bindings": [
           {
             "name": "optional",
+            "value": true
+          }
+        ]
+      },
+      {
+        "type": "key",
+        "key": "!",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "negative",
             "value": true
           }
         ]

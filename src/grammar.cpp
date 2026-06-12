@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -105,6 +106,10 @@ NodeId Grammar::add_repeat(NodeId parent) {
 
 void Grammar::set_optional(NodeId id) {
     nodes_[id.value()].is_optional = true;
+}
+
+void Grammar::set_negative(NodeId id) {
+    nodes_[id.value()].is_negative = true;
 }
 
 void Grammar::set_name(NodeId id) {
@@ -316,6 +321,19 @@ FirstByteResult compute_node_first_bytes(
     // any optional fixes the `?<VIS>, ?<LIFE>, <TYPE>` first-byte
     // computation.
     if (orig_optional) result.nullable = true;
+
+    // Negative-lookahead `!X` inverts the byte set: it succeeds (and
+    // contributes to the sequence's first-byte set) precisely when
+    // the next input byte CANNOT start X. The match consumes zero
+    // input, so the lookahead is always nullable from a sequence's
+    // perspective — the next sequence child contributes its own
+    // first-byte set in addition.
+    if (orig.is_negative) {
+        if (result.known) {
+            result.bytes.flip();
+        }
+        result.nullable = true;
+    }
 
     state[i] = 2;
     cache[i] = result;
@@ -613,14 +631,27 @@ void run_ignore(StreamReader& sr, const std::vector<Parser*>& ignores) {
 void push_node(std::vector<Frame>& stack, const Grammar& g, NodeId id) {
     NodeId resolved = g.resolve_ref(id);
     stack.emplace_back(g, resolved);
+    // Walk the Ref chain from the original use-site downward, looking
+    // for is_optional / is_negative markers placed on a Ref by the
+    // grammar source. Both flags propagate to the resolved Frame so
+    // the driver can react to them in handle_failure / advance_after_child
+    // even though the resolved Node itself is unmarked.
     NodeId cur = id;
+    bool found_opt = false;
+    bool found_neg = false;
     while (cur.valid() && cur.value() != resolved.value()
                        && g.node(cur).kind == NodeKind::Ref) {
-        if (g.node(cur).is_optional) {
+        const Node& cn = g.node(cur);
+        if (cn.is_optional && !found_opt) {
             stack.back().force_optional();
-            break;
+            found_opt = true;
         }
-        auto sv = std::dynamic_pointer_cast<StringValue>(g.node(cur).value);
+        if (cn.is_negative && !found_neg) {
+            stack.back().force_negative();
+            found_neg = true;
+        }
+        if (found_opt && found_neg) break;
+        auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
         if (!sv) break;
         cur = g.rule_id(sv->data());
     }
@@ -932,6 +963,16 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             pending_per_mark.emplace_back();
             stack.back().set_has_mark(true);
         }
+        // Negative-lookahead entry: take a stream mark so the cursor
+        // can be rolled back regardless of whether the inner matches.
+        // Uses a SEPARATE mark slot (has_neg_mark_) so a `!<CHOICE>`
+        // doesn't conflict with the Choice's own backtrack mark.
+        if (!stack.empty() && stack.back().is_negative()
+            && !stack.back().has_neg_mark()) {
+            sr.mark();
+            pending_per_mark.emplace_back();
+            stack.back().set_has_neg_mark(true);
+        }
         // Rule-local ignore: if the just-pushed frame's node has an
         // override registered, push it. Lives for the lifetime of the
         // frame and any children — trim_ignore_stack() pops it when
@@ -942,6 +983,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
         }
     };
+
+    // Forward-declared so advance_after_child can invoke the failure
+    // path for a negative-lookahead success. Assigned to the actual
+    // lambda below.
+    std::function<void(const ParseError&)> handle_failure_fn;
+    auto handle_failure = [&](const ParseError& err) { handle_failure_fn(err); };
 
     // Advance after a child has just completed successfully. Pops frames
     // until we either find one with more work to do, or reach the top.
@@ -994,6 +1041,27 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // Pop this frame, finish, pass values up.
             Frame popped = std::move(stack.back());
             stack.pop_back();
+            // Negative-lookahead success path: the inner just succeeded,
+            // which inverts to FAILURE for the lookahead. Reject the
+            // entry mark to rewind the cursor (consume nothing) and
+            // propagate the failure upward through handle_failure so an
+            // enclosing Choice / optional / Repeat can react. Do this
+            // BEFORE the normal finish/pass-values path — there's no
+            // value to emit because the lookahead's semantic outcome is
+            // "no", not "yes with empty payload."
+            if (popped.is_negative()) {
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (trace_enabled) {
+                    trace("  negative-lookahead matched (failing)");
+                }
+                handle_failure(ParseError{
+                    sr.position(),
+                    "negative lookahead matched"});
+                return;
+            }
             // Optional frame completed successfully — accept the entry
             // mark so the stream advances permanently.
             if (popped.is_optional() && popped.has_mark()) {
@@ -1038,7 +1106,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // itself a choice) would treat the first alt's failure as the whole
     // optional failing — never giving the Choice a chance to try
     // remaining alts.
-    auto handle_failure = [&](const ParseError& err) {
+    handle_failure_fn = [&](const ParseError& err) {
         if (trace_enabled) {
             trace("FAIL: " + err.message);
         }
@@ -1076,6 +1144,30 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // Else: choice exhausted -- propagate the failure further.
                 // If the choice was optional, fall through to the optional
                 // handler below.
+            }
+
+            if (popped.is_negative()) {
+                // Negative-lookahead failure path: the inner failed,
+                // which inverts to SUCCESS for the lookahead. Reject
+                // the neg-entry mark to rewind the cursor (the inner
+                // may have consumed bytes before failing) and treat
+                // as success-with-empty. The check comes BEFORE the
+                // is_optional branch so a frame that is both `?` and
+                // `!` (legal but unusual) gets the negative inversion
+                // first, which is the user-facing surface meaning of
+                // `!` — the result of the operator must be empty, not
+                // a partial inner match.
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (trace_enabled) {
+                    trace("  negative-lookahead inner failed (succeeding empty)");
+                }
+                if (!stack.empty()) {
+                    advance_after_child();
+                }
+                return;
             }
 
             if (popped.is_optional()) {

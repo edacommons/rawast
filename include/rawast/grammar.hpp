@@ -62,6 +62,7 @@ public:
     // --- Mutators on existing nodes ------------------------------------
 
     void set_optional(NodeId id);
+    void set_negative(NodeId id);
     void set_name(NodeId id);
     void set_container(NodeId id, Container c);
     void set_separator(NodeId parent, NodeId sep);
