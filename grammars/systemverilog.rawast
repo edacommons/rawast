@@ -2389,6 +2389,7 @@ CLASS_FUNCTION_TYPED: sequence dict {
   ?<LIFETIME>:lifetime=@,
   sv_qualified_type:return_type=@,
   ?<SIGNING_KW>:return_signing=@,
+  ?<RANGE>:return_range=@,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
