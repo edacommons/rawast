@@ -104,7 +104,6 @@ DESCRIPTION: choice {
   <ALWAYS_BLOCK>,
   <INITIAL_BLOCK>,
   <CONCURRENT_ASSERT>,
-  <USER_TYPED_PKG_DECL>,
   <USER_TYPED_DECL>
 }
 
@@ -186,7 +185,6 @@ PARAM_DECL_OR_LOCAL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
   <PARAM_DECL_VALUE>,
-  <PARAM_DECL_PKG_USERTYPE>,
   <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_IMPLICIT>
 }
@@ -212,31 +210,18 @@ PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
   <PARAM_DECL_VALUE>,
-  <PARAM_DECL_PKG_USERTYPE>,
   <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_IMPLICIT>
 }
 
-// `parameter <pkg>::<type_name> <NAME> [= <expr>]` — package-qualified
-// type in a parameter declaration. Common in modules that import
-// package types but reference them with explicit scope. SV-1800
-// §6.18 / §23.10. Must come before PARAM_DECL_USERTYPE in the
-// enclosing choice since both start with `parameter` + identifier.
-PARAM_DECL_PKG_USERTYPE: sequence dict {
-  'parameter':@:type="param_pkg_usertype",
-  sv_identifier:pkg=@,
-  "::",
-  sv_identifier:type_spec=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
-  ?<UNPACKED_DIMENSIONS>:unpacked=@,
-  ?<PARAM_VALUE_DEFAULT>:default=@
-}
-
-// `parameter <user_type_name> <NAME> [= <expr>]` — user-typed param.
+// `parameter [<pkg>::]<type_name> <NAME> [= <expr>]` — user-typed
+// parameter. The `sv_qualified_type` terminal handles both bare
+// identifiers and package-qualified forms (`pkg::TypeName`) in one
+// match, collapsing what previously needed two parallel grammar
+// rules.
 PARAM_DECL_USERTYPE: sequence dict {
   'parameter':@:type="param_usertype",
-  sv_identifier:type_spec=@,
+  sv_qualified_type:type_spec=@,
   ?<PARAM_OVERRIDE>:type_params=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
@@ -322,7 +307,6 @@ PORT_LIST_ANSI: sequence dict {
 // unmatched). PORT_DECL_ANSI_USERTYPE then handles the bare
 // usertype form, and PORT_DECL_ANSI is the catchall.
 PORT_BODY_FIRST: choice {
-  <PORT_DECL_ANSI_PKG_USERTYPE>,
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>
 }
@@ -335,7 +319,6 @@ PORT_BODY_FIRST: choice {
 PORT_BODY_NEXT: sequence { ",", <PORT_BODY_ANY> }
 
 PORT_BODY_ANY: choice {
-  <PORT_DECL_ANSI_PKG_USERTYPE>,
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
   <PORT_NAME_CONT>
@@ -357,20 +340,12 @@ PORT_NAME_CONT: sequence dict {
 // The sv_identifier here matches the type name; the IDENT_OR_MACRO
 // matches the port name. Range and unpacked dimensions are the same
 // as PORT_DECL_ANSI.
+// User-typed port. `sv_qualified_type` matches both bare type names
+// and `pkg::TypeName` qualified forms in one step — collapsing the
+// previous PORT_DECL_ANSI_PKG_USERTYPE variant into this one.
 PORT_DECL_ANSI_USERTYPE: sequence dict {
   <PORT_DIRECTION>:direction=@,
-  sv_identifier:type_spec=@:type="port_decl_usertype",
-  ?<RANGE>:range=@,
-  <IDENT_OR_MACRO>:name=@,
-  ?<UNPACKED_DIMENSIONS>:unpacked=@
-}
-
-// Package-qualified usertype variant: `input pkg::TypeName name`.
-PORT_DECL_ANSI_PKG_USERTYPE: sequence dict {
-  <PORT_DIRECTION>:direction=@,
-  sv_identifier:pkg=@:type="port_decl_pkg_usertype",
-  "::",
-  sv_identifier:type_spec=@,
+  sv_qualified_type:type_spec=@:type="port_decl_usertype",
   ?<RANGE>:range=@,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
@@ -526,7 +501,6 @@ MODULE_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
-  <USER_TYPED_PKG_DECL>,
   <USER_TYPED_DECL>,
   <MACRO_STMT>
 }
@@ -730,27 +704,14 @@ STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 // The host distinguishes "synth net/reg" vs "user-defined type" by
 // matching the `type_spec` field against the keyword set. Pure parse;
 // no symbol-table lookup at parse time.
-// Variant for package-qualified type: `pkg::TypeName var;`. Must be
-// tried BEFORE USER_TYPED_DECL in any enclosing choice — both start
-// with `sv_identifier`, and USER_TYPED_DECL's eager match would
-// otherwise consume the `pkg` portion and then fail at `::`.
-USER_TYPED_PKG_DECL: sequence dict {
-  ?'const':is_const=true,
-  ?'var':is_var=true,
-  sv_identifier:pkg=@:type="user_typed_pkg_decl",
-  "::",
-  sv_identifier:type_spec=@,
-  ?<PARAM_OVERRIDE>:params=@,
-  ?<NET_SIGNING>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  repeat+ <NET_NAME>:names[]=@ separator ",",
-  ";"
-}
-
+// User-typed declaration. `sv_qualified_type` handles both bare
+// type names (`my_type x;`) and package-qualified ones
+// (`pkg::TypeName x;`) in a single match — collapsing what used
+// to need two parallel rules.
 USER_TYPED_DECL: sequence dict {
   ?'const':is_const=true,
   ?'var':is_var=true,
-  sv_identifier:type_spec=@:type="user_typed_decl",
+  sv_qualified_type:type_spec=@:type="user_typed_decl",
   ?<PARAM_OVERRIDE>:params=@,
   ?<NET_SIGNING>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
@@ -2302,7 +2263,7 @@ CLASS_USER_PROPERTY: sequence dict {
   ?'const':is_const=true,
   ?'virtual':is_virtual=true,
   ?<RAND_QUAL>:rand=@,
-  sv_identifier:type_spec=@:type="class_user_property",
+  sv_qualified_type:type_spec=@:type="class_user_property",
   ?<PARAM_OVERRIDE>:params=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,

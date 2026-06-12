@@ -208,6 +208,26 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// A SystemVerilog type name — either a plain identifier or a
+// package-qualified one (`name` or `pkg::name`). Returns the matched
+// text as a StringValue, including the `::` when present. Used in
+// grammar positions where the SV LRM allows `class_scope`/`package_scope`
+// prefixes on a type identifier — parameter types, user-type variable
+// declarations, ANSI port types, function return types, etc.
+//
+// Letting one terminal handle both forms collapses what used to need
+// two parallel grammar rules (a bare-identifier variant and a separate
+// `pkg::name` variant tried before it because PEG choice commits on
+// the first match). The terminal optionally consumes the second
+// segment, so the surrounding rule writes `sv_qualified_type:type=@`
+// once and gets both forms for free.
+class SvQualifiedTypeParser final : public Parser {
+public:
+    SvQualifiedTypeParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Note: SystemVerilog strings and comments are handled by the `std`
 // group's existing parsers:
 //

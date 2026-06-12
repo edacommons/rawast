@@ -583,6 +583,65 @@ SaveResult SvSystemNameParser::unparse(const Value& v) const {
         "SvSystemNameParser::unparse expects StringValue"});
 }
 
+// --- SvQualifiedTypeParser ----------------------------------------------
+
+SvQualifiedTypeParser::SvQualifiedTypeParser()
+    : Parser("sv_qualified_type") {}
+
+ParseResult SvQualifiedTypeParser::parse(StreamReader& sr) {
+    sr.mark();
+    auto first = sr.peek();
+    if (!first || !is_simple_id_start(*first)) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(),
+            "sv_qualified_type: expected identifier start"});
+    }
+    std::string out;
+    out.push_back(*first);
+    sr.get();
+    while (auto c = sr.peek()) {
+        if (!is_simple_id_cont(*c)) break;
+        out.push_back(*c);
+        sr.get();
+    }
+    // Optional `::name` suffix. The `::` only commits if a valid
+    // identifier-start follows, so non-qualified names rewind cleanly
+    // for the surrounding rule to handle whatever comes next.
+    if (auto c = sr.peek(); c && *c == ':') {
+        sr.mark();
+        sr.get();   // first ':'
+        auto c2 = sr.peek();
+        if (c2 && *c2 == ':') {
+            sr.get();   // second ':'
+            auto seg_start = sr.peek();
+            if (seg_start && is_simple_id_start(*seg_start)) {
+                out.append("::");
+                out.push_back(*seg_start);
+                sr.get();
+                while (auto cc = sr.peek()) {
+                    if (!is_simple_id_cont(*cc)) break;
+                    out.push_back(*cc);
+                    sr.get();
+                }
+                sr.accept();
+            } else {
+                sr.reject();  // not a valid qualifier — rewind
+            }
+        } else {
+            sr.reject();  // single ':' — rewind
+        }
+    }
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult SvQualifiedTypeParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvQualifiedTypeParser::unparse expects StringValue"});
+}
+
 // --- Group registration -------------------------------------------------
 
 namespace {
@@ -615,6 +674,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_system_name", []() {
             return std::make_unique<SvSystemNameParser>();
+        }},
+        ParserSpec{"sv_qualified_type", []() {
+            return std::make_unique<SvQualifiedTypeParser>();
         }},
         ParserSpec{"sv_balanced_arg", []() {
             return std::make_unique<SvBalancedArgParser>();
