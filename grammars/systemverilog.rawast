@@ -104,6 +104,7 @@ DESCRIPTION: choice {
   <ALWAYS_BLOCK>,
   <INITIAL_BLOCK>,
   <CONCURRENT_ASSERT>,
+  <USER_TYPED_PKG_DECL>,
   <USER_TYPED_DECL>
 }
 
@@ -174,13 +175,20 @@ PARAM_PORT_LIST: sequence dict {
   ")"
 }
 
+// Order matters: PARAM_DECL_VALUE before PARAM_DECL_USERTYPE so the
+// built-in TYPE_SPEC keywords (`int`, `bit`, `logic`, …) take priority
+// over USERTYPE's `sv_identifier:type_spec=@` which would otherwise
+// happily consume them. PARAM_DECL_VALUE additionally REQUIRES
+// `<TYPE_SPEC>` (not optional) so it doesn't gobble `parameter
+// MyType x` — that needs to fall through to USERTYPE.
 PARAM_DECL_OR_LOCAL: choice {
   <PARAM_DECL_LOCALPARAM>,
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
+  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_PKG_USERTYPE>,
   <PARAM_DECL_USERTYPE>,
-  <PARAM_DECL_IMPLICIT>,
-  <PARAM_DECL_VALUE>
+  <PARAM_DECL_IMPLICIT>
 }
 
 // `localparam [type] NAME = expr` — non-overridable derived parameter.
@@ -197,12 +205,31 @@ PARAM_DECL_LOCALPARAM: sequence {
 // `;`; PARAM_PORT_LIST uses it directly). Save-side dispatch can't
 // handle a container=Dict Ref referenced without an outer binding —
 // non-container sidesteps that.
+// Same ordering note as PARAM_DECL_OR_LOCAL — VALUE before USERTYPE
+// so built-in type keywords win.
 PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
+  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_PKG_USERTYPE>,
   <PARAM_DECL_USERTYPE>,
-  <PARAM_DECL_IMPLICIT>,
-  <PARAM_DECL_VALUE>
+  <PARAM_DECL_IMPLICIT>
+}
+
+// `parameter <pkg>::<type_name> <NAME> [= <expr>]` — package-qualified
+// type in a parameter declaration. Common in modules that import
+// package types but reference them with explicit scope. SV-1800
+// §6.18 / §23.10. Must come before PARAM_DECL_USERTYPE in the
+// enclosing choice since both start with `parameter` + identifier.
+PARAM_DECL_PKG_USERTYPE: sequence dict {
+  'parameter':@:type="param_pkg_usertype",
+  sv_identifier:pkg=@,
+  "::",
+  sv_identifier:type_spec=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
 // `parameter <user_type_name> <NAME> [= <expr>]` — user-typed param.
@@ -233,14 +260,23 @@ PARAM_DECL_TYPE_IMPLICIT: sequence dict {
 
 PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 
+// TYPE_SPEC is REQUIRED here (not optional) so this rule only matches
+// when the parameter type is a built-in keyword. `parameter MyType x`
+// falls through to PARAM_DECL_USERTYPE which reads the type via
+// sv_identifier.
 PARAM_DECL_VALUE: sequence {
   'parameter':@:type="param",
-  ?<TYPE_SPEC>:type_spec=@,
+  <TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
+
+// Integer-atom signing. SV LRM §6.11 allows `signed`/`unsigned`
+// after an integer atom type (`int unsigned`, `byte signed`, etc.).
+SIGNING_KW: choice { 'signed':@, 'unsigned':@ }
 
 PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 
@@ -472,6 +508,7 @@ MODULE_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
+  <USER_TYPED_PKG_DECL>,
   <USER_TYPED_DECL>,
   <MACRO_STMT>
 }
@@ -674,6 +711,23 @@ STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 // The host distinguishes "synth net/reg" vs "user-defined type" by
 // matching the `type_spec` field against the keyword set. Pure parse;
 // no symbol-table lookup at parse time.
+// Variant for package-qualified type: `pkg::TypeName var;`. Must be
+// tried BEFORE USER_TYPED_DECL in any enclosing choice — both start
+// with `sv_identifier`, and USER_TYPED_DECL's eager match would
+// otherwise consume the `pkg` portion and then fail at `::`.
+USER_TYPED_PKG_DECL: sequence dict {
+  ?'const':is_const=true,
+  ?'var':is_var=true,
+  sv_identifier:pkg=@:type="user_typed_pkg_decl",
+  "::",
+  sv_identifier:type_spec=@,
+  ?<PARAM_OVERRIDE>:params=@,
+  ?<NET_SIGNING>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ <NET_NAME>:names[]=@ separator ",",
+  ";"
+}
+
 USER_TYPED_DECL: sequence dict {
   ?'const':is_const=true,
   ?'var':is_var=true,
