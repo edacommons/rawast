@@ -1567,6 +1567,7 @@ PRIMARY: choice {
   <DEFAULT_VALUE_PATTERN>,
   <SYSTEM_FUNC_CALL>,
   <METHOD_CALL>,
+  <PARAMETERIZED_TYPE_REF>,
   <FUNC_CALL>,
   <STREAMING_CONCAT>,
   <CONCAT_OR_REPLICATION>,
@@ -1577,6 +1578,18 @@ PRIMARY: choice {
   <SUPER_REF>,
   <PKG_QUAL_PRIMARY>,
   <HIER_REF>
+}
+
+// `TypeName#(arg1, arg2)` — a parameterized type reference used as
+// a value in expression context (e.g. as a class parameter override
+// value: `extends Base #(.ITEM_T(my_item#(W, H)))`). Tried before
+// FUNC_CALL because both start with an identifier; the trailing `#`
+// disambiguates.
+PARAMETERIZED_TYPE_REF: sequence dict {
+  sv_identifier:name=@:type="param_type_ref",
+  "#", "(",
+  repeat+ <EXPR>:params[]=@ separator ",",
+  ")"
 }
 
 // SV-1800 default-value patterns: `'0` (all bits 0), `'1` (all
