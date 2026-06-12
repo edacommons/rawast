@@ -6,7 +6,6 @@
 #include <cctype>
 #include <memory>
 #include <string>
-#include <unordered_set>
 
 namespace rawast {
 
@@ -39,55 +38,6 @@ bool is_hex_digit(char c) {
 }
 bool is_xz_digit(char c) {
     return c == 'x' || c == 'X' || c == 'z' || c == 'Z' || c == '?';
-}
-
-// SystemVerilog reserved keywords that must never match as plain
-// identifiers. Per IEEE 1800-2017 §B reserved word table. Without this
-// list, a plain identifier parser cheerfully matches `end` as a type
-// name, so `end p = q;` looks like a typed local-variable declaration
-// (`type=end`, `name=p`, `init=q`) and the enclosing `begin … end`
-// block never gets its closing `end`. The grammar would then either
-// fail far downstream or accept code that isn't really valid SV.
-//
-// Only the keywords that actually cause this mis-classification are
-// listed — control-flow markers (`end*` family), block delimiters
-// (`begin`, `else`, etc.), and the most common type/qualifier keywords
-// that appear in identifier-shaped grammar slots. The grammar's own
-// rules already use `'keyword'` strict-key matches for keywords in
-// keyword positions, so this list is only the keywords that share a
-// surface with the `sv_identifier` parser site.
-const std::unordered_set<std::string>& reserved_keywords() {
-    // Minimal exclusion list — only the SV keywords that, if mistakenly
-    // matched as an identifier, cause a structural-keyword recogniser
-    // (block/case/module terminators, else binding) to lose its match.
-    // The rest of the SV keyword set is matched by `'keyword'` strict-key
-    // sites in the grammar and never reaches this parser at a Choice
-    // boundary, so excluding them here would over-reach (it would
-    // also block valid uses where a keyword appears in a value/expr
-    // position — e.g. `parameter type T = int` writes `int` as a type
-    // expression that the grammar will catch via its own keyword key).
-    static const std::unordered_set<std::string> kws = {
-        // `begin`/`end` and the `end*` family — closing a BLOCK_STMT,
-        // CASE_STMT, function/task/class/etc. body. Without rejecting
-        // these as identifiers, a `LOCAL_VAR_DECL_USER` site happily
-        // matches `end p = q;` as `type=end, name=p, init=q;` and the
-        // enclosing `begin … end` block never sees its terminator.
-        "begin", "end",
-        "endcase", "endclass", "endclocking", "endconfig", "endfunction",
-        "endgenerate", "endgroup", "endinterface", "endmodule", "endpackage",
-        "endprimitive", "endprogram", "endproperty", "endsequence",
-        "endspecify", "endtask", "endchecker",
-        // `else` — IF_STMT body terminator. Without this, an identifier-
-        // shaped statement after the then-branch swallows `else` and the
-        // optional ELSE_CLAUSE never gets to bind.
-        "else",
-    };
-    return kws;
-}
-
-bool is_reserved_keyword(const std::string& s) {
-    const auto& kws = reserved_keywords();
-    return kws.find(s) != kws.end();
 }
 
 } // namespace
@@ -163,15 +113,6 @@ ParseResult SvIdentifierParser::parse(StreamReader& sr) {
         if (!is_simple_id_cont(*c)) break;
         out.push_back(*c);
         sr.get();
-    }
-    // SV reserved keywords are not valid identifiers — rejecting them
-    // here lets the grammar's structural keyword matches (BLOCK_STMT's
-    // `'end'`, IF_STMT's `'if'`, …) win at choice dispatch instead of
-    // a bare `sv_identifier` slot greedily consuming the terminator.
-    if (is_reserved_keyword(out)) {
-        sr.reject();
-        return tl::unexpected(ParseError{
-            start, "expected identifier, got reserved keyword '" + out + "'"});
     }
     sr.accept();
     return make_string(std::move(out));

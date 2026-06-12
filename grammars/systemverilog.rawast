@@ -278,6 +278,31 @@ PARAM_DECL_VALUE: sequence {
 // after an integer atom type (`int unsigned`, `byte signed`, etc.).
 SIGNING_KW: choice { 'signed':@, 'unsigned':@ }
 
+// SV reserved keywords that close a structural scope (`begin … end`,
+// `case … endcase`, `function … endfunction`, …) or terminate a
+// branch (`else`). These MUST NOT be matched as plain identifiers
+// at the head of a declaration-shaped rule — without the guard,
+// `LOCAL_VAR_DECL_USER` (and any other `<sv_id> <sv_id> …` rule)
+// would happily consume `end p = q;` as `type=end, name=p, init=q;`
+// and the enclosing `begin … end` block would never see its closer.
+//
+// All entries are strict (single-quote) keys so they only match at
+// word boundaries — `endure` matches none of them, `endcase` matches
+// `'endcase'` and not the prefix `'end'`.
+//
+// Used via `!<SV_RESERVED>` at the start of rules whose first token
+// is a bare `sv_identifier` / `sv_qualified_type`. The negative
+// lookahead consumes nothing on success, so the inner rule sees the
+// original cursor.
+SV_RESERVED: choice {
+  'endcase':@,    'endclass':@,   'endclocking':@, 'endconfig':@,
+  'endfunction':@, 'endgenerate':@, 'endgroup':@,  'endinterface':@,
+  'endmodule':@,  'endpackage':@, 'endprimitive':@, 'endprogram':@,
+  'endproperty':@, 'endsequence':@, 'endspecify':@, 'endtask':@,
+  'endchecker':@,
+  'end':@,    'else':@,    'begin':@
+}
+
 PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 
 // Implicit-`parameter` form for class parameter port lists:
@@ -724,7 +749,15 @@ STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 // type names (`my_type x;`) and package-qualified ones
 // (`pkg::TypeName x;`) in a single match — collapsing what used
 // to need two parallel rules.
+//
+// `!<SV_RESERVED>` guard at the head: `sv_qualified_type` accepts
+// any identifier-shape token without consulting SV's reserved
+// word table, so without the guard `endfunction <name>;` at the
+// tail of a function body would parse as a user-typed decl
+// (`type=endfunction, name=<name>;`). The guard lets the surrounding
+// `endfunction` keyword claim the token instead.
 USER_TYPED_DECL: sequence dict {
+  !<SV_RESERVED>,
   ?'const':is_const=true,
   ?'var':is_var=true,
   sv_qualified_type:type_spec=@:type="user_typed_decl",
@@ -1202,7 +1235,14 @@ LOCAL_VAR_DECL_BUILTIN: sequence dict {
 // engine's Repeat per-iteration mark fix, a Choice alternative
 // that consumes one or two identifiers and then fails on the
 // trailing `;` rolls back cleanly.
+//
+// `!<SV_RESERVED>` guard at the head: this rule's `<id> <id>`
+// shape happily matches `end p = q;` (with `end` consumed as a
+// "user type"), so without the guard a `begin … end` block's
+// repeat-over-BLOCK_ITEM would consume the closing `end` instead
+// of bailing out. See SV_RESERVED comment above.
 LOCAL_VAR_DECL_USER: sequence dict {
+  !<SV_RESERVED>,
   sv_identifier:type_spec=@:type="local_var_decl_user",
   sv_identifier:name=@,
   ?<RANGE>:unpacked=@,
