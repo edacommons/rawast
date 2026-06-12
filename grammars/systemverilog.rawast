@@ -1020,13 +1020,21 @@ FUNCTION_DECL: sequence dict {
 
 LIFETIME: choice { 'automatic':@, 'static':@ }
 
-// SV LRM allows `function NAME` (implicit-logic return),
-// `function logic [7:0] NAME` (typed return), `function int unsigned
-// NAME` (signed integer atom), `function pkg::Type NAME` (qualified
-// user type), and `function MyType NAME` (bare user type). One
-// sequence dict captures the common shape; choose alternatives
-// (range-only with signing) are handled by leaving every slot
-// optional.
+// SV LRM allows several function return forms — all captured by
+// one sequence dict with each slot optional. At least one of
+// type_spec or range must match for FUNCTION_RETURN to commit (the
+// caller's `?<FUNCTION_RETURN>` handles the "no return type" case
+// like `function NAME();`).
+//
+//   function int NAME              → type_spec="int"
+//   function int unsigned NAME     → type_spec="int", signing="unsigned"
+//   function [7:0] NAME            → range
+//   function logic [7:0] NAME      → type_spec="logic", range
+//   function pkg::Type NAME        → type_spec="pkg::Type" via sv_qualified_type
+//
+// Order: type_spec tried first (via sv_qualified_type which matches
+// bare or `pkg::`-qualified identifiers); if absent, RANGE_ONLY
+// catches the range-without-type form.
 FUNCTION_RETURN: choice {
   <FUNCTION_RETURN_TYPED>,
   <FUNCTION_RETURN_RANGED>
