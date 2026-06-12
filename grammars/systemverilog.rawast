@@ -747,6 +747,7 @@ PARAM_DECL_STMT: sequence dict {
 LOCALPARAM_DECL_STMT: sequence dict {
   'localparam':@:type="localparam",
   ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
   "=", <EXPR>:value=@,
@@ -992,7 +993,8 @@ TASK_DECL: sequence dict {
   ?<TASK_PORT_LIST>:ports=@,
   ";",
   repeat <TASK_ITEM>:items[]=@,
-  'endtask'
+  'endtask',
+  ?<END_LABEL>:end_label=@
 }
 
 FUNCTION_DECL: sequence dict {
@@ -2063,8 +2065,14 @@ EXPORT_STMT: sequence dict {
 // blocks, classes — captures the optional label that some users
 // write for readability. Pure recognition; host may verify it
 // matches the opening name if desired.
+//
+// Some codebases emit a stray trailing `;` after the label
+// (`endtask: name;`), not in the LRM but common in practice — the
+// optional `?";"` swallows it here so every consumer of END_LABEL
+// gets the lenient form for free.
 END_LABEL: sequence dict {
-  ":", sv_identifier:label=@
+  ":", sv_identifier:label=@,
+  ?";"
 }
 
 // ─── Class declarations (parse-only, semantics deferred) ──────────────
@@ -2261,6 +2269,7 @@ CLASS_USER_PROPERTY: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@,
   ?<LIFETIME>:lifetime=@,
   ?'const':is_const=true,
+  ?'virtual':is_virtual=true,
   ?<RAND_QUAL>:rand=@,
   sv_identifier:type_spec=@:type="class_user_property",
   ?<PARAM_OVERRIDE>:params=@,
