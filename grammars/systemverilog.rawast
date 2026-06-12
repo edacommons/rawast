@@ -1024,15 +1024,37 @@ TASK_DECL: sequence dict {
   ?<END_LABEL>:end_label=@
 }
 
+// `function [<LIFETIME>] [<RETURN_TYPE>] NAME (<args>) ; <body>
+// endfunction`. The choice between "has return type" and "no return
+// type" is what PEG's `?<FUNCTION_RETURN>` couldn't decide: a bare
+// `function f()` would have FUNCTION_RETURN_TYPED eagerly consume
+// `f` as the return type, leaving no identifier for the name. The
+// split FUNCTION_TYPED_HEAD / FUNCTION_UNTYPED_HEAD lets PEG try
+// "two identifiers in a row" first, falling back to "one identifier"
+// if FUNCTION_TYPED_HEAD fails (sv_qualified_type+name match leaves
+// no name remaining).
 FUNCTION_DECL: sequence dict {
   'function':@:type="function",
   ?<LIFETIME>:lifetime=@,
-  ?<FUNCTION_RETURN>:return_type=@,
-  sv_identifier:name=@,
+  <FUNCTION_HEAD>,
   ?<TASK_PORT_LIST>:ports=@,
   ";",
   repeat <TASK_ITEM>:items[]=@,
   'endfunction'
+}
+
+FUNCTION_HEAD: choice {
+  <FUNCTION_TYPED_HEAD>,
+  <FUNCTION_UNTYPED_HEAD>
+}
+
+FUNCTION_TYPED_HEAD: sequence {
+  <FUNCTION_RETURN>:return_type=@,
+  sv_identifier:name=@
+}
+
+FUNCTION_UNTYPED_HEAD: sequence {
+  sv_identifier:name=@
 }
 
 LIFETIME: choice { 'automatic':@, 'static':@ }
