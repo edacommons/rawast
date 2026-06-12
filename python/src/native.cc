@@ -18,6 +18,7 @@
 #include <rawast/parsers_tcl.hpp>
 #include <rawast/parsers_sv.hpp>
 #include <rawast/parsers_registry.hpp>
+#include <rawast/preprocessor.hpp>
 #include <rawast/to_value.hpp>
 
 #include <fstream>
@@ -171,6 +172,26 @@ NB_MODULE(_native, m) {
             "Parse a file from the grammar's default start. Returns a Python "
             "value (None/bool/int/float/str/list/dict).")
 
+        // Overload accepting a Preprocessor. Reads the file, runs it
+        // through the preprocessor, then parses the resulting string
+        // through `g`. The Preprocessor's state (macros, included_files,
+        // warnings) accumulates across calls; reuse one instance for
+        // a multi-file corpus.
+        .def("parse_file",
+            [](rawast::Grammar& g, const std::string& path,
+               rawast::Preprocessor& pp) {
+                auto preprocessed = pp.process_file(path);
+                std::istringstream is(preprocessed);
+                rawast::StreamReader sr(is);
+                auto r = g.parse(sr);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("path"), nb::arg("preprocessor"),
+            "Parse a file after running it through the given Preprocessor. "
+            "Macro state, includes, and warnings accumulate on the Preprocessor "
+            "across calls so it can be reused for a multi-file corpus.")
+
         .def("parse_file",
             [](rawast::Grammar& g, const std::string& path,
                const std::string& start) {
@@ -198,6 +219,19 @@ NB_MODULE(_native, m) {
             },
             nb::arg("content"),
             "Parse a string from the grammar's default start.")
+
+        .def("parse_string",
+            [](rawast::Grammar& g, const std::string& content,
+               rawast::Preprocessor& pp) {
+                auto preprocessed = pp.process(content);
+                std::istringstream is(preprocessed);
+                rawast::StreamReader sr(is);
+                auto r = g.parse(sr);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("content"), nb::arg("preprocessor"),
+            "Parse a string after running it through the given Preprocessor.")
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content,
@@ -362,6 +396,143 @@ NB_MODULE(_native, m) {
             "file IO. Parses any JSON document, including JSON-form "
             "grammar files (use it to browse a JSON-form grammar as a "
             "Python dict).");
+
+    // --- Preprocessor binding ------------------------------------------
+    //
+    // Construction takes a Grammar (the preprocessor grammar — typically
+    // sv_preprocessor) and keyword-only behavior options. The class
+    // holds policy + accumulating state; reuse one instance across many
+    // process_file calls so macros, included_files, and warnings carry
+    // through naturally.
+    //
+    // Lifetime: keep_alive<1, 2> ties the Grammar to the Preprocessor
+    // instance — the Grammar must outlive the Preprocessor (the C++
+    // class stores a const Grammar&).
+    nb::class_<rawast::Preprocessor>(m, "Preprocessor",
+        "Apply preprocessor semantics (macro expansion, conditional "
+        "compilation, includes) to source text before parsing.")
+        .def("__init__",
+            [](rawast::Preprocessor* self, rawast::Grammar& g,
+               const std::string& predefined,
+               const std::vector<std::string>& include_paths,
+               bool splice,
+               const std::string& on_undefined,
+               int max_expansion_depth,
+               bool trace) {
+                rawast::PpOptions opts;
+                opts.predefined = predefined;
+                opts.include_paths = include_paths;
+                opts.splice = splice;
+                auto ou = rawast::parse_pp_on_undefined(on_undefined);
+                if (!ou) {
+                    throw std::runtime_error(
+                        "Preprocessor: unknown on_undefined '" +
+                        on_undefined + "' (valid: leave, error, warn, empty)");
+                }
+                opts.on_undefined = *ou;
+                opts.max_expansion_depth = max_expansion_depth;
+                opts.trace = trace;
+                new (self) rawast::Preprocessor(g, std::move(opts));
+            },
+            nb::arg("grammar"),
+            nb::arg("predefined") = std::string{},
+            nb::arg("include_paths") = std::vector<std::string>{},
+            nb::arg("splice") = false,
+            nb::arg("on_undefined") = std::string{"leave"},
+            nb::arg("max_expansion_depth") = 200,
+            nb::arg("trace") = false,
+            nb::keep_alive<1, 2>(),
+            "Construct a Preprocessor. The grammar should be a loaded "
+            "preprocessor grammar (e.g. sv_preprocessor.rawast). All "
+            "behavior options are keyword-only; defaults match the "
+            "documented spec.")
+
+        .def("process",
+            [](rawast::Preprocessor& pp, const std::string& text) {
+                return pp.process(text);
+            },
+            nb::arg("text"),
+            "Run the preprocessor on the given source text. State "
+            "(macros, included_files, warnings) accumulates on this "
+            "instance across calls; reuse it for a multi-file corpus.")
+
+        .def("process_file",
+            [](rawast::Preprocessor& pp, const std::string& path) {
+                return pp.process_file(path);
+            },
+            nb::arg("path"),
+            "Read a file from disk and run it through the preprocessor. "
+            "Tracks the path in `included_files` (first-seen order; "
+            "duplicates suppressed) and sets the internal current-file "
+            "context for warning attribution.")
+
+        .def("is_defined",
+            [](const rawast::Preprocessor& pp, const std::string& name) {
+                return pp.is_defined(name);
+            },
+            nb::arg("name"),
+            "True iff a macro of this name is currently in the macro table.")
+
+        .def("get_macro",
+            [](const rawast::Preprocessor& pp, const std::string& name)
+                -> nb::object {
+                const auto* m = pp.get_macro(name);
+                if (!m) return nb::none();
+                nb::dict d;
+                d["name"] = m->name;
+                d["body"] = m->body;
+                nb::list params;
+                for (const auto& p : m->params) params.append(p);
+                d["params"] = params;
+                d["is_function_like"] = m->is_function_like;
+                return d;
+            },
+            nb::arg("name"),
+            "Return the macro definition as a dict (or None if undefined). "
+            "Keys: name, body, params, is_function_like.")
+
+        .def("reset",
+            [](rawast::Preprocessor& pp) { pp.reset(); },
+            "Clear all accumulated state — macros, included_files, "
+            "warnings — back to construction defaults.")
+
+        .def_prop_ro("macros",
+            [](const rawast::Preprocessor& pp) {
+                nb::dict out;
+                for (const auto& [name, m] : pp.macros()) {
+                    nb::dict d;
+                    d["name"] = m.name;
+                    d["body"] = m.body;
+                    nb::list params;
+                    for (const auto& p : m.params) params.append(p);
+                    d["params"] = params;
+                    d["is_function_like"] = m.is_function_like;
+                    out[nb::str(name.c_str())] = d;
+                }
+                return out;
+            },
+            "Current macro table as a dict of name → macro-info dict.")
+
+        .def_prop_ro("included_files",
+            [](const rawast::Preprocessor& pp) {
+                return pp.included_files();
+            },
+            "Files processed so far, in first-seen order. Duplicates "
+            "are suppressed (implicit include-once).")
+
+        .def_prop_ro("warnings",
+            [](const rawast::Preprocessor& pp) {
+                nb::list out;
+                for (const auto& w : pp.warnings()) {
+                    nb::dict d;
+                    d["message"] = w.message;
+                    d["file"] = w.file;
+                    d["line"] = w.line;
+                    out.append(d);
+                }
+                return out;
+            },
+            "Accumulated warnings as a list of {message, file, line} dicts.");
 
     m.attr("__version__") = "0.1.7";
 }
