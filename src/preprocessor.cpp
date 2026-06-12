@@ -690,10 +690,33 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     }
 
     // Locate the `\`NAME` site in the source. PP_MACRO_USE consumes
-    // a full line (including the trailing newline via sv_eol), so
-    // the source span spans from the backtick to end-of-line.
+    // a full line (including the trailing newline via sv_eol). For
+    // function-like macros the `(...)` argument list may span several
+    // physical lines (sv_balanced_arg tracks paren depth), so we
+    // must balance-scan past the closing `)` before looking for the
+    // line terminator — otherwise scan_past_directive_line stops at
+    // the first embedded newline and the macro's tail lines get
+    // double-emitted on the next walker step.
     std::size_t use_src_start = locate_item(source, src_cursor, "`" + name);
-    std::size_t use_src_end = scan_past_directive_line(source, use_src_start);
+    std::size_t after_name = use_src_start + 1 + name.size();
+    std::size_t arg_scan = after_name;
+    while (arg_scan < source.size()
+           && (source[arg_scan] == ' ' || source[arg_scan] == '\t')) {
+        ++arg_scan;
+    }
+    if (!args.empty() && arg_scan < source.size() && source[arg_scan] == '(') {
+        int depth = 0;
+        std::size_t p = arg_scan;
+        while (p < source.size()) {
+            char c = source[p++];
+            if (c == '(') ++depth;
+            else if (c == ')') {
+                if (--depth == 0) break;
+            }
+        }
+        after_name = p;
+    }
+    std::size_t use_src_end = scan_past_directive_line(source, after_name);
     std::size_t use_src_len = use_src_end - use_src_start;
     bool consumed_newline = use_src_end > use_src_start
         && (source[use_src_end - 1] == '\n' || source[use_src_end - 1] == '\r');
