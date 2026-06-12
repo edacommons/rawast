@@ -634,8 +634,9 @@ TYPEDEF_BASE: choice {
   <ENUM_TYPE>,
   <STRUCT_TYPE>,
   <UNION_TYPE>,
+  <PARAMETERIZED_TYPE_REF>,
   <TYPE_SPEC>,
-  sv_identifier
+  sv_qualified_type
 }
 
 // `enum [base_type] { label [= value], ... }` — enumerated type.
