@@ -1082,10 +1082,17 @@ TASK_PORT: sequence dict {
   sv_identifier:name=@
 }
 
+// Inside function/task bodies — same as BLOCK_ITEM but adds
+// MACRO_STMT and USER_TYPED_DECL so user-typed locals and
+// UVM-style macro calls aren't rejected. STATEMENT alternatives
+// (assignments, if/case/while) come last so a leading identifier
+// has every chance to match a declaration first.
 TASK_ITEM: choice {
   <NET_DECL>,
   <REG_DECL>,
   <INTEGER_DECL>,
+  <USER_TYPED_DECL>,
+  <MACRO_STMT>,
   <STATEMENT>
 }
 
