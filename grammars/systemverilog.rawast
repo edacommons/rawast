@@ -1234,6 +1234,7 @@ BLOCK_STMT: sequence dict {
 BLOCK_LABEL: sequence { ":", sv_identifier:label=@ }
 
 BLOCK_ITEM: choice {
+  <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
   <REG_DECL>,
   <INTEGER_DECL>,
@@ -1326,12 +1327,18 @@ FOR_INIT_DECL: sequence dict {
 // Plus an inline expression form so `i++` and `i--` parse.
 FOR_STEP: choice {
   <ASSIGNMENT_PAIR>,
-  <FOR_STEP_INCDEC>
+  <FOR_STEP_INCDEC>,
+  <FOR_STEP_PRE_INCDEC>
 }
 
 FOR_STEP_INCDEC: sequence dict {
   <LVALUE>:lhs=@:type="for_step_incdec",
   <INC_DEC_OP>:op=@
+}
+
+FOR_STEP_PRE_INCDEC: sequence dict {
+  <INC_DEC_OP>:op=@:type="for_step_pre_incdec",
+  <LVALUE>:lhs=@
 }
 
 INC_DEC_OP: choice { "++":@, "--":@ }
