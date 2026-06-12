@@ -38,6 +38,7 @@ PP_ITEM: choice {
   <PP_UNDEF>,
   <PP_IFDEF>,
   <PP_IFNDEF>,
+  <PP_INCLUDE>,
   <PP_MACRO_USE>,
   <PP_TEXT>
 }
@@ -94,6 +95,17 @@ PP_ELSE_CLAUSE: sequence array {
   sv_eol,
   repeat <PP_ITEM>
 }
+
+// `include "filename"  — file inclusion. The path is captured as a
+// `std.string` (double-quoted, escapes preserved). The walker
+// resolves the path against PpOptions::include_paths, reads the
+// file, and either accumulates its side effects (default) or
+// splices its processed text into the output (PpOptions::splice).
+PP_INCLUDE: sequence dict {
+  "`include":type="include",
+  std.string:path=@,
+  sv_eol
+}:#role="include"
 
 // Standalone macro use on its own source line: `\`MACRO_NAME` with
 // optional `(arg1, arg2)` argument list. Inline macro uses (embedded

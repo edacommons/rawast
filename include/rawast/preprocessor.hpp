@@ -298,6 +298,10 @@ private:
                       const std::string& source,
                       std::uint32_t parent_span_id,
                       bool invert);
+    void handle_include(const class DictValue& d, std::string& out,
+                        std::size_t& src_cursor,
+                        const std::string& source,
+                        std::uint32_t parent_span_id);
 
     // Recursively expand inline `\`MACRO` / `\`MACRO(args)` references
     // within a body string, applying parameter substitution and

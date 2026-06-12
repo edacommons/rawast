@@ -5,6 +5,8 @@
 #include <rawast/parsers_sv.hpp>
 #include <rawast/preprocessor.hpp>
 
+#include <fstream>
+
 using namespace rawast;
 
 namespace {
@@ -308,6 +310,111 @@ TEST_CASE("function-like: PP_MACRO_USE does not eat `endif terminator") {
     // through the rest of input.
     CHECK(out.find("inside") != std::string::npos);
     CHECK(out.find("after") != std::string::npos);
+}
+
+// ─── \`include directive ────────────────────────────────────────────────
+
+namespace {
+
+// Write a file to /tmp for the include tests; auto-cleans nothing
+// (CI tmpfs lifecycle handles it) — tests are self-contained so
+// stale files don't confuse runs.
+std::string write_tmp(const std::string& name, const std::string& content) {
+    auto path = std::string("/tmp/rawast_pp_test_") + name;
+    std::ofstream f(path);
+    f << content;
+    f.close();
+    return path;
+}
+
+} // namespace
+
+TEST_CASE("include: side-effects-only mode accumulates macros, emits nothing") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto inc_path = write_tmp("ssfx_inner.svh",
+                              "`define FROM_INCLUDE 42\n");
+    auto out = pp.process(
+        "before\n`include \"" + inc_path + "\"\nafter\n");
+    // Side-effects-only: included text NOT spliced into output.
+    CHECK(out.find("`define") == std::string::npos);
+    CHECK(out == "before\nafter\n");
+    // The macro IS now defined.
+    CHECK(pp.is_defined("FROM_INCLUDE"));
+    CHECK(pp.get_macro("FROM_INCLUDE")->body == "42");
+}
+
+TEST_CASE("include: splice mode emits processed text") {
+    auto g = load_sv_preprocessor();
+    PpOptions opts;
+    opts.splice = true;
+    Preprocessor pp(g, std::move(opts));
+    auto inc_path = write_tmp("splice_inner.svh",
+                              "`define X 1\nspliced_content\n");
+    auto out = pp.process(
+        "before\n`include \"" + inc_path + "\"\nafter\n");
+    // Splice: the included file's processed content lands in output.
+    CHECK(out.find("spliced_content") != std::string::npos);
+    CHECK(out.find("before") != std::string::npos);
+    CHECK(out.find("after") != std::string::npos);
+    // Macros still defined.
+    CHECK(pp.is_defined("X"));
+}
+
+TEST_CASE("include: tracks the included file in included_files") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto inc_path = write_tmp("tracked_inner.svh", "`define A 1\n");
+    pp.process("`include \"" + inc_path + "\"\n");
+    bool found = false;
+    for (const auto& f : pp.included_files()) {
+        if (f.find("tracked_inner.svh") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("include: nested include — header's defines flow up") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto deep_path = write_tmp("deep_inner.svh", "`define DEEPLY_DEFINED 1\n");
+    auto wrap_path = write_tmp("wrap_inner.svh",
+                               "`include \"" + deep_path + "\"\n");
+    pp.process("`include \"" + wrap_path + "\"\n");
+    // The deeply-nested define should be visible in the outer scope.
+    CHECK(pp.is_defined("DEEPLY_DEFINED"));
+}
+
+TEST_CASE("include: missing file emits warning, parse continues") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "before\n`include \"/nonexistent/path/does_not_exist.svh\"\nafter\n");
+    // Continues past the failed include.
+    CHECK(out.find("before") != std::string::npos);
+    CHECK(out.find("after") != std::string::npos);
+    // Warning was recorded.
+    bool found_warning = false;
+    for (const auto& w : pp.warnings()) {
+        if (w.message.find("file not found") != std::string::npos) {
+            found_warning = true;
+            break;
+        }
+    }
+    CHECK(found_warning);
+}
+
+TEST_CASE("include: respects include_paths search list") {
+    auto g = load_sv_preprocessor();
+    auto inc_path = write_tmp("paths_inner.svh", "`define PATH_SEARCH 1\n");
+    // Use a bare filename in `\`include`; the file lives in /tmp.
+    PpOptions opts;
+    opts.include_paths = {"/tmp"};
+    Preprocessor pp(g, std::move(opts));
+    pp.process("`include \"rawast_pp_test_paths_inner.svh\"\n");
+    CHECK(pp.is_defined("PATH_SEARCH"));
 }
 
 // ─── Recursive expansion + blue painting ────────────────────────────────

@@ -4,6 +4,8 @@
 #include <rawast/stream.hpp>
 #include <rawast/value.hpp>
 
+#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -311,6 +313,11 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
         if (type == "macro_use") {
             handle_macro_use(*dict, out, src_cursor, source,
                              parent_span_id);
+            return;
+        }
+        if (type == "include") {
+            handle_include(*dict, out, src_cursor, source,
+                           parent_span_id);
             return;
         }
         // Unknown type — recurse into the dict's values so wrapper
@@ -717,6 +724,124 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
         case PpOnUndefined::Error:
             throw std::runtime_error("undefined macro `" + name);
     }
+}
+
+void Preprocessor::handle_include(const DictValue& d, std::string& out,
+                                  std::size_t& src_cursor,
+                                  const std::string& source,
+                                  std::uint32_t parent_span_id) {
+    auto path = dict_string_or_empty(d, "path");
+    // Advance the source cursor past the `\`include "path"\n` line —
+    // whether we successfully process the included file or not.
+    src_cursor = locate_item(source, src_cursor, "`include");
+    std::size_t directive_end = scan_past_directive_line(source, src_cursor);
+    src_cursor = directive_end;
+
+    if (path.empty()) {
+        state_.warnings.push_back(
+            {"`include: empty path", state_.current_file, state_.current_line});
+        return;
+    }
+
+    // Resolve path. Try each include_paths entry in order, then the
+    // current_file's directory (so relative `\`include "foo.svh"`
+    // works when foo.svh is alongside the including file), then the
+    // path as given (covers absolute paths and CWD-relative).
+    namespace fs = std::filesystem;
+    fs::path resolved;
+    bool found = false;
+    fs::path requested = path;
+    auto try_candidate = [&](const fs::path& base) {
+        fs::path candidate = base.empty() ? requested : (base / requested);
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && !ec) {
+            resolved = candidate;
+            found = true;
+            return true;
+        }
+        return false;
+    };
+    for (const auto& dir : opts_.include_paths) {
+        if (try_candidate(dir)) break;
+    }
+    if (!found && !state_.current_file.empty()) {
+        fs::path parent = fs::path(state_.current_file).parent_path();
+        try_candidate(parent);
+    }
+    if (!found) try_candidate(fs::path{});
+    if (!found) {
+        state_.warnings.push_back(
+            {"`include: file not found: '" + path + "'",
+             state_.current_file, state_.current_line});
+        return;
+    }
+
+    std::string canonical = resolved.lexically_normal().string();
+    bool already_seen = false;
+    for (const auto& p : state_.included_files) {
+        if (p == canonical) { already_seen = true; break; }
+    }
+    if (!already_seen) state_.included_files.push_back(canonical);
+
+    std::ifstream f(resolved);
+    if (!f.is_open()) {
+        state_.warnings.push_back(
+            {"`include: failed to open '" + canonical + "'",
+             state_.current_file, state_.current_line});
+        return;
+    }
+    std::ostringstream buf;
+    buf << f.rdbuf();
+    std::string include_text = buf.str();
+
+    // Parse the included file with the same preprocessor grammar.
+    // (No depth-of-includes check yet — Phase 3 polish.)
+    std::istringstream is(include_text);
+    StreamReader sr{is};
+    auto parsed = pp_grammar_.parse(sr);
+    if (!parsed) {
+        state_.warnings.push_back(
+            {"`include: parse failed in '" + canonical + "': " +
+             parsed.error().message,
+             state_.current_file, state_.current_line});
+        return;
+    }
+
+    // New file context — push/restore so nested directives report
+    // the correct current_file in any warnings they emit.
+    auto saved_file = state_.current_file;
+    auto saved_line = state_.current_line;
+    state_.current_file = canonical;
+    state_.current_line = 1;
+
+    // Create a Span describing the included file. The include site
+    // (use_src_start..directive_end in the outer source) is the parent
+    // for hierarchical lookup.
+    std::size_t use_src_start = locate_item(source, /*from=*/src_cursor - 1 - path.size(),
+                                            "`include");
+    if (use_src_start > directive_end) use_src_start = directive_end;
+    std::uint32_t include_span =
+        record_span(parent_span_id, use_src_start,
+                    include_text.size(),
+                    /*out_offset=*/Span::NoOutput, canonical);
+
+    // Walk the included file. In splice mode, output bytes go into
+    // the caller's `out`; in side-effects mode, they go into a
+    // discard buffer (state still mutates — that's the side effect).
+    std::size_t include_src_cursor = 0;
+    if (opts_.splice) {
+        walk(*parsed, out, include_src_cursor, include_text, include_span);
+    } else {
+        std::string discard;
+        std::size_t saved_spans = state_.spans.size();
+        walk(*parsed, discard, include_src_cursor, include_text, include_span);
+        // Drop spans that mapped into the discarded output —
+        // they're not reachable from anything in `out`.
+        state_.spans.resize(saved_spans);
+    }
+
+    state_.current_file = std::move(saved_file);
+    state_.current_line = saved_line;
 }
 
 void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
