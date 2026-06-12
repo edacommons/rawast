@@ -627,6 +627,31 @@ void Preprocessor::handle_define(const DictValue& d) {
     if (m.name.empty()) return;
     auto raw_body = dict_string_or_empty(d, "body");
 
+    // sv_line_text preserves `\<newline>` continuations literally so
+    // the source position machinery can round-trip the original text,
+    // but a macro body's logical content is the joined form. Replace
+    // each `\\\n` (and `\\\r\n`) with a single space so multi-line
+    // bodies expand as one logical sequence. Without this, the `\`
+    // chars leak into the output as stray line-continuation markers
+    // and the SV grammar rejects them.
+    {
+        std::string joined;
+        joined.reserve(raw_body.size());
+        for (std::size_t i = 0; i < raw_body.size(); ++i) {
+            if (raw_body[i] == '\\' && i + 1 < raw_body.size()) {
+                if (raw_body[i + 1] == '\n') { joined.push_back(' '); ++i; continue; }
+                if (raw_body[i + 1] == '\r') {
+                    joined.push_back(' ');
+                    ++i;
+                    if (i + 1 < raw_body.size() && raw_body[i + 1] == '\n') ++i;
+                    continue;
+                }
+            }
+            joined.push_back(raw_body[i]);
+        }
+        raw_body = std::move(joined);
+    }
+
     // Detect function-like form: body begins with `(`. The SV LRM
     // strict distinction (no space between name and `(`) is lost
     // because the grammar's `ignore linespace` eats any spaces
