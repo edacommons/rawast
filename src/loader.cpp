@@ -1,6 +1,7 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_registry.hpp>
+#include <rawast/preprocessor.hpp>
 
 #include <fstream>
 #include <memory>
@@ -418,6 +419,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
 
                 bool set_var = false;
                 std::string subparse_name;
+                PpRole pp_role = PpRole::None;
                 std::vector<std::pair<std::string, ValuePtr>> at_bindings;
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
@@ -451,14 +453,30 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                             subparse_name = sv->data();
                             continue;
                         }
-                        if (e.name == "role" || e.name == "field") {
-                            // Reserved for the preprocessor mechanism (Phase 1+).
-                            // Parsed and validated here, semantically wired
+                        if (e.name == "role") {
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv) {
+                                return tl::unexpected(
+                                    "#role: value must be a string");
+                            }
+                            auto parsed = parse_pp_role(sv->data());
+                            if (!parsed) {
+                                return tl::unexpected(
+                                    "#role: unknown role '" + sv->data() +
+                                    "' (valid: define, undef, ifdef, ifndef, "
+                                    "if, elsif, else, endif, include, "
+                                    "macro_use, paste, stringify, text)");
+                            }
+                            pp_role = *parsed;
+                            continue;
+                        }
+                        if (e.name == "field") {
+                            // Field-name override; validated here, wired
                             // when the preprocessor walker lands.
                             auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
                             if (!sv) {
                                 return tl::unexpected(
-                                    "#" + e.name + ": value must be a string");
+                                    "#field: value must be a string");
                             }
                             continue;
                         }
@@ -504,6 +522,9 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 // rules are loaded (the named rule may come later).
                 if (!subparse_name.empty()) {
                     g.set_pending_subparse(*expr_child, subparse_name);
+                }
+                if (pp_role != PpRole::None) {
+                    g.node(*expr_child).pp_role = pp_role;
                 }
 
                 // Conditional bindings: when the expr is optional AND
@@ -808,6 +829,55 @@ populate(Grammar& g, NodeId target, const Value& body) {
     // Pretty-print attrs (indent/tab/space/newline/tail) — universal,
     // apply to any node kind. Save-side only; parse ignores them.
     apply_pretty_attrs(g, target, *dv);
+
+    // Rule-level engine-reserved bindings. Process `:#role="..."` and
+    // `:#field="..."` annotations attached to a rule body itself
+    // (as opposed to bindings on a child item, which append_items_array
+    // handles). Non-reserved bindings at rule level are ignored as
+    // before — they don't have well-defined semantics on a rule body
+    // (the wrapping pattern used to emit name markers only applies
+    // around expressions inside sequences).
+    if (auto rb_bindings = dict_value(*dv, "bindings")) {
+        auto entries_r = extract_bindings(rb_bindings);
+        if (!entries_r) return tl::unexpected(entries_r.error());
+        for (const auto& e : *entries_r) {
+            if (!e.reserved) continue;
+            if (e.name == "role") {
+                auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                if (!sv) {
+                    return tl::unexpected(
+                        "#role: value must be a string");
+                }
+                auto parsed = parse_pp_role(sv->data());
+                if (!parsed) {
+                    return tl::unexpected(
+                        "#role: unknown role '" + sv->data() +
+                        "' (valid: define, undef, ifdef, ifndef, if, "
+                        "elsif, else, endif, include, macro_use, paste, "
+                        "stringify, text)");
+                }
+                g.node(target).pp_role = *parsed;
+                continue;
+            }
+            if (e.name == "field") {
+                auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                if (!sv) {
+                    return tl::unexpected(
+                        "#field: value must be a string");
+                }
+                // Wired when the preprocessor walker lands.
+                continue;
+            }
+            if (e.name == "subparse") {
+                return tl::unexpected(
+                    "#subparse: not meaningful on a rule body "
+                    "(applies to a Parse-kind child binding)");
+            }
+            return tl::unexpected(
+                "unknown engine annotation '#" + e.name +
+                "' on rule body; valid: #role, #field");
+        }
+    }
 
     if (type == "sequence" || type == "choice" || type == "repeat") {
         if (type == "sequence") n.kind = NodeKind::Sequence;
