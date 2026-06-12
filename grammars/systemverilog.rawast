@@ -315,11 +315,14 @@ PORT_LIST_ANSI: sequence dict {
   ")"
 }
 
-// First port — must have a direction keyword. PORT_DECL_ANSI_USERTYPE
-// (direction + user type + name) tried FIRST because PORT_DECL_ANSI's
-// optional `?<TYPE_SPEC>` would otherwise greedily match a user-
-// defined type name as the port name.
+// First port — must have a direction keyword. The pkg-qualified
+// usertype variant is tried first so `input pkg::Type name` doesn't
+// mismatch against PORT_DECL_ANSI_USERTYPE's bare-identifier type
+// (which would consume `pkg` then expect a `name`, leaving `::`
+// unmatched). PORT_DECL_ANSI_USERTYPE then handles the bare
+// usertype form, and PORT_DECL_ANSI is the catchall.
 PORT_BODY_FIRST: choice {
+  <PORT_DECL_ANSI_PKG_USERTYPE>,
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>
 }
@@ -332,6 +335,7 @@ PORT_BODY_FIRST: choice {
 PORT_BODY_NEXT: sequence { ",", <PORT_BODY_ANY> }
 
 PORT_BODY_ANY: choice {
+  <PORT_DECL_ANSI_PKG_USERTYPE>,
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
   <PORT_NAME_CONT>
@@ -356,6 +360,17 @@ PORT_NAME_CONT: sequence dict {
 PORT_DECL_ANSI_USERTYPE: sequence dict {
   <PORT_DIRECTION>:direction=@,
   sv_identifier:type_spec=@:type="port_decl_usertype",
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
+}
+
+// Package-qualified usertype variant: `input pkg::TypeName name`.
+PORT_DECL_ANSI_PKG_USERTYPE: sequence dict {
+  <PORT_DIRECTION>:direction=@,
+  sv_identifier:pkg=@:type="port_decl_pkg_usertype",
+  "::",
+  sv_identifier:type_spec=@,
   ?<RANGE>:range=@,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
