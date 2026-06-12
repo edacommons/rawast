@@ -90,6 +90,7 @@ DESCRIPTION: choice {
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
   <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
@@ -481,6 +482,7 @@ MODULE_ITEM: choice {
   <GENVAR_DECL>,
   <NETTYPE_DECL>,
   <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <CONT_ASSIGN>,
   <ALWAYS_BLOCK>,
@@ -742,6 +744,21 @@ LOCALPARAM_DECL_STMT: sequence dict {
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@,
+  ";"
+}
+
+// `localparam [pkg::]Type NAME = expr;` — user-typed localparam.
+// LOCALPARAM_DECL_STMT's optional TYPE_SPEC can't match `pkg::T`
+// because TYPE_SPEC is built-in keywords only; this rule picks it up
+// via sv_qualified_type. Must be tried BEFORE LOCALPARAM_DECL_STMT
+// in the enclosing choice — the STMT form would otherwise consume
+// just `localparam` and then trip on `pkg::T`'s `::`.
+LOCALPARAM_DECL_USERTYPE_STMT: sequence dict {
+  'localparam':@:type="localparam_usertype",
+  sv_qualified_type:type_spec=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   "=", <EXPR>:value=@,
   ";"
