@@ -106,7 +106,7 @@ public:
 
 // Retired: `TclUntilParenParser`. Replaced by the grammar-level
 // `*` raw-consume primitive (engine commit e865727); VAR_INDEX in
-// tcl.rawast now uses `*:index=@:subparse="WORD_SEGMENTS"` with `)`
+// tcl.rawast now uses `*:index=@:#subparse="WORD_SEGMENTS"` with `)`
 // as the stop literal in the surrounding sequence. See
 // docs/rawast-format.md §4.5a-1.
 

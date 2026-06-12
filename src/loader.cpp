@@ -86,6 +86,11 @@ std::string unescape(const std::string& raw) {
 struct BindingEntry {
     std::string name;
     ValuePtr    value;
+    // True when the binding used the `:#name=...` engine-reserved
+    // namespace. The loader dispatches on the bare `name` to engine
+    // directives (#subparse, #role, #field) and rejects unknown
+    // reserved names. Plain `:name=...` bindings always carry false.
+    bool        reserved = false;
 };
 
 // Extract binding entries from a `bindings` field value. Accepts:
@@ -131,7 +136,13 @@ extract_bindings(const ValuePtr& bindings_val) {
                 vit != ed->data().end()) {
                 value = vit->second;
             }
-            entries.push_back({std::move(name), std::move(value)});
+            bool reserved = false;
+            if (auto rit = ed->data().find("reserved");
+                rit != ed->data().end()) {
+                auto bv = std::dynamic_pointer_cast<BoolValue>(rit->second);
+                if (bv && bv->data()) reserved = true;
+            }
+            entries.push_back({std::move(name), std::move(value), reserved});
         }
         return entries;
     }
@@ -425,18 +436,44 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                             }
                         }
                     }
-                    // `:subparse="RULE"` is an engine directive, not a
-                    // runtime emit — capture the rule name and DO NOT
-                    // emit it as a Value-name + Value-const pair. The
-                    // rule is resolved to a NodeId post-load.
-                    if (e.name == "subparse") {
-                        auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
-                        if (!sv) {
-                            return tl::unexpected(
-                                "subparse: value must be a string naming a rule");
+                    // Engine-reserved annotations (`:#name=...`). The
+                    // `reserved` flag is set by the meta-grammar's
+                    // RESERVED_VALUE_BIND rule. Dispatch on the bare
+                    // name; reject unknown reserved names with a clear
+                    // valid-values list.
+                    if (e.reserved) {
+                        if (e.name == "subparse") {
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv) {
+                                return tl::unexpected(
+                                    "#subparse: value must be a string naming a rule");
+                            }
+                            subparse_name = sv->data();
+                            continue;
                         }
-                        subparse_name = sv->data();
-                        continue;
+                        if (e.name == "role" || e.name == "field") {
+                            // Reserved for the preprocessor mechanism (Phase 1+).
+                            // Parsed and validated here, semantically wired
+                            // when the preprocessor walker lands.
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv) {
+                                return tl::unexpected(
+                                    "#" + e.name + ": value must be a string");
+                            }
+                            continue;
+                        }
+                        return tl::unexpected(
+                            "unknown engine annotation '#" + e.name +
+                            "'; valid: #subparse, #role, #field");
+                    }
+                    // Catch unmigrated `:subparse="RULE"` (no `#` prefix)
+                    // since 0.2.0 — the directive moved to the reserved
+                    // namespace. Silent demotion to a value binding
+                    // would break the runtime contract without a hint.
+                    if (e.name == "subparse") {
+                        return tl::unexpected(
+                            "':subparse=' is no longer recognized — "
+                            "use ':#subparse=' (engine-reserved namespace, since 0.2.0)");
                     }
                     // Value "@" means "bind to expr's parsed value".
                     if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {

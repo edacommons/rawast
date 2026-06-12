@@ -1,6 +1,6 @@
 // grammars/tcl.rawast — Tier-1 Tcl parser.
 //
-// Two logical contexts handled within one grammar via subparse:
+// Two logical contexts handled within one grammar via #subparse:
 //   SCRIPT         — main grammar body; ignore tcl.hspace
 //   WORD_SEGMENTS  — word internals; no ignore (whitespace is literal)
 //
@@ -11,7 +11,7 @@
 // variable references ($x / ${x} / $arr(idx)), command substitutions
 // ([cmd]), and backslash escapes from literal text. Brace words are
 // opaque per Dodekalogue rule 6; bracket words are nested Tcl
-// scripts (subparse=SCRIPT for command substitution).
+// scripts (#subparse=SCRIPT for command substitution).
 //
 // Command-level semantics — recognising `if` / `while` / `proc` / etc.
 // and dispatching to per-command argument schemas — is downstream
@@ -23,7 +23,7 @@
 // principle the LEF/DEF grammars also follow.
 //
 // Per-rule `ignore <RULE>: …` directives override the grammar-level
-// ignore list when the parse driver enters that rule. A `:subparse=
+// ignore list when the parse driver enters that rule. A `:#subparse=
 // "<RULE>"` binding on an item names a rule to use as the start when
 // re-parsing the item's captured string. Same grammar, same engine,
 // different entry point with the rule's own ignore context.
@@ -92,17 +92,17 @@ BRACE_WORD: sequence dict {
 
 // Bracket word: nested Tcl script (command substitution).
 BRACKET_WORD: sequence dict {
-  tcl.bracket_sub:type="bracket":value=@:subparse="SCRIPT"
+  tcl.bracket_sub:type="bracket":value=@:#subparse="SCRIPT"
 }
 
 // Quoted/bare words: substitutions DO apply — re-parse via
 // WORD_SEGMENTS (rule-local ignore: none, so whitespace is literal).
 QUOTED_WORD: sequence dict {
-  tcl.quoted_string:type="quoted":value=@:subparse="WORD_SEGMENTS"
+  tcl.quoted_string:type="quoted":value=@:#subparse="WORD_SEGMENTS"
 }
 
 BARE_WORD: sequence dict {
-  tcl.bare_word:type="bare":value=@:subparse="WORD_SEGMENTS"
+  tcl.bare_word:type="bare":value=@:#subparse="WORD_SEGMENTS"
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -144,12 +144,12 @@ VAR_SEG: sequence dict {
 
 VAR_INDEX: sequence dict {
   "(",
-  *:index=@:subparse="WORD_SEGMENTS",
+  *:index=@:#subparse="WORD_SEGMENTS",
   ")"
 }
 
 BRACKET_SEG: sequence dict {
-  tcl.bracket_sub:type="bracket":value=@:subparse="SCRIPT"
+  tcl.bracket_sub:type="bracket":value=@:#subparse="SCRIPT"
 }
 
 ESCAPE_SEG: sequence dict {

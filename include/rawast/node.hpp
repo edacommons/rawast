@@ -141,7 +141,7 @@ public:
     // parse loop again on that string starting from `subparse_start` —
     // same grammar, different entry rule. The resulting value replaces
     // the original string in the value stream. Invalid (default) means
-    // no subparse. Set by the .rawast `subparse=<RULE>` postfix attr.
+    // no subparse. Set by the .rawast `:#subparse=<RULE>` binding.
     NodeId subparse_start;
 
     std::vector<NodeId> children;
