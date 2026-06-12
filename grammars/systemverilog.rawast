@@ -2316,6 +2316,7 @@ CLASS_FUNCTION: choice {
 }
 
 CLASS_FUNCTION_TYPED: sequence dict {
+  ?'virtual':is_virtual=true,
   ?<CLASS_VISIBILITY>:visibility=@,
   ?'virtual':is_virtual=true,
   ?'static':is_static=true,
@@ -2331,6 +2332,7 @@ CLASS_FUNCTION_TYPED: sequence dict {
 }
 
 CLASS_FUNCTION_VOID: sequence dict {
+  ?'virtual':is_virtual=true,
   ?<CLASS_VISIBILITY>:visibility=@,
   ?'virtual':is_virtual=true,
   ?'static':is_static=true,
@@ -2344,7 +2346,13 @@ CLASS_FUNCTION_VOID: sequence dict {
   ?<END_LABEL>:end_label=@
 }
 
+// SV-1800 §8.4 method_qualifier — any order of `virtual` /
+// `protected|local` / `static`. Slot `virtual` in two positions so
+// both `protected virtual task` and `virtual protected task` parse;
+// the duplicate `?'virtual'` binding harmlessly re-asserts the same
+// flag if the keyword shows up in either spot.
 CLASS_TASK: sequence dict {
+  ?'virtual':is_virtual=true,
   ?<CLASS_VISIBILITY>:visibility=@,
   ?'virtual':is_virtual=true,
   ?'extern':is_extern=true,
