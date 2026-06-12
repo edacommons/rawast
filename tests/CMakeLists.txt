@@ -27,6 +27,7 @@ add_executable(rawast_tests
     test_callbacks.cpp
     test_pretty.cpp
     test_gdsii.cpp
+    test_preprocessor.cpp
 )
 
 set_target_properties(rawast_tests PROPERTIES
