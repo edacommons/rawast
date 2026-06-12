@@ -196,6 +196,18 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// SystemVerilog system task / function name including multi-segment
+// forms like `$value$plusargs`, `$test$plusargs`. Matches a leading
+// `$`, then one or more `$`-separated identifier segments. Returns
+// the matched string including all `$` characters. Used by
+// SYSTEM_FUNC_CALL / SYSTEM_TASK_CALL in the SV grammar.
+class SvSystemNameParser final : public Parser {
+public:
+    SvSystemNameParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Note: SystemVerilog strings and comments are handled by the `std`
 // group's existing parsers:
 //

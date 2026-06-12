@@ -1314,7 +1314,7 @@ DELAY_OR_EVENT_STMT: sequence dict {
 // the `$` retained), so the grammar dispatches on the leading byte
 // implicitly via Choice ordering.
 SYSTEM_TASK_CALL: sequence dict {
-  sv_identifier:name=@:type="system_task",
+  sv_system_name:name=@:type="system_task",
   ?<TASK_ARG_LIST>:args=@,
   ";"
 }
@@ -1822,9 +1822,17 @@ FUNC_CALL: sequence dict {
 // SYSTEM_FUNC_CALL from claiming plain identifiers like `clk` —
 // the earlier behavior was a bug surfaced by save-direction round-
 // tripping.)
-SYSTEM_FUNC_CALL ignore: sequence dict {
-  "$":type="system_func",
-  sv_identifier:name=@,
+// Uses sv_system_name to capture the entire name including any
+// multi-segment forms like `$value$plusargs`, `$test$plusargs`.
+// The captured string includes the leading `$`. Tight-binding
+// between `$` and identifier is enforced by the terminal parser,
+// so the rule itself uses the surrounding (whitespace-skipping)
+// ignore policy — previously this rule used `ignore:` to prevent
+// `$ display`-with-space matches, but the terminal handles that
+// now AND the override was breaking SYSTEM_FUNC_ARGS's comma
+// separator inside arg lists.
+SYSTEM_FUNC_CALL: sequence dict {
+  sv_system_name:name=@:type="system_func",
   ?<SYSTEM_FUNC_ARGS>:args=@
 }
 

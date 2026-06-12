@@ -521,6 +521,68 @@ SaveResult SvPpMacroNameParser::unparse(const Value& v) const {
         "SvPpMacroNameParser::unparse expects StringValue"});
 }
 
+// --- SvSystemNameParser -------------------------------------------------
+
+SvSystemNameParser::SvSystemNameParser() : Parser("sv_system_name") {}
+
+ParseResult SvSystemNameParser::parse(StreamReader& sr) {
+    sr.mark();
+    auto first = sr.peek();
+    if (!first || *first != '$') {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(), "sv_system_name: expected '$'"});
+    }
+    std::string out;
+    out.push_back(*first);
+    sr.get();
+    // First identifier segment is required.
+    auto next = sr.peek();
+    if (!next || !is_simple_id_start(*next)) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(),
+            "sv_system_name: expected identifier start after '$'"});
+    }
+    out.push_back(*next);
+    sr.get();
+    while (auto c = sr.peek()) {
+        if (!is_simple_id_cont(*c)) break;
+        out.push_back(*c);
+        sr.get();
+    }
+    // Additional `$identifier` segments (e.g. `$value$plusargs`).
+    while (auto c = sr.peek()) {
+        if (*c != '$') break;
+        sr.mark();
+        sr.get();   // consume the '$'
+        auto seg_start = sr.peek();
+        if (!seg_start || !is_simple_id_start(*seg_start)) {
+            // Not actually a sub-segment — rewind the '$' for the
+            // outer parser to handle.
+            sr.reject();
+            break;
+        }
+        out.push_back('$');
+        out.push_back(*seg_start);
+        sr.get();
+        while (auto cc = sr.peek()) {
+            if (!is_simple_id_cont(*cc)) break;
+            out.push_back(*cc);
+            sr.get();
+        }
+        sr.accept();
+    }
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult SvSystemNameParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvSystemNameParser::unparse expects StringValue"});
+}
+
 // --- Group registration -------------------------------------------------
 
 namespace {
@@ -550,6 +612,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_pp_macro_name", []() {
             return std::make_unique<SvPpMacroNameParser>();
+        }},
+        ParserSpec{"sv_system_name", []() {
+            return std::make_unique<SvSystemNameParser>();
         }},
         ParserSpec{"sv_balanced_arg", []() {
             return std::make_unique<SvBalancedArgParser>();
