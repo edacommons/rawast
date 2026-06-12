@@ -138,6 +138,47 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// Consume one line of source up to and including the trailing newline,
+// returning the captured run as a StringValue. UNLIKE `sv_line_text`,
+// this parser fails immediately when the cursor is at the start of a
+// preprocessor terminator directive — `\`endif` or `\`else`. The fail
+// is by design: it lets a `PP_FILE: repeat <PP_ITEM>` rule terminate
+// cleanly at conditional-compilation boundaries (the outer PP_IFDEF
+// then matches its own `\`endif`).
+//
+// Word boundary check on the terminator: `\`endifx` (some user macro)
+// IS consumed, while `\`endif`, `\`endif // …`, `\`endif\n` etc. are
+// all rejected. Same for `\`else` vs `\`elsex`.
+//
+// The captured line keeps its trailing newline so passthrough
+// preserves source line structure. EOF without a newline is fine —
+// whatever was read is returned.
+class SvPpTextLineParser final : public Parser {
+public:
+    SvPpTextLineParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
+// Consume exactly one line terminator: `\n`, `\r\n`, or `\r`. Used
+// by the preprocessor grammar to mark the end of single-line
+// directives (`\`define`, `\`undef`, etc.) — those rules can't use
+// the meta-grammar's `newline` postfix attr (which is a save-side
+// pretty-print flag, not a parse-side terminal) and the standard
+// `std` parser group doesn't ship an end-of-line parser. Returns
+// the consumed terminator bytes as a StringValue so unparse can
+// round-trip the original line ending.
+//
+// Fails at end-of-input — directive lines that aren't newline-
+// terminated would otherwise be hidden parse failures; preferring
+// a structured fail surfaces them as preprocessor warnings.
+class SvEolParser final : public Parser {
+public:
+    SvEolParser();
+    ParseResult parse(StreamReader& sr) override;
+    SaveResult  unparse(const Value& value) const override;
+};
+
 // Note: SystemVerilog strings and comments are handled by the `std`
 // group's existing parsers:
 //

@@ -341,6 +341,113 @@ SaveResult SvLineTextParser::unparse(const Value& v) const {
         "SvLineTextParser::unparse expects StringValue"});
 }
 
+// --- SvPpTextLineParser -------------------------------------------------
+
+SvPpTextLineParser::SvPpTextLineParser() : Parser("sv_pp_text_line") {}
+
+ParseResult SvPpTextLineParser::parse(StreamReader& sr) {
+    sr.mark();
+
+    // EOF is a failure — let the caller's repeat detect end-of-input
+    // through some other channel rather than this parser returning
+    // empty strings forever.
+    auto first = sr.peek();
+    if (!first) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(), "sv_pp_text_line: at EOF"});
+    }
+
+    // Terminator-directive lookahead. Only triggered when the cursor
+    // is at `\``; cheap fall-through for plain text lines.
+    if (*first == '`') {
+        sr.mark();
+        sr.get();  // consume the backtick
+        std::string kw;
+        while (auto c = sr.peek()) {
+            unsigned char uc = static_cast<unsigned char>(*c);
+            if (!std::isalpha(uc)) break;
+            kw.push_back(*c);
+            sr.get();
+        }
+        // Word boundary: next byte must not extend an identifier (and
+        // EOF qualifies). Identifier-continuation bytes are letters,
+        // digits, `_`, `$` per IEEE 1800-2017 §5.6.
+        bool at_boundary = true;
+        if (auto c = sr.peek()) {
+            unsigned char uc = static_cast<unsigned char>(*c);
+            if (std::isalnum(uc) || *c == '_' || *c == '$') {
+                at_boundary = false;
+            }
+        }
+        sr.reject();   // unwind the lookahead — caller's mark still live
+
+        if (at_boundary && (kw == "endif" || kw == "else")) {
+            sr.reject();
+            return tl::unexpected(ParseError{
+                sr.position(),
+                "sv_pp_text_line: at \`" + kw + " terminator"});
+        }
+    }
+
+    // Consume up to and including the next newline (or to EOF if no
+    // more newlines remain in the stream).
+    std::string out;
+    while (auto c = sr.peek()) {
+        out.push_back(*c);
+        sr.get();
+        if (*c == '\n') break;
+    }
+    sr.accept();
+    return make_string(std::move(out));
+}
+
+SaveResult SvPpTextLineParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvPpTextLineParser::unparse expects StringValue"});
+}
+
+// --- SvEolParser --------------------------------------------------------
+
+SvEolParser::SvEolParser() : Parser("sv_eol") {}
+
+ParseResult SvEolParser::parse(StreamReader& sr) {
+    sr.mark();
+    auto first = sr.peek();
+    if (!first) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(), "sv_eol: at EOF"});
+    }
+    std::string out;
+    if (*first == '\r') {
+        out.push_back(*first);
+        sr.get();
+        if (auto next = sr.peek(); next && *next == '\n') {
+            out.push_back(*next);
+            sr.get();
+        }
+        sr.accept();
+        return make_string(std::move(out));
+    }
+    if (*first == '\n') {
+        out.push_back(*first);
+        sr.get();
+        sr.accept();
+        return make_string(std::move(out));
+    }
+    sr.reject();
+    return tl::unexpected(ParseError{
+        sr.position(), "sv_eol: expected newline"});
+}
+
+SaveResult SvEolParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvEolParser::unparse expects StringValue"});
+}
+
 // --- Group registration -------------------------------------------------
 
 namespace {
@@ -361,6 +468,12 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_line_text", []() {
             return std::make_unique<SvLineTextParser>();
+        }},
+        ParserSpec{"sv_pp_text_line", []() {
+            return std::make_unique<SvPpTextLineParser>();
+        }},
+        ParserSpec{"sv_eol", []() {
+            return std::make_unique<SvEolParser>();
         }},
         ParserSpec{"sv_balanced_arg", []() {
             return std::make_unique<SvBalancedArgParser>();

@@ -2,6 +2,7 @@
 #include <rawast/grammar.hpp>
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
+#include <rawast/parsers_sv.hpp>
 #include <rawast/preprocessor.hpp>
 
 using namespace rawast;
@@ -103,6 +104,115 @@ TEST_CASE("Preprocessor: enum round-trips") {
     CHECK(to_string(PpOnUndefined::Error) == "error");
     CHECK(to_string(PpOnUndefined::Warn)  == "warn");
     CHECK(to_string(PpOnUndefined::Empty) == "empty");
+}
+
+// ─── Walker integration tests via sv_preprocessor.rawast ────────────────
+
+namespace {
+
+Grammar load_sv_preprocessor() {
+    register_std_parser_group();
+    register_sv_parser_group();
+    Grammar g;
+    auto r = load_rawast_grammar_from_file(g, "grammars/sv_preprocessor.rawast");
+    REQUIRE_MESSAGE(r, "loading sv_preprocessor.rawast failed: "
+                       << (r ? "" : r.error()));
+    return g;
+}
+
+} // namespace
+
+TEST_CASE("sv_preprocessor: `define registers an object-like macro") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define WIDTH 32\n");
+    REQUIRE(pp.is_defined("WIDTH"));
+    auto m = pp.get_macro("WIDTH");
+    REQUIRE(m != nullptr);
+    CHECK(m->name == "WIDTH");
+    CHECK(m->body == "32");
+    CHECK_FALSE(m->is_function_like);
+}
+
+TEST_CASE("sv_preprocessor: `undef removes a previously defined macro") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define FOO 1\n`undef FOO\n");
+    CHECK_FALSE(pp.is_defined("FOO"));
+}
+
+TEST_CASE("sv_preprocessor: `ifdef takes the body when macro is defined") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define RVFI\n"
+        "`ifdef RVFI\n"
+        "  output logic rvfi_valid,\n"
+        "`endif\n");
+    CHECK(out.find("rvfi_valid") != std::string::npos);
+}
+
+TEST_CASE("sv_preprocessor: `ifdef drops the body when macro is undefined") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`ifdef NEVER_DEFINED\n"
+        "  output logic should_not_appear,\n"
+        "`endif\n");
+    CHECK(out.find("should_not_appear") == std::string::npos);
+}
+
+TEST_CASE("sv_preprocessor: `ifndef takes the body when macro is undefined") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`ifndef NEVER_DEFINED\n"
+        "  output logic should_appear,\n"
+        "`endif\n");
+    CHECK(out.find("should_appear") != std::string::npos);
+}
+
+TEST_CASE("sv_preprocessor: `ifdef + `else takes the else branch when macro undefined") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`ifdef NEVER_DEFINED\n"
+        "  body_branch\n"
+        "`else\n"
+        "  else_branch\n"
+        "`endif\n");
+    CHECK(out.find("else_branch") != std::string::npos);
+    CHECK(out.find("body_branch") == std::string::npos);
+}
+
+TEST_CASE("sv_preprocessor: nested `ifdef nests correctly") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define OUTER\n"
+        "`ifdef OUTER\n"
+        "  outer_visible\n"
+        "  `ifdef INNER\n"
+        "    inner_hidden\n"
+        "  `endif\n"
+        "  outer_after\n"
+        "`endif\n");
+    CHECK(out.find("outer_visible") != std::string::npos);
+    CHECK(out.find("outer_after") != std::string::npos);
+    CHECK(out.find("inner_hidden") == std::string::npos);
+}
+
+TEST_CASE("sv_preprocessor: predefined option seeds macro state at construction") {
+    auto g = load_sv_preprocessor();
+    PpOptions opts;
+    opts.predefined = "`define DSIM\n";
+    Preprocessor pp(g, std::move(opts));
+    CHECK(pp.is_defined("DSIM"));
+    auto out = pp.process(
+        "`ifdef DSIM\n"
+        "  sim_only\n"
+        "`endif\n");
+    CHECK(out.find("sim_only") != std::string::npos);
 }
 
 TEST_CASE("PpRole: enum round-trips for every named role") {

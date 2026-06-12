@@ -1,0 +1,102 @@
+// grammars/sv_preprocessor.rawast — SystemVerilog preprocessor.
+//
+// Phase 1.2 minimal: object-like `define / `undef / `ifdef / `ifndef
+// (with optional `else and recursive nesting), plus pass-through
+// for any other content. Function-like macros, `\`include`, `\`if`
+// expressions, token paste, and stringification arrive in Phase 2.
+//
+// Rules with the `:#role="..."` engine annotation tell the
+// Preprocessor walker what conceptual operation each rule plays.
+// Convention: every role-bearing rule ALSO emits a `type` field via
+// a const binding (`:type="define"`, etc.) so the walker can
+// dispatch at parse time. The duplication is intentional —
+// `#role` lives at grammar-load time (validation), `type:` lives
+// at parse-output time (runtime dispatch).
+//
+// The `sv_pp_text_line` terminal is the catch-all: it consumes a
+// single line of source (including the trailing newline) but fails
+// on `\`endif` and `\`else` so PP_FILE's outer repeat stops cleanly
+// at conditional-compilation boundaries.
+
+use: std, sv
+
+start: <PP_FILE>
+
+// Horizontal whitespace (spaces/tabs) is ignored between sibling items
+// in the directive rules. Newlines are NOT ignored — directives are
+// line-terminated and the explicit `newline` keyword in each rule
+// must match. The ignore policy propagates to every sub-rule because
+// rule-local overrides only apply where explicitly attached.
+//
+// Inside terminal parsers (sv_pp_text_line, sv_line_text) the ignore
+// list has no effect — those consume raw bytes — so PP_TEXT preserves
+// source whitespace verbatim for round-tripping.
+PP_FILE ignore linespace: sequence array { repeat <PP_ITEM> }
+
+PP_ITEM: choice {
+  <PP_DEFINE>,
+  <PP_UNDEF>,
+  <PP_IFDEF>,
+  <PP_IFNDEF>,
+  <PP_TEXT>
+}
+
+// `define IDENT body\n
+PP_DEFINE: sequence dict {
+  "`define":type="define",
+  sv_identifier:name=@,
+  sv_line_text:body=@,
+  sv_eol
+}:#role="define"
+
+// `undef IDENT\n
+PP_UNDEF: sequence dict {
+  "`undef":type="undef",
+  sv_identifier:name=@,
+  sv_eol
+}:#role="undef"
+
+// `ifdef COND
+//   ...body...
+// [`else
+//   ...else_branch...]
+// `endif
+//
+// body and else_branch are arrays of PP_ITEM. The body's repeat
+// naturally stops at `\`else` or `\`endif` because sv_pp_text_line
+// (the catch-all in PP_TEXT) fails on those tokens, no other PP_ITEM
+// alternative matches them, and the repeat halts.
+PP_IFDEF: sequence dict {
+  "`ifdef":type="ifdef",
+  sv_identifier:cond=@,
+  sv_eol,
+  <PP_BODY>:body=@,
+  ?<PP_ELSE_CLAUSE>:else_branch=@,
+  "`endif",
+  sv_eol
+}:#role="ifdef"
+
+PP_IFNDEF: sequence dict {
+  "`ifndef":type="ifndef",
+  sv_identifier:cond=@,
+  sv_eol,
+  <PP_BODY>:body=@,
+  ?<PP_ELSE_CLAUSE>:else_branch=@,
+  "`endif",
+  sv_eol
+}:#role="ifndef"
+
+PP_BODY: sequence array { repeat <PP_ITEM> }
+
+PP_ELSE_CLAUSE: sequence array {
+  "`else",
+  sv_eol,
+  repeat <PP_ITEM>
+}
+
+// Pass-through line. Captures one source line including its trailing
+// newline. sv_pp_text_line fails on `\`endif`/`\`else` so this rule
+// (last in the PP_ITEM choice) does not eat conditional terminators.
+PP_TEXT: sequence dict {
+  sv_pp_text_line:type="text":text=@
+}:#role="text"
