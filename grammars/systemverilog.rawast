@@ -185,6 +185,7 @@ PARAM_DECL_OR_LOCAL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
   <PARAM_DECL_VALUE>,
+  <PARAM_DECL_UNTYPED>,
   <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_IMPLICIT>
 }
@@ -210,8 +211,20 @@ PARAM_DECL: choice {
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
   <PARAM_DECL_VALUE>,
+  <PARAM_DECL_UNTYPED>,
   <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_IMPLICIT>
+}
+
+// `parameter NAME = expr` — untyped parameter, default type is int
+// per SV LRM. Must precede USERTYPE in the choice since USERTYPE's
+// `sv_qualified_type:type_spec=@` would happily eat NAME and then
+// fail when the trailing `=` isn't followed by another identifier
+// for the actual parameter name. Requires `=` to commit the match.
+PARAM_DECL_UNTYPED: sequence {
+  'parameter':@:type="param_untyped",
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
 }
 
 // `parameter [<pkg>::]<type_name> <NAME> [= <expr>]` — user-typed
@@ -249,7 +262,7 @@ PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 // TYPE_SPEC is REQUIRED here (not optional) so this rule only matches
 // when the parameter type is a built-in keyword. `parameter MyType x`
 // falls through to PARAM_DECL_USERTYPE which reads the type via
-// sv_identifier.
+// sv_qualified_type.
 PARAM_DECL_VALUE: sequence {
   'parameter':@:type="param",
   <TYPE_SPEC>:type_spec=@,
