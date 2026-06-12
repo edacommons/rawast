@@ -195,6 +195,7 @@ PARAM_DECL_OR_LOCAL: choice {
 PARAM_DECL_LOCALPARAM: sequence {
   'localparam':@:type="localparam_port",
   ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
@@ -286,6 +287,7 @@ PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 // `'parameter'` prefix.
 PARAM_DECL_IMPLICIT: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="param_implicit",
+  ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
@@ -369,6 +371,7 @@ PORT_LIST_NONANSI: sequence dict {
 PORT_DECL_ANSI: sequence dict {
   <PORT_DIRECTION>:direction=@,
   ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
@@ -524,6 +527,7 @@ MODULE_ITEM: choice {
 PORT_DECL_STMT: sequence dict {
   <PORT_DIRECTION>:direction=@:type="port_decl",
   ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   repeat+ sv_identifier:names[]=@ separator ",",
   ";"
@@ -1027,6 +1031,7 @@ TASK_PORT_LIST: sequence dict {
 TASK_PORT: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
   ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@
 }
@@ -1094,6 +1099,7 @@ LOCAL_VAR_DECL: choice {
 
 LOCAL_VAR_DECL_BUILTIN: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="local_var_decl",
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
   ?<RANGE>:unpacked=@,
@@ -1220,6 +1226,7 @@ FOR_INIT_GENVAR: sequence dict {
 
 FOR_INIT_DECL: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="for_init_decl",
+  ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
   "=", <EXPR>:value=@
@@ -2253,6 +2260,7 @@ CLASS_PROPERTY: sequence dict {
   ?'var':is_var=true,
   ?<RAND_QUAL>:rand=@,
   <TYPE_SPEC>:type_spec=@:type="class_property",
+  ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<ARRAY_KIND_SUFFIX>:array_kind=@,
