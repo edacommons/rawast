@@ -215,6 +215,22 @@ public:
     void reset() { state_ = {}; }
 
 private:
+    // Walk the value tree produced by parsing through pp_grammar_,
+    // dispatching on the `type` field that role-bearing rules emit.
+    // Appends emitted text to `out`. Recurses into arrays (PP_FILE
+    // items, conditional bodies) and dispatches dicts based on
+    // their `type` field. Strings pass through verbatim — convenient
+    // for grammars that emit raw text segments without wrapping.
+    void walk(const ValuePtr& v, std::string& out);
+
+    // Per-role handlers. Defined here rather than as free functions
+    // so they have direct access to state_ and opts_.
+    void handle_define(const class DictValue& d);
+    void handle_undef(const class DictValue& d);
+    void handle_macro_use(const class DictValue& d, std::string& out);
+    void handle_ifdef(const class DictValue& d, std::string& out,
+                      bool invert);
+
     const Grammar&    pp_grammar_;
     PpOptions         opts_;
     PreprocessorState state_;
