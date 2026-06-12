@@ -215,6 +215,101 @@ TEST_CASE("sv_preprocessor: predefined option seeds macro state at construction"
     CHECK(out.find("sim_only") != std::string::npos);
 }
 
+// ─── Function-like macros ───────────────────────────────────────────────
+
+TEST_CASE("function-like: define captures params and body separately") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define MAX(a, b) ((a) > (b) ? (a) : (b))\n");
+    auto m = pp.get_macro("MAX");
+    REQUIRE(m != nullptr);
+    CHECK(m->is_function_like);
+    REQUIRE(m->params.size() == 2);
+    CHECK(m->params[0] == "a");
+    CHECK(m->params[1] == "b");
+    CHECK(m->body == "((a) > (b) ? (a) : (b))");
+}
+
+TEST_CASE("function-like: object-like define unchanged") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define WIDTH 32\n");
+    auto m = pp.get_macro("WIDTH");
+    REQUIRE(m != nullptr);
+    CHECK_FALSE(m->is_function_like);
+    CHECK(m->params.empty());
+    CHECK(m->body == "32");
+}
+
+TEST_CASE("function-like: macro use with args expands via substitution") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define SQ(x) ((x) * (x))\n");
+    auto out = pp.process("`SQ(5)\n");
+    // Substitution: x → 5, so body becomes "((5) * (5))".
+    CHECK(out.find("((5) * (5))") != std::string::npos);
+}
+
+TEST_CASE("function-like: multi-arg substitution") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define ADD(a, b) (a + b)\n");
+    auto out = pp.process("`ADD(x, y)\n");
+    CHECK(out.find("(x + y)") != std::string::npos);
+}
+
+TEST_CASE("function-like: arity mismatch warns and emits body verbatim") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define TWO(a, b) (a + b)\n");
+    pp.process("`TWO(only_one)\n");
+    REQUIRE(pp.warnings().size() >= 1);
+    bool found_arity_warn = false;
+    for (const auto& w : pp.warnings()) {
+        if (w.message.find("expects 2 args") != std::string::npos) {
+            found_arity_warn = true;
+            break;
+        }
+    }
+    CHECK(found_arity_warn);
+}
+
+TEST_CASE("function-like: object-like macro use without args still works") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    pp.process("`define PI 3.14\n");
+    auto out = pp.process("`PI\n");
+    CHECK(out.find("3.14") != std::string::npos);
+}
+
+TEST_CASE("function-like: substitution only replaces whole identifier tokens") {
+    auto g = load_sv_preprocessor();
+    Preprocessor pp(g);
+    // Body contains identifier `a` and `aaa`; only `a` substitutes.
+    pp.process("`define M(a) a + aaa\n");
+    auto out = pp.process("`M(42)\n");
+    // After substitution: "42 + aaa" — `aaa` is NOT a match for `a`
+    CHECK(out.find("42 + aaa") != std::string::npos);
+    CHECK(out.find("42aa") == std::string::npos);  // not greedy
+}
+
+TEST_CASE("function-like: PP_MACRO_USE does not eat `endif terminator") {
+    auto g = load_sv_preprocessor();
+    PpOptions opts;
+    opts.predefined = "`define OUTER\n";
+    Preprocessor pp(g, std::move(opts));
+    auto out = pp.process(
+        "`ifdef OUTER\n"
+        "  inside\n"
+        "`endif\n"
+        "after\n");
+    // Both `inside` and `after` should appear — if PP_MACRO_USE
+    // matched `endif as a macro name, the body would extend
+    // through the rest of input.
+    CHECK(out.find("inside") != std::string::npos);
+    CHECK(out.find("after") != std::string::npos);
+}
+
 // ─── Source map tests ───────────────────────────────────────────────────
 
 TEST_CASE("source map: plain text passes through with provenance") {

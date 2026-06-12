@@ -38,6 +38,7 @@ PP_ITEM: choice {
   <PP_UNDEF>,
   <PP_IFDEF>,
   <PP_IFNDEF>,
+  <PP_MACRO_USE>,
   <PP_TEXT>
 }
 
@@ -92,6 +93,27 @@ PP_ELSE_CLAUSE: sequence array {
   "`else",
   sv_eol,
   repeat <PP_ITEM>
+}
+
+// Standalone macro use on its own source line: `\`MACRO_NAME` with
+// optional `(arg1, arg2)` argument list. Inline macro uses (embedded
+// mid-line) currently pass through PP_TEXT — token-level expansion
+// is a later phase. `sv_pp_macro_name` rejects `\`endif`/`\`else` so
+// those terminators flow through to the enclosing PP_IFDEF/PP_IFNDEF.
+//
+// Arguments are captured raw via `sv_balanced_arg`, which tracks
+// nested parens; commas inside `f(x, y)` stay part of one arg.
+PP_MACRO_USE: sequence dict {
+  "`":type="macro_use",
+  sv_pp_macro_name:name=@,
+  ?<PP_MACRO_ARGS>:args=@,
+  sv_eol
+}:#role="macro_use"
+
+PP_MACRO_ARGS: sequence array {
+  "(",
+  repeat sv_balanced_arg separator ",",
+  ")"
 }
 
 // Pass-through line. Captures one source line including its trailing

@@ -336,12 +336,128 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
     // well-formed preprocessor AST; ignore rather than fail.
 }
 
+namespace {
+
+void trim_horiz(std::string& s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) {
+        s.erase(0, 1);
+    }
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+}
+
+// Split a parameter list (the text BETWEEN `(` and `)`, exclusive)
+// into trimmed identifier names. Splits on `,` at paren depth 0
+// so a param like `f(x, y)` would stay one token — though real
+// macro parameter lists are flat identifiers in practice.
+std::vector<std::string> split_params(const std::string& body) {
+    std::vector<std::string> out;
+    int depth = 0;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        char c = body[i];
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        else if (c == ',' && depth == 0) {
+            std::string p = body.substr(start, i - start);
+            trim_horiz(p);
+            if (!p.empty()) out.push_back(std::move(p));
+            start = i + 1;
+        }
+    }
+    std::string last = body.substr(start);
+    trim_horiz(last);
+    if (!last.empty()) out.push_back(std::move(last));
+    return out;
+}
+
+// Substitute parameter identifiers in `body` with the corresponding
+// arg values. Scans body for identifier tokens; if the identifier
+// matches a param name, replace with the arg. All other bytes
+// (operators, literals, whitespace) are copied verbatim.
+//
+// Phase 2.1 scope: simple identifier substitution. Token paste
+// (\`\`) and stringification (\`"...\`") arrive in Phase 2.5.
+std::string substitute_params(const std::string& body,
+                              const std::vector<std::string>& params,
+                              const std::vector<std::string>& args) {
+    if (params.size() != args.size() || params.empty()) {
+        return body;
+    }
+    std::unordered_map<std::string, std::string> map;
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        std::string arg = args[i];
+        trim_horiz(arg);
+        map[params[i]] = std::move(arg);
+    }
+    std::string out;
+    out.reserve(body.size());
+    std::size_t i = 0;
+    while (i < body.size()) {
+        unsigned char uc = static_cast<unsigned char>(body[i]);
+        if (std::isalpha(uc) || body[i] == '_') {
+            std::size_t start = i;
+            while (i < body.size()) {
+                unsigned char c = static_cast<unsigned char>(body[i]);
+                if (!std::isalnum(c) && body[i] != '_' && body[i] != '$') {
+                    break;
+                }
+                ++i;
+            }
+            std::string ident = body.substr(start, i - start);
+            auto it = map.find(ident);
+            if (it != map.end()) out += it->second;
+            else out += ident;
+        } else {
+            out.push_back(body[i]);
+            ++i;
+        }
+    }
+    return out;
+}
+
+} // namespace
+
 void Preprocessor::handle_define(const DictValue& d) {
     MacroDef m;
     m.name = dict_string_or_empty(d, "name");
     if (m.name.empty()) return;
-    m.body = dict_string_or_empty(d, "body");
-    m.is_function_like = false;  // Phase 1.2: object-like only.
+    auto raw_body = dict_string_or_empty(d, "body");
+
+    // Detect function-like form: body begins with `(`. The SV LRM
+    // strict distinction (no space between name and `(`) is lost
+    // because the grammar's `ignore linespace` eats any spaces
+    // there — pragmatically fine since UVM / Ibex code always
+    // writes function-like macros with no space anyway.
+    //
+    // Find the matching `)` at paren depth 0; if it's followed by
+    // body content, the prefix is the parameter list. If matching
+    // fails or `(` is unmatched, fall back to object-like.
+    if (!raw_body.empty() && raw_body.front() == '(') {
+        int depth = 1;
+        std::size_t i = 1;
+        while (i < raw_body.size() && depth > 0) {
+            char c = raw_body[i];
+            if (c == '(') ++depth;
+            else if (c == ')') --depth;
+            if (depth > 0) ++i;
+        }
+        if (depth == 0) {
+            // raw_body[1..i] = params (exclusive of parens),
+            // raw_body[i+1..] = body content (with leading space).
+            m.params = split_params(raw_body.substr(1, i - 1));
+            std::string body = raw_body.substr(i + 1);
+            trim_horiz(body);
+            m.body = std::move(body);
+            m.is_function_like = true;
+            state_.macros[m.name] = std::move(m);
+            return;
+        }
+    }
+    // Object-like: body is the captured text verbatim.
+    m.body = std::move(raw_body);
+    m.is_function_like = false;
     state_.macros[m.name] = std::move(m);
 }
 
@@ -357,58 +473,97 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     auto name = dict_string_or_empty(d, "name");
     if (name.empty()) return;
 
-    // Source span for the entire macro-use site (e.g. `\`UVM_INFO`).
-    // For Phase 2.0 we approximate as `\`` + name (no args yet —
-    // function-like macro uses arrive in Phase 2.1; we'll widen
-    // the span to cover the arg list when those land).
-    std::size_t use_src_start = src_cursor;
-    std::size_t use_src_len = 1 + name.size();  // backtick + name
+    // Pull raw argument strings out of the AST. PP_MACRO_ARGS
+    // captures them as an array of sv_balanced_arg strings —
+    // each arg is the raw text between commas at paren depth 0.
+    std::vector<std::string> args;
+    if (auto args_val = dict_value_or_null(d, "args")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(args_val)) {
+            for (const auto& a : arr->data()) {
+                if (auto s = std::dynamic_pointer_cast<StringValue>(a)) {
+                    args.push_back(s->data());
+                }
+            }
+        }
+    }
+
+    // Locate the `\`NAME` site in the source. PP_MACRO_USE consumes
+    // a full line (including the trailing newline via sv_eol), so
+    // the source span spans from the backtick to end-of-line.
+    std::size_t use_src_start = locate_item(source, src_cursor, "`" + name);
+    std::size_t use_src_end = scan_past_directive_line(source, use_src_start);
+    std::size_t use_src_len = use_src_end - use_src_start;
+    bool consumed_newline = use_src_end > use_src_start
+        && (source[use_src_end - 1] == '\n' || source[use_src_end - 1] == '\r');
+
+    auto emit_expansion = [&](const std::string& body, const std::string& span_name) {
+        // PP_MACRO_USE in our line-based grammar consumes the
+        // trailing newline via sv_eol. Replicate it on the
+        // expansion side so the output keeps line structure.
+        record_span(parent_span_id, use_src_start, use_src_len,
+                    out.size(), span_name);
+        out += body;
+        if (consumed_newline
+            && (body.empty() || body.back() != '\n')) {
+            out += '\n';
+        }
+    };
 
     auto it = state_.macros.find(name);
     if (it != state_.macros.end()) {
-        // Object-like expansion: emit body verbatim. Provenance
-        // for the emitted bytes points at the call site (the
-        // user-facing convention — errors blame the call, not the
-        // body). Phase 2.1 will introduce a body span as parent
-        // so the full expansion chain is preserved.
-        const auto& body = it->second.body;
-        if (!body.empty()) {
-            record_span(parent_span_id, use_src_start,
-                        use_src_len, out.size(),
-                        "macro " + name + " expansion");
-            out += body;
+        const auto& macro = it->second;
+        std::string emitted;
+        if (macro.is_function_like) {
+            if (macro.params.size() == args.size()) {
+                emitted = substitute_params(macro.body, macro.params, args);
+            } else {
+                // Arity mismatch — warn and emit body verbatim.
+                state_.warnings.push_back(
+                    {"macro `" + name + " expects " +
+                     std::to_string(macro.params.size()) +
+                     " args, got " + std::to_string(args.size()),
+                     state_.current_file, state_.current_line});
+                emitted = macro.body;
+            }
+        } else {
+            emitted = macro.body;
         }
-        src_cursor = use_src_start + use_src_len;
+        emit_expansion(emitted, "macro " + name + " expansion");
+        src_cursor = use_src_end;
         return;
     }
+
     // Undefined — apply policy.
-    switch (opts_.on_undefined) {
-        case PpOnUndefined::Leave: {
-            record_span(parent_span_id, use_src_start,
-                        use_src_len, out.size(),
-                        "undefined macro use");
-            out += "`";
-            out += name;
-            src_cursor = use_src_start + use_src_len;
-            return;
+    auto leave_emit = [&]() {
+        std::string emit = "`" + name;
+        if (!args.empty()) {
+            emit += "(";
+            for (std::size_t i = 0; i < args.size(); ++i) {
+                if (i > 0) emit += ",";
+                emit += args[i];
+            }
+            emit += ")";
         }
+        emit_expansion(emit, "undefined macro use");
+    };
+
+    switch (opts_.on_undefined) {
+        case PpOnUndefined::Leave:
+            leave_emit();
+            src_cursor = use_src_end;
+            return;
         case PpOnUndefined::Empty:
-            src_cursor = use_src_start + use_src_len;
+            src_cursor = use_src_end;
             return;
         case PpOnUndefined::Warn:
             state_.warnings.push_back(
                 {"undefined macro `" + name, state_.current_file,
                  state_.current_line});
-            record_span(parent_span_id, use_src_start,
-                        use_src_len, out.size(),
-                        "undefined macro use");
-            out += "`";
-            out += name;
-            src_cursor = use_src_start + use_src_len;
+            leave_emit();
+            src_cursor = use_src_end;
             return;
         case PpOnUndefined::Error:
-            throw std::runtime_error(
-                "undefined macro `" + name);
+            throw std::runtime_error("undefined macro `" + name);
     }
 }
 

@@ -448,6 +448,45 @@ SaveResult SvEolParser::unparse(const Value& v) const {
         "SvEolParser::unparse expects StringValue"});
 }
 
+// --- SvPpMacroNameParser ------------------------------------------------
+
+SvPpMacroNameParser::SvPpMacroNameParser() : Parser("sv_pp_macro_name") {}
+
+ParseResult SvPpMacroNameParser::parse(StreamReader& sr) {
+    sr.mark();
+    auto first = sr.peek();
+    if (!first || !is_simple_id_start(*first)) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(), "sv_pp_macro_name: expected identifier start"});
+    }
+    std::string name;
+    name.push_back(*first);
+    sr.get();
+    while (auto c = sr.peek()) {
+        if (!is_simple_id_cont(*c)) break;
+        name.push_back(*c);
+        sr.get();
+    }
+    // Preprocessor terminator keywords — refuse to match them as
+    // a macro name so the enclosing `\`ifdef`/`\`ifndef` rule can
+    // claim the `\`endif` / `\`else` directive instead.
+    if (name == "endif" || name == "else") {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            sr.position(),
+            "sv_pp_macro_name: \`" + name + " is a terminator, not a macro"});
+    }
+    sr.accept();
+    return make_string(std::move(name));
+}
+
+SaveResult SvPpMacroNameParser::unparse(const Value& v) const {
+    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
+    return tl::unexpected(SaveError{
+        "SvPpMacroNameParser::unparse expects StringValue"});
+}
+
 // --- Group registration -------------------------------------------------
 
 namespace {
@@ -474,6 +513,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_eol", []() {
             return std::make_unique<SvEolParser>();
+        }},
+        ParserSpec{"sv_pp_macro_name", []() {
+            return std::make_unique<SvPpMacroNameParser>();
         }},
         ParserSpec{"sv_balanced_arg", []() {
             return std::make_unique<SvBalancedArgParser>();
