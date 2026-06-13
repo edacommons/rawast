@@ -36,23 +36,25 @@ start: <SCRIPT>
 // 1. SCRIPT context — top-level Tcl script
 // ═══════════════════════════════════════════════════════════════════
 
+// List-binding pattern: `repeat <X>:commands[]=@ separator <SEP_RUN>`
+// puts COMMAND values into `commands[]` while SEP_RUN stays
+// structural-only (consumed on parse, emitted on save, never in the
+// AST). Same shape as systemverilog.rawast's `repeat+ <X>:names[]=@
+// separator ","` pattern. The intermediate COMMANDS rule is dropped —
+// it added an array layer that captured separator values into the
+// array, breaking save dispatch.
 SCRIPT ignore tcl.hspace: sequence dict {
   ?<SEP_RUN>,
-  <COMMANDS>:commands=@,
+  repeat <COMMAND>:commands[]=@ separator <SEP_RUN> newline,
   ?<SEP_RUN>
 }
 
-COMMANDS: sequence array {
-  repeat <COMMAND> separator <SEP_RUN>
-}
-
-// Wrap in a `dict` container so the null values emitted by the SEPs
-// (tcl.newline returns null_value, `;` is a Key with no value) are
-// caught locally and don't bubble into the COMMANDS array. Empty-dict
-// entries between commands are the visible artefact and trivially
-// filtered downstream.
-SEP_RUN: sequence dict { repeat+ <SEP> }
-SEP: choice { ";", tcl.newline }
+// SEP_RUN: one or more command separators (`\n` or `;`) between
+// commands. Parse accepts both forms via tcl.command_sep; save emits
+// canonical `\n`. The form distinction (whether the original used `;`
+// or `\n`) is dropped — re-parse of saved output preserves AST
+// equivalence (each emitted `\n` is one command_sep).
+SEP_RUN: sequence { repeat+ tcl.command_sep }
 
 COMMAND: choice {
   <COMMENT>,
@@ -67,7 +69,13 @@ GENERIC_CMD: sequence dict {
   <WORDS>:type="command":words=@
 }
 
-WORDS: sequence array { repeat+ <WORD> }
+// `space` postfix is a save-direction pretty-print hint: emit ` ` after
+// each WORD. Parse ignores the postfix and uses the inherited
+// `ignore tcl.hspace` from SCRIPT to consume runs of inter-word
+// whitespace. A trailing space before the structural `\n` or `;` is
+// re-parse-safe because hspace is ignored at every WORDS entry point.
+// Pattern lifted from grammars/lefdef.rawast (CLASS_LIST etc.).
+WORDS: sequence array { repeat+ <WORD> space }
 
 // ─── Word flavours ─────────────────────────────────────────────────
 
@@ -136,13 +144,51 @@ SEGMENT: choice {
 // alternative fires only after bounded-rewind on VAR_SEG failure.
 DOLLAR_LITERAL: sequence dict { "$":type="literal":value="$" }
 
-VAR_SEG: sequence dict {
+// Two forms keyed by `form` field — keeps round-trip exact.
+//
+//   `$name`        → {type:"var", form:"bare",   name:"name"}
+//   `$arr(idx)`    → {type:"var", form:"bare",   name:"arr", index:{...}}
+//   `${name}`      → {type:"var", form:"braced", raw:"name"}
+//   `${a b c}`     → {type:"var", form:"braced", raw:"a b c"}
+//
+// Per Tcl semantics: braced form is opaque to the primary parse — its
+// content is captured verbatim and not re-parsed. Consumers wanting
+// the bare-equivalent name from a braced form run their own second
+// pass (or subparse via tcl.var_name's braced branch).
+//
+// `?<VAR_INDEX>` only applies to bare form. `${name}(idx)` per the
+// Tcl spec is `${name}` followed by literal `(idx)`, not array
+// indexing — the braced form terminates at the `}` and what follows
+// is a separate segment.
+//
+// BRACED is tried first because the bare-form parser (tcl.var_name)
+// accepts both forms; without ordering it would shadow the braced
+// alt and we'd lose the form distinction.
+VAR_SEG: choice {
+  <VAR_SEG_BRACED>,
+  <VAR_SEG_BARE>
+}
+
+VAR_SEG_BARE: sequence dict {
   "$",
-  tcl.var_name:type="var":name=@,
+  tcl.var_name:type="var":form="bare":name=@,
   ?<VAR_INDEX>
 }
 
-VAR_INDEX: sequence dict {
+VAR_SEG_BRACED: sequence dict {
+  "$":type="var":form="braced",
+  "{",
+  *:raw=@,
+  "}"
+}
+
+// Non-container sequence: VAR_INDEX exists for structural scaffolding
+// (the `(...)` parens) around exactly one meaningful payload (the
+// index expression). Its `:index=@` binding flows up into the caller's
+// dict — VAR_SEG gets `{type, name, index}` directly rather than
+// `{type, name, var_index: {index: ...}}`. Same pattern as
+// systemverilog.rawast's NET_INIT.
+VAR_INDEX: sequence {
   "(",
   *:index=@:#subparse="WORD_SEGMENTS",
   ")"
