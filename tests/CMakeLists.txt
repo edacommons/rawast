@@ -29,6 +29,7 @@ add_executable(rawast_tests
     test_gdsii.cpp
     test_preprocessor.cpp
     test_neg_lookahead.cpp
+    test_scope_parsers.cpp
 )
 
 set_target_properties(rawast_tests PROPERTIES

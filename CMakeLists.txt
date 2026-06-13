@@ -60,6 +60,7 @@ add_library(rawast STATIC
     src/parsers_lefdef.cpp
     src/parsers_tcl.cpp
     src/parsers_sv.cpp
+    src/parsers_scope.cpp
     src/parsers_registry.cpp
     src/preprocessor.cpp
 )
