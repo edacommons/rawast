@@ -16,7 +16,6 @@
 #include <rawast/parsers_gdsii.hpp>
 #include <rawast/parsers_lefdef.hpp>
 #include <rawast/parsers_tcl.hpp>
-#include <rawast/parsers_sv.hpp>
 #include <rawast/parsers_registry.hpp>
 #include <rawast/to_value.hpp>
 
@@ -120,7 +119,6 @@ NB_MODULE(_native, m) {
     rawast::register_gdsii_parser_group();
     rawast::register_lefdef_parser_group();
     rawast::register_tcl_parser_group();
-    rawast::register_sv_parser_group();
 
     nb::class_<rawast::Grammar>(m, "Grammar",
         "A loaded grammar — drives parse, save, and lint via its methods.")

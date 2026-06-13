@@ -21,7 +21,6 @@ add_executable(rawast_tests
     test_pool.cpp
     test_save.cpp
     test_loader.cpp
-    test_parsers_sv.cpp
     test_to_value.cpp
     test_linter.cpp
     test_callbacks.cpp
