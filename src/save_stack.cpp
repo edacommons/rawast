@@ -1054,10 +1054,18 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         return true;
 
     case NodeKind::Raw:
-        // Raw at the top of an alt — consumes whatever StringValue is
-        // queued. Always dispatchable when there's a value.
-        return peek_value != nullptr
-            && peek_value->type() == ValueType::String;
+        // Raw at the top of an alt — consumes whatever value is queued.
+        // Without #subparse, the parse-side stored a StringValue and
+        // the save side writes it verbatim, so dispatch requires a
+        // string. With #subparse, the parse-side stored a structured
+        // sub-tree (Dict/Array) that save will re-serialize through
+        // the subparse rule (see NodeKind::Raw branch in
+        // do_consume_body), so any non-null value is dispatchable —
+        // the dispatch check must mirror the save path's tolerance
+        // for non-string values when subparse_start is valid.
+        if (!peek_value) return false;
+        if (n.subparse_start.valid()) return true;
+        return peek_value->type() == ValueType::String;
 
     case NodeKind::Ref:
         return can_consume_peek(g, g.resolve_ref(node_id), peek_value, peek_key, s);

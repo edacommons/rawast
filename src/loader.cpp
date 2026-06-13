@@ -241,10 +241,6 @@ build_item(Grammar& g, const Value& val) {
                 const auto& e = entries[0];
                 if (e.name.empty()) {
                     only_var = true;   // empty-name = var sentinel
-                } else if (e.name == "type") {
-                    // Back-compat: {type: "var"} also sets is_name on expr.
-                    auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
-                    if (sv && sv->data() == "var") only_var = true;
                 }
                 if (!only_var) {
                     return tl::unexpected(
@@ -428,15 +424,6 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                     if (e.name.empty()) {
                         set_var = true;
                         continue;
-                    }
-                    // Back-compat: {type: "var"} also sets is_name on expr.
-                    if (e.name == "type") {
-                        if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {
-                            if (sv->data() == "var") {
-                                set_var = true;
-                                continue;
-                            }
-                        }
                     }
                     // Engine-reserved annotations (`:#name=...`). The
                     // `reserved` flag is set by the meta-grammar's
@@ -879,9 +866,20 @@ populate(Grammar& g, NodeId target, const Value& body) {
                 continue;
             }
             if (e.name == "subparse") {
-                return tl::unexpected(
-                    "#subparse: not meaningful on a rule body "
-                    "(applies to a Parse-kind child binding)");
+                // #subparse is meaningful on a Parse-kind child binding
+                // (a Parse terminal inside a sequence/rule body). For
+                // flat-form items, build_inline calls populate() with
+                // the item dict itself — the item's bindings end up
+                // here even though append_items_array already wired
+                // #subparse at the item level. Skip silently: the
+                // binding has already been handled at the item layer
+                // and reaching this code path means we're inside a
+                // flat-form item, not at a true rule body. The
+                // alternative (erroring here) breaks every grammar
+                // that uses `<parser>:value=@:#subparse="RULE"` —
+                // including tcl.rawast and any future grammar built
+                // on the same pattern.
+                continue;
             }
             return tl::unexpected(
                 "unknown engine annotation '#" + e.name +
