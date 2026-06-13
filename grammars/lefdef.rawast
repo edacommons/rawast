@@ -65,11 +65,20 @@ LEF ignore whitespace line_comment: sequence dict {
 // pragmatic way to model "these statements, in any order."
 HDR: sequence dict {
   ?<VERSION_CMD>,
-  ?<NAMESCASESENSITIVE_CMD>,
-  ?<NOWIREEXTENSIONATPIN_CMD>,
   repeat <HDR_CMD>
 }
-HDR_CMD: choice { <BUSBITCHARS_CMD>, <DIVIDERCHAR_CMD> }
+// NAMESCASESENSITIVE and NOWIREEXTENSIONATPIN are documented as LEF
+// 5.4-era pre-amble directives but real files (klayout
+// regression-test corpus `issue-1282/a.lef` and `patternname/v.lef`)
+// place them AFTER BUSBITCHARS / DIVIDERCHAR. Putting all four in one
+// order-free Choice matches the pragmatic "any of these, in any
+// order" pattern the LEF readers in OpenROAD / klayout both use.
+HDR_CMD: choice {
+  <BUSBITCHARS_CMD>,
+  <DIVIDERCHAR_CMD>,
+  <NAMESCASESENSITIVE_CMD>,
+  <NOWIREEXTENSIONATPIN_CMD>
+}
 // LEF/DEF 5.8 §"VERSION": `VERSION versionNumber ;` where
 // versionNumber is a real number (5.8, 5.7, 5.6 …). Bound as
 // <NUMBER> (not identifier) to match the spec's type and to give
@@ -89,7 +98,13 @@ END_LIBRARY: sequence { "END" space, "LIBRARY" newline }
 
 LIBRARY_ITEMS: sequence array { repeat <LIBRARY_ITEM> }
 LIBRARY_ITEM: choice {
+  // UNITS_BLOCK must be tried first — UNITS_COMPACT_CMD's pattern is
+  // a strict prefix of UNITS_BLOCK's first content line. Without this
+  // order, the compact form would greedily consume `UNITS DATABASE
+  // MICRONS N ;` from a block-form file and leave its `END UNITS`
+  // tail orphaned.
   <UNITS_BLOCK>,
+  <UNITS_COMPACT_CMD>,
   <MANUFACTURINGGRID_CMD>,
   <CLEARANCEMEASURE_CMD>,
   <USEMINSPACING_CMD>,
@@ -369,6 +384,18 @@ WILD_POINT_DICT: sequence dict {
 // Spec doesn't require any particular sub-statement, so a bare
 // `UNITS\nEND UNITS` would parse.
 
+// Compact LEF UNITS form — a single-line `UNITS DATABASE MICRONS N ;`
+// with no `END UNITS` block terminator. Common in OpenROAD-generated
+// LEFs (e.g. `serv_rf_top.lef`) when the only unit declared is
+// DATABASE. Distinct rule from UNITS_BLOCK so the dispatcher can pick
+// without ambiguity — UNITS_COMPACT_CMD requires `UNITS DATABASE`
+// adjacent, the block form requires a newline after `UNITS`.
+UNITS_COMPACT_CMD: sequence dict {
+  "UNITS":type="Units" space,
+  "DATABASE" space, "MICRONS" space, <NUMBER>:database_microns=@ space,
+  ";" newline
+}
+
 UNITS_BLOCK: sequence dict {
   "UNITS":type="Units" newline,
   repeat <UNITS_SUB>,
@@ -386,7 +413,11 @@ UNITS_SUB: choice {
   <FREQUENCY_CMD>
 }
 
-DATABASE_CMD:    sequence { "DATABASE"    space, "MICRONS"     space, int:database_microns=@ space, ";" newline }
+// `DATABASE MICRONS N` per LEF 5.8 — N is documented as integer but
+// many real tools (asap7 tech LEFs, e.g.
+// `asap7_tech_1x_arrayspacing.lef`) emit it as a decimal (`1000.0`).
+// Accept either via <NUMBER>; downstream consumers can cast.
+DATABASE_CMD:    sequence { "DATABASE"    space, "MICRONS"     space, <NUMBER>:database_microns=@ space, ";" newline }
 CAPACITANCE_CMD: sequence { "CAPACITANCE" space, "PICOFARADS"  space, <NUMBER>:capacitance_pf=@  space, ";" newline }
 CURRENT_CMD:     sequence { "CURRENT"     space, "MILLIAMPS"   space, <NUMBER>:current_ma=@      space, ";" newline }
 RESISTANCE_CMD:  sequence { "RESISTANCE"  space, "OHMS"        space, <NUMBER>:resistance_ohms=@ space, ";" newline }
