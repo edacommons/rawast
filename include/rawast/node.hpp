@@ -36,6 +36,31 @@ enum class Container {
     Dict,
 };
 
+// Preprocessor semantic role for a grammar rule, set via the `:#role="..."`
+// engine-reserved binding. Annotates the rule with the conceptual operation
+// the preprocessor walker should perform when it encounters a value
+// produced by this rule. `None` (the default) means the rule has no
+// preprocessor semantics and is treated as ordinary structural data.
+//
+// String-form names used in `:#role="..."` are the lowercased variant of
+// each enumerator. See preprocessor.hpp for the string ↔ enum helpers.
+enum class PpRole {
+    None,
+    Define,
+    Undef,
+    Ifdef,
+    Ifndef,
+    If,
+    Elsif,
+    Else,
+    Endif,
+    Include,
+    MacroUse,
+    Paste,
+    Stringify,
+    Text,
+};
+
 // Strong-typed handle into the Engine's node arena.
 // Stable across arena growth (unlike list/vector iterators).
 class NodeId {
@@ -75,6 +100,14 @@ public:
     // immutable. Marks a Parse child as producing a dict-key name.
     bool is_name       = false;
     bool is_optional   = false;
+    // Negative-lookahead marker: the node matches IFF its inner
+    // production would FAIL at the current cursor, and consumes zero
+    // input either way. Surface form `!X` in .rawast (where X is a
+    // Ref, Key, or strict-Key item). Mutually meaningful with
+    // is_optional only on Refs that resolve to the same body via the
+    // chain — the parser distinguishes the two via separate frame
+    // flags and separate stream marks, so they don't collide.
+    bool is_negative   = false;
     bool has_separator = false;  // If true, children[0] is the separator.
 
     // Repeat-only: minimum number of successful iterations required. Default
@@ -141,8 +174,15 @@ public:
     // parse loop again on that string starting from `subparse_start` —
     // same grammar, different entry rule. The resulting value replaces
     // the original string in the value stream. Invalid (default) means
-    // no subparse. Set by the .rawast `subparse=<RULE>` postfix attr.
+    // no subparse. Set by the .rawast `:#subparse=<RULE>` binding.
     NodeId subparse_start;
+
+    // Preprocessor semantic role for this rule, set by `:#role="..."`.
+    // None (the default) means no preprocessor semantics. When the
+    // Preprocessor walker visits a value produced by this node, it
+    // dispatches on this role to apply the corresponding operation
+    // (register a macro, expand a use, branch on an ifdef, etc.).
+    PpRole pp_role = PpRole::None;
 
     std::vector<NodeId> children;
 };

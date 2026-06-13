@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import os
 
-from ._native import Grammar as _Grammar, __version__
+from ._native import Grammar as _Grammar, Preprocessor, __version__
 
 
 # Path to bundled grammar files. The wheel ships these under
@@ -94,6 +94,7 @@ class Grammar(_Grammar):
 
 __all__ = [
     "Grammar",
+    "Preprocessor",
     "GRAMMAR_DIR",
     "grammar_path",
     "__version__",

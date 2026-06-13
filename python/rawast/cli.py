@@ -90,6 +90,76 @@ def cmd_save(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preprocess(args: argparse.Namespace) -> int:
+    """Run a Preprocessor against an input file (or stdin) and write the
+    expanded text to stdout (or `-o PATH`). Optional side-channel dumps
+    (`--warnings`, `--spans`, `--macros`) write the corresponding state
+    to JSON files so the preprocessor's outputs can be diffed,
+    inspected, and validated independent of any downstream parse.
+
+    Why this exists: when a downstream grammar parse fails on a file
+    that uses heavy macro expansion, you can't tell from the parse
+    error alone whether the bug is in the preprocessor or in the
+    grammar. Saving the preprocessor's text+spans+warnings to disk
+    lets you inspect the actual byte stream the grammar saw, and the
+    spans dump answers "where did each output byte come from?"
+    """
+    from . import Preprocessor
+
+    pp_grammar = Grammar.load(args.grammar)
+    # Translate `-D NAME[=VALUE]` flags into a synthetic `\`define` block
+    # that the Preprocessor seeds with before any real input. Empty VALUE
+    # produces a defined-but-empty macro (the `\`ifdef` case); a VALUE
+    # is the macro body.
+    predefined_lines = []
+    for d in args.define or []:
+        name, _, value = d.partition("=")
+        if "=" in d:
+            predefined_lines.append(f"`define {name} {value}")
+        else:
+            predefined_lines.append(f"`define {name}")
+    predefined = "\n".join(predefined_lines)
+    if predefined:
+        predefined += "\n"
+
+    pp = Preprocessor(
+        pp_grammar,
+        predefined=predefined,
+        include_paths=args.include_path or [],
+        on_undefined=args.on_undefined,
+    )
+
+    if args.input == "-":
+        text = sys.stdin.read()
+        out = pp.process(text)
+    else:
+        out = pp.process_file(args.input)
+
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(out)
+    else:
+        sys.stdout.write(out)
+
+    if args.warnings:
+        with open(args.warnings, "w", encoding="utf-8") as f:
+            json.dump(list(pp.warnings), f, indent=2)
+    if args.spans:
+        with open(args.spans, "w", encoding="utf-8") as f:
+            json.dump(list(pp.spans), f, indent=2)
+    if args.macros:
+        with open(args.macros, "w", encoding="utf-8") as f:
+            json.dump(list(pp.macros), f, indent=2)
+
+    if args.warnings_to_stderr and pp.warnings:
+        for w in pp.warnings:
+            sys.stderr.write(
+                f"{w.get('file', '<input>')}:{w.get('line', 0)}: "
+                f"{w.get('message', '')}\n"
+            )
+    return 0
+
+
 def cmd_convert(args: argparse.Namespace) -> int:
     src = Grammar.load(args.read)
     dst = Grammar.load(args.write)
@@ -478,6 +548,65 @@ def main(argv: list[str] | None = None) -> int:
              "the emitted code's `from X import *` will need fixing up.",
     )
     p_pycode.set_defaults(func=cmd_pycode)
+
+    p_pp = sub.add_parser(
+        "preprocess",
+        help="Run a Preprocessor against a file (or stdin); write the "
+             "expanded text to stdout (or -o PATH). Optional side dumps "
+             "of warnings/spans/macros let you debug the preprocessor "
+             "independent of any downstream grammar.",
+    )
+    p_pp.add_argument(
+        "--grammar", required=True,
+        help="Preprocessor grammar file (e.g. grammars/sv_preprocessor.rawast)",
+    )
+    p_pp.add_argument(
+        "input",
+        help="Input file path, or `-` to read from stdin (uses process() "
+             "instead of process_file() — no filename in span/warning "
+             "frames).",
+    )
+    p_pp.add_argument(
+        "-o", "--output", metavar="PATH",
+        help="Write expanded text to PATH instead of stdout.",
+    )
+    p_pp.add_argument(
+        "-I", "--include-path", action="append", metavar="DIR",
+        help="Search DIR for `\\`include` files. Repeat for multiple "
+             "directories; searched in order.",
+    )
+    p_pp.add_argument(
+        "-D", "--define", action="append", metavar="NAME[=VALUE]",
+        help="Pre-define a macro before processing. `-D RVFI` sets it to "
+             "empty body; `-D WIDTH=32` sets the body. Repeat for many.",
+    )
+    p_pp.add_argument(
+        "--on-undefined", default="leave",
+        choices=["leave", "empty", "warn", "error"],
+        help="Behavior for `\\`MACRO` use-sites without a definition. "
+             "Default: leave the `\\`MACRO` token in the output verbatim.",
+    )
+    p_pp.add_argument(
+        "--warnings", metavar="PATH",
+        help="Dump preprocessor warnings as a JSON array to PATH.",
+    )
+    p_pp.add_argument(
+        "--spans", metavar="PATH",
+        help="Dump the source-provenance span graph as a JSON array to "
+             "PATH. Each entry maps an output byte range back to its "
+             "source position (file + offset) via the parent chain.",
+    )
+    p_pp.add_argument(
+        "--macros", metavar="PATH",
+        help="Dump the final macro table (after processing) as a JSON "
+             "array to PATH.",
+    )
+    p_pp.add_argument(
+        "--warnings-to-stderr", action="store_true",
+        help="Echo warnings to stderr in `file:line: message` form as the "
+             "preprocessor emits them, in addition to any JSON dump.",
+    )
+    p_pp.set_defaults(func=cmd_preprocess)
 
     args = parser.parse_args(argv)
     return args.func(args)

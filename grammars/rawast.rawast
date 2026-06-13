@@ -52,6 +52,7 @@ RULE_BODY: sequence dict {
   ?<RULE_IGNORE_ATTR>,
   ":",
   ?"?":optional=true,
+  ?"!":negative=true,
   <EXPR>,
   ?<BINDINGS>:bindings=@,
   repeat <POSTFIX_ATTR>
@@ -69,8 +70,12 @@ IGNORE_LIST: sequence array { repeat qualified_identifier }
 // ─── Items ──────────────────────────────────────────────────────────────
 
 // An item carries an expression, optional bindings, and postfix attrs.
+// Prefix `?` makes the item optional; prefix `!` is a negative
+// lookahead — the engine succeeds (consuming nothing) iff the inner
+// FAILS at the current cursor, and fails iff the inner matches.
 ITEM: sequence dict {
   ?"?":optional=true,
+  ?"!":negative=true,
   <EXPR>,
   ?<BINDINGS>:bindings=@,
   repeat <POSTFIX_ATTR>
@@ -175,12 +180,19 @@ PARSE_EXPR: sequence { qualified_identifier:type=@ }
 
 // ─── Bindings ───────────────────────────────────────────────────────────
 //
-// Surface:   expr:name=val:other=@:=@
+// Surface:   expr:name=val:other=@:=@:#engine=val
 // Encodes:   bindings is an ordered array of {name, value} entries. The
 //            BIND_EXPR choice dispatches on first token: `=` → NAME_BIND
 //            (var binding — emits `{var: true, value: <X>}` with no
 //            `name` field, which the loader reads as the var sentinel),
-//            identifier → VALUE_BIND.
+//            `#` → RESERVED_VALUE_BIND (engine annotation — emits
+//            `{name: <X>, value: <Y>, reserved: true}`), otherwise
+//            VALUE_BIND for plain user fields.
+//
+// The `#name` namespace is reserved for engine directives. Currently
+// recognized: `#subparse` (re-parse hook), `#role` (preprocessor
+// semantic role), `#field` (override conventional field name).
+// Unknown `#name` annotations are rejected by the loader.
 
 BINDINGS: sequence array { repeat+ <BINDING> }
 
@@ -189,10 +201,17 @@ BINDING: sequence dict {
   <BIND_EXPR>
 }
 
-BIND_EXPR: choice { <NAME_BIND>, <VALUE_BIND>}
+BIND_EXPR: choice { <NAME_BIND>, <RESERVED_VALUE_BIND>, <VALUE_BIND>}
 
 NAME_BIND: sequence {
   "=":var=true,
+  <BIND_VAL>:value=@
+}
+
+RESERVED_VALUE_BIND: sequence {
+  "#",
+  identifier:name=@:reserved=true,
+  "=",
   <BIND_VAL>:value=@
 }
 

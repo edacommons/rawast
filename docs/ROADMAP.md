@@ -34,9 +34,9 @@ The sdist + GitHub Actions release workflow already work (see [`BUILD.md`](BUILD
 
 ## M4 — Community grammar repository at 1.0
 
-The 1.0 release ships polished, spec-audited grammars for the practical EDA stack. Six grammars ship today (see [`GRAMMARS.md`](GRAMMARS.md)). M4 adds:
+The 1.0 release ships polished, spec-audited grammars for the practical EDA stack. Six grammars ship today (see [`GRAMMARS.md`](GRAMMARS.md)) — including SystemVerilog with comprehensive SV-1800 coverage (covers the netlist + RTL + verification testbench layers; production-corpus measurement is a deliverable for M4). M4 adds:
 
-- **Verilog netlist** — structural netlist subset (post-synthesis, no behavioural / generate constructs). Pairs with LEF + DEF for the full place-and-route export.
+- **SystemVerilog production-corpus run** — point the shipped SV grammar at OpenTitan, PicoRV32, and selected UVM testbench corpora; document parse rates and round-trip equivalence. The grammar already hits 100% on a 69-case real-world pattern sweep; the corpus run validates that against thousands of files in the wild.
 - **SDC** — Synopsys Design Constraints. Tcl-based; reuses the Tcl grammar's word/substitution structure with a typed-command layer on top.
 - **SPICE netlist** — Berkeley SPICE3 + common vendor extensions (HSPICE, ngspice). Subcircuit / model / parameter coverage.
 - **TOML** — for project metadata, pyproject-style config, etc. Trivial to add once Liberty unblocks.

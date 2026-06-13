@@ -112,6 +112,17 @@
         ]
       },
       {
+        "type": "key",
+        "key": "!",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "negative",
+            "value": true
+          }
+        ]
+      },
+      {
         "type": "EXPR"
       },
       {
@@ -466,6 +477,17 @@
         ]
       },
       {
+        "type": "key",
+        "key": "!",
+        "optional": true,
+        "bindings": [
+          {
+            "name": "negative",
+            "value": true
+          }
+        ]
+      },
+      {
         "type": "EXPR"
       },
       {
@@ -589,7 +611,45 @@
         "type": "NAME_BIND"
       },
       {
+        "type": "RESERVED_VALUE_BIND"
+      },
+      {
         "type": "VALUE_BIND"
+      }
+    ]
+  },
+  "RESERVED_VALUE_BIND": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "key",
+        "key": "#"
+      },
+      {
+        "type": "identifier",
+        "bindings": [
+          {
+            "name": "name",
+            "value": "@"
+          },
+          {
+            "name": "reserved",
+            "value": true
+          }
+        ]
+      },
+      {
+        "type": "key",
+        "key": "="
+      },
+      {
+        "type": "BIND_VAL",
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ]
       }
     ]
   },

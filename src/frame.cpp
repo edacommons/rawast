@@ -12,6 +12,7 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     kind_           = n.kind;
     container_      = n.container;
     is_optional_    = n.is_optional;
+    is_negative_    = n.is_negative;
     is_name_        = n.is_name;
     has_separator_  = n.has_separator;
     // Backtrack is default-on for Choice frames (standard PEG semantics:

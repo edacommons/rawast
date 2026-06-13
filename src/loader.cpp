@@ -1,6 +1,7 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_registry.hpp>
+#include <rawast/preprocessor.hpp>
 
 #include <fstream>
 #include <memory>
@@ -86,6 +87,11 @@ std::string unescape(const std::string& raw) {
 struct BindingEntry {
     std::string name;
     ValuePtr    value;
+    // True when the binding used the `:#name=...` engine-reserved
+    // namespace. The loader dispatches on the bare `name` to engine
+    // directives (#subparse, #role, #field) and rejects unknown
+    // reserved names. Plain `:name=...` bindings always carry false.
+    bool        reserved = false;
 };
 
 // Extract binding entries from a `bindings` field value. Accepts:
@@ -131,7 +137,13 @@ extract_bindings(const ValuePtr& bindings_val) {
                 vit != ed->data().end()) {
                 value = vit->second;
             }
-            entries.push_back({std::move(name), std::move(value)});
+            bool reserved = false;
+            if (auto rit = ed->data().find("reserved");
+                rit != ed->data().end()) {
+                auto bv = std::dynamic_pointer_cast<BoolValue>(rit->second);
+                if (bv && bv->data()) reserved = true;
+            }
+            entries.push_back({std::move(name), std::move(value), reserved});
         }
         return entries;
     }
@@ -229,10 +241,6 @@ build_item(Grammar& g, const Value& val) {
                 const auto& e = entries[0];
                 if (e.name.empty()) {
                     only_var = true;   // empty-name = var sentinel
-                } else if (e.name == "type") {
-                    // Back-compat: {type: "var"} also sets is_name on expr.
-                    auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
-                    if (sv && sv->data() == "var") only_var = true;
                 }
                 if (!only_var) {
                     return tl::unexpected(
@@ -407,6 +415,7 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
 
                 bool set_var = false;
                 std::string subparse_name;
+                PpRole pp_role = PpRole::None;
                 std::vector<std::pair<std::string, ValuePtr>> at_bindings;
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
@@ -416,27 +425,60 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                         set_var = true;
                         continue;
                     }
-                    // Back-compat: {type: "var"} also sets is_name on expr.
-                    if (e.name == "type") {
-                        if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {
-                            if (sv->data() == "var") {
-                                set_var = true;
-                                continue;
+                    // Engine-reserved annotations (`:#name=...`). The
+                    // `reserved` flag is set by the meta-grammar's
+                    // RESERVED_VALUE_BIND rule. Dispatch on the bare
+                    // name; reject unknown reserved names with a clear
+                    // valid-values list.
+                    if (e.reserved) {
+                        if (e.name == "subparse") {
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv) {
+                                return tl::unexpected(
+                                    "#subparse: value must be a string naming a rule");
                             }
+                            subparse_name = sv->data();
+                            continue;
                         }
+                        if (e.name == "role") {
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv) {
+                                return tl::unexpected(
+                                    "#role: value must be a string");
+                            }
+                            auto parsed = parse_pp_role(sv->data());
+                            if (!parsed) {
+                                return tl::unexpected(
+                                    "#role: unknown role '" + sv->data() +
+                                    "' (valid: define, undef, ifdef, ifndef, "
+                                    "if, elsif, else, endif, include, "
+                                    "macro_use, paste, stringify, text)");
+                            }
+                            pp_role = *parsed;
+                            continue;
+                        }
+                        if (e.name == "field") {
+                            // Field-name override; validated here, wired
+                            // when the preprocessor walker lands.
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv) {
+                                return tl::unexpected(
+                                    "#field: value must be a string");
+                            }
+                            continue;
+                        }
+                        return tl::unexpected(
+                            "unknown engine annotation '#" + e.name +
+                            "'; valid: #subparse, #role, #field");
                     }
-                    // `:subparse="RULE"` is an engine directive, not a
-                    // runtime emit — capture the rule name and DO NOT
-                    // emit it as a Value-name + Value-const pair. The
-                    // rule is resolved to a NodeId post-load.
+                    // Catch unmigrated `:subparse="RULE"` (no `#` prefix)
+                    // since 0.2.0 — the directive moved to the reserved
+                    // namespace. Silent demotion to a value binding
+                    // would break the runtime contract without a hint.
                     if (e.name == "subparse") {
-                        auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
-                        if (!sv) {
-                            return tl::unexpected(
-                                "subparse: value must be a string naming a rule");
-                        }
-                        subparse_name = sv->data();
-                        continue;
+                        return tl::unexpected(
+                            "':subparse=' is no longer recognized — "
+                            "use ':#subparse=' (engine-reserved namespace, since 0.2.0)");
                     }
                     // Value "@" means "bind to expr's parsed value".
                     if (auto sv = std::dynamic_pointer_cast<StringValue>(e.value)) {
@@ -467,6 +509,9 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 // rules are loaded (the named rule may come later).
                 if (!subparse_name.empty()) {
                     g.set_pending_subparse(*expr_child, subparse_name);
+                }
+                if (pp_role != PpRole::None) {
+                    g.node(*expr_child).pp_role = pp_role;
                 }
 
                 // Conditional bindings: when the expr is optional AND
@@ -743,6 +788,7 @@ populate(Grammar& g, NodeId target, const Value& body) {
         n.kind = NodeKind::Ref;
         n.value = make_string(*name_r);
         if (dict_bool(*dv, "optional")) g.set_optional(target);
+        if (dict_bool(*dv, "negative")) g.set_negative(target);
         return {};
     }
 
@@ -751,6 +797,15 @@ populate(Grammar& g, NodeId target, const Value& body) {
     // Universal "optional" field applies to any node kind from here on.
     if (dict_bool(*dv, "optional")) {
         g.set_optional(target);
+    }
+
+    // Universal "negative" field — surface form `!X` in .rawast. The
+    // engine inverts the inner's success/failure at this node (succeed
+    // empty if inner fails, fail if inner succeeds) and consumes zero
+    // bytes either way. See compute_node_first_bytes and the
+    // is_negative branches in parse_from.
+    if (dict_bool(*dv, "negative")) {
+        g.set_negative(target);
     }
 
     // "backtrack" field — opt-in structural rewind, currently only
@@ -771,6 +826,66 @@ populate(Grammar& g, NodeId target, const Value& body) {
     // Pretty-print attrs (indent/tab/space/newline/tail) — universal,
     // apply to any node kind. Save-side only; parse ignores them.
     apply_pretty_attrs(g, target, *dv);
+
+    // Rule-level engine-reserved bindings. Process `:#role="..."` and
+    // `:#field="..."` annotations attached to a rule body itself
+    // (as opposed to bindings on a child item, which append_items_array
+    // handles). Non-reserved bindings at rule level are ignored as
+    // before — they don't have well-defined semantics on a rule body
+    // (the wrapping pattern used to emit name markers only applies
+    // around expressions inside sequences).
+    if (auto rb_bindings = dict_value(*dv, "bindings")) {
+        auto entries_r = extract_bindings(rb_bindings);
+        if (!entries_r) return tl::unexpected(entries_r.error());
+        for (const auto& e : *entries_r) {
+            if (!e.reserved) continue;
+            if (e.name == "role") {
+                auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                if (!sv) {
+                    return tl::unexpected(
+                        "#role: value must be a string");
+                }
+                auto parsed = parse_pp_role(sv->data());
+                if (!parsed) {
+                    return tl::unexpected(
+                        "#role: unknown role '" + sv->data() +
+                        "' (valid: define, undef, ifdef, ifndef, if, "
+                        "elsif, else, endif, include, macro_use, paste, "
+                        "stringify, text)");
+                }
+                g.node(target).pp_role = *parsed;
+                continue;
+            }
+            if (e.name == "field") {
+                auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                if (!sv) {
+                    return tl::unexpected(
+                        "#field: value must be a string");
+                }
+                // Wired when the preprocessor walker lands.
+                continue;
+            }
+            if (e.name == "subparse") {
+                // #subparse is meaningful on a Parse-kind child binding
+                // (a Parse terminal inside a sequence/rule body). For
+                // flat-form items, build_inline calls populate() with
+                // the item dict itself — the item's bindings end up
+                // here even though append_items_array already wired
+                // #subparse at the item level. Skip silently: the
+                // binding has already been handled at the item layer
+                // and reaching this code path means we're inside a
+                // flat-form item, not at a true rule body. The
+                // alternative (erroring here) breaks every grammar
+                // that uses `<parser>:value=@:#subparse="RULE"` —
+                // including tcl.rawast and any future grammar built
+                // on the same pattern.
+                continue;
+            }
+            return tl::unexpected(
+                "unknown engine annotation '#" + e.name +
+                "' on rule body; valid: #role, #field");
+        }
+    }
 
     if (type == "sequence" || type == "choice" || type == "repeat") {
         if (type == "sequence") n.kind = NodeKind::Sequence;
