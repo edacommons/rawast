@@ -577,5 +577,5 @@ NB_MODULE(_native, m) {
             "root last). Empty list if the offset is outside any recorded "
             "span.");
 
-    m.attr("__version__") = "0.1.7";
+    m.attr("__version__") = "0.1.8";
 }
