@@ -373,40 +373,54 @@ Subparse is the right tool when the inner content is a genuinely DIFFERENT sub-l
 
 **Default keywords to strict (`'token'`).** When the format spec defines a reserved-word vocabulary that mustn't collide with identifiers — language keywords, section names, named clauses — author them as `'KEYWORD'` (single-quote, word-bounded) rather than `"KEYWORD"` (byte-prefix). Catches a whole class of bugs at parse time: byte-prefix `"not"` silently matches the prefix of `"notch"`, leaving `"ch"` as a phantom identifier; strict `'not'` correctly rejects, so a Choice over `'not'` / `notch` dispatches to the right branch without depending on hand-ordering. The cost of strict is one peek per match; the benefit is a class of bugs that doesn't reach runtime.
 
-**Reach for hierarchy, not flat "always wrap." When you write a precedence ladder (or any layered grammar), don't make every level emit a wrapper unconditionally.** The tempting pattern looks like:
+**Precedence ladders: the always-wrap form is the *correct* shape for rawast's predictive PEG engine, not a noisy anti-pattern.** Tempting "cleaner" forms have a hidden cost that only shows up when the grammar meets real code.
 
 ```
+// The correct shape for rawast — every level parses NEXT exactly once,
+// then peeks O(1) for the operator. Linear parse:
 LOR:  sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
 LAND: sequence dict { <BOR>:lhs=@,  repeat <LAND_TAIL>:tail[]=@ }
 BOR:  sequence dict { <BXOR>:lhs=@, repeat <BOR_TAIL>:tail[]=@ }
 ...
 ```
 
-Each level emits `{lhs, tail}` whether or not its operator fired. A bare identifier ends up with 10 layers of `{lhs:{lhs:{lhs:...}}}` wrappers piled around it from every precedence level above. That noise is real cost: every consumer downstream (Python tests, codegen, save dispatch, semantic analyzers) has to walk through those empty wrappers, and the JSON dump for `defined(X)` becomes ~80 lines of dict-of-dict before reaching the actual primary.
+The AST has a `{lhs, tail}` wrapper at every level whether or not its operator fired. A bare identifier deep in an expression ends up with one wrapper per precedence level above it. That's verbose, and it's the intrinsic trade-off for the linear parse.
 
-Use `choice { CHAIN, NEXT }` instead. CHAIN matches only when there's ≥1 operator (via `repeat+`); otherwise the choice falls through to NEXT cleanly:
+The seductive alternative looks like this:
 
 ```
+// Looks cleaner but DOES NOT WORK in rawast for real-language parsing:
 LOR:       choice { <LOR_CHAIN>, <LAND> }
 LOR_CHAIN: sequence dict { <LAND>:lhs=@, repeat+ <LOR_TAIL>:tail[]=@ }
 ```
 
-Now a bare identifier is emitted as `{type:"ident", name:"X"}` with no wrappers. `a && b` is one chain node at the AND level — every other level passes through. The AST shape mirrors the actual operator structure of the expression instead of the structure of the grammar's precedence ladder.
+In packrat PEG (sv-parser, tree-sitter), memoization makes this work — parsing LAND inside LOR_CHAIN remembers the result so the fallthrough to `<LAND>` doesn't re-parse. **rawast's predictive engine has no memoization.** When LOR_CHAIN fails (no `||` operator), LOR falls through to `<LAND>` and parses LAND from scratch a second time. Stack 10 levels of this with `(a + b)` re-entering the ladder via PAREN_EXPR and you hit exponential backtracking — a moderately complex SV expression went from milliseconds to a multi-second hang in our testing.
 
-The general principle: **emit structure that reflects what's in the source, not what's in the grammar.** Always-wrap is tempting because it's mechanical to write — every level looks the same. But the savings at authoring time become a tax forever after, paid by every consumer of the AST. Hierarchical parsing close to the language's actual structure makes semantics extraction easier downstream, makes the AST diffable / serializable as something a human can read, and avoids embedding the grammar's implementation detail into the data shape. When you find yourself writing a sequence of identical-shaped rules at each level of a ladder, stop and ask whether the choice+`repeat+` form would give you a more honest tree.
+**Three idioms by use case:**
 
-This applies beyond expression ladders — any time you're modeling layers of optional structure (modifier chains, port qualifiers, declaration prefixes), prefer the "chain if present, otherwise skip the wrapper" form.
+| Grammar use case | Shape | Trade |
+|---|---|---|
+| Parser for existing language with ungrouped chains (SV, C, etc.) | Always-wrap `<NEXT>:lhs=@, repeat <X_TAIL>:tail[]=@` | Linear parse, verbose AST |
+| New DSL where you can require parens for 3+ chains | FastDRC pattern — `choice { BIN_FORM, NEXT }` binary-only for mixed-op levels, `repeat+2 ... separator` for uniform-op levels | Linear parse, clean `{op, args:[...]}` AST, **chains of 3+ require parens** |
+| Single-op tier (Python `or`/`and`, SV `\|\|`/`&&`) | `repeat+2 <NEXT>:args[]=@ separator 'or':op="or"` — n-ary natural | Linear parse, clean |
 
-**Save-side caveat (current implementation).** The save-side dispatcher commits to the first Choice alternative whose surface shape matches the value, with no lookahead at discriminator fields. The `choice { CHAIN, NEXT }` form works for parse but trips the save dispatcher when CHAIN and NEXT both produce `{lhs, tail}` shapes — the dispatcher has no way to distinguish an `OR_CHAIN`-shaped value from an `AND_CHAIN`-shaped one without inspecting the `op` strings inside `tail`, which it doesn't currently do.
+The middle option (FastDRC's `grammars/constraint.rawast` is the reference) is for when *you* control the surface syntax and can declare "chains of 3+ require parens." Reach for it when designing a new DSL; don't reach for it when parsing existing code that omits those parens — you'll lose coverage on every file with `a + b + c` or `a && b && c && d`.
 
-Two distinct failure modes from this same root cause:
+**Save-side: chain-shape dispatch needs an op-discriminator peek.** Even with always-wrap, if multiple chain levels emit the same `{lhs, tail: [{op, rhs}]}` surface shape, the save dispatcher can't tell `LOR`-shaped from `LAND`-shaped without inspecting `tail[0].op`. The engine handles this — see `repeat_field_matches` in `src/save_stack.cpp`. Worth knowing exists; works automatically.
 
-- **Stack overflow on save** (SV expression ladder): every chain level has the same `{lhs, tail}` shape, so save commits to the wrong alternative, recurses into the rhs through the wrong rule, and loops. Hit during the SV refactor attempt above.
-- **Silent content drop on save** (PP_EXPR, demonstrated for `defined(A)&&defined(B)` → `defined(A)`): the dispatcher picks the wrong alternative, fails to emit a literal that doesn't match the value's op, and bails without raising — the tail entries vanish from the output. Parse works; save round-trip silently lies.
+**A separate gotcha: "transparent" rules.** Any rule that consumes structurally significant input (parens, brackets, separators) but doesn't record anything in the AST breaks round-trip by construction. A rule like
 
-The first is louder but the second is the more dangerous failure — the user gets a "saved" string that's not the value's actual contents. Today PP_EXPR gets away with it because preprocessor ASTs aren't typically saved (the preprocessor emits expanded text, not source). The moment any consumer round-trips a `\`if` AST back to source, the bug surfaces.
+```
+PAREN_EXPR: sequence { "(", <EXPR>, ")" }
+```
 
-Until the save dispatcher learns to peek at `op` discriminators in tail entries before committing, ladders whose chain levels share output shapes should stay on the always-wrap form on the save path. The choice form is still safe for parse-only consumption — PP_EXPR is currently fine because the preprocessor walker only READS the AST. If you ship a new grammar with this idiom and any code path will call `save()` on its expressions, treat it as a known correctness bug and either avoid the save path, restructure to make chain shapes distinguishable (different field names per level, not just different `op` values), or commit to fixing the save dispatcher first.
+parses `(a + b)` to the same AST as `a + b` — the parens are lost. Save then can't decide whether to emit them. Mark the case so both directions see the same record:
+
+```
+PAREN_EXPR: sequence dict { "(":type="paren", <EXPR>:inner=@, ")" }
+```
+
+Apply this anywhere a rule consumes input that affects output without otherwise leaving a trace.
 
 **Diagnose grammar gaps with `RAWAST_TRACE`, not bisection.** When a parse fails with `unexpected content after start rule completed (byte N, line L, column C)`, the engine has told you *where* it stopped but not *why*. Resist the urge to manually shrink the input until you find the breaking construct — set `RAWAST_TRACE=1` in the environment and re-run the same parse. The trace dumps every frame the engine pushed, every alternative tried, and the exact failure message for each one, indented by stack depth. Read from the bottom (the deepest failures) upward to see which rule got the furthest before bailing.
 

@@ -363,6 +363,38 @@ discriminator_choice_values(const Grammar& g, const Node& b) {
 //   * true — discriminator exists and dict matches.
 // Sees through a Ref so `<VIA_KW>` (a Choice-of-emit-keys) discriminates
 // just like an inline `"VIA":@` would.
+// Walk a Sequence node's (V-name, X) pairs and collect every discriminator
+// they introduce. Each entry is (field_name, accepted_values) — the field
+// must equal one of the values. Used by the (V-name, Repeat<Item>) handling
+// below to forward the Repeat's item-level discriminators to the outer
+// alt's selection.
+struct ChildDisc {
+    std::string field;
+    std::vector<ValuePtr> values;  // dict[field] must equal one of these
+};
+
+std::vector<ChildDisc>
+collect_child_discriminators(const Grammar& g, const Node& seq) {
+    std::vector<ChildDisc> out;
+    if (seq.kind != NodeKind::Sequence) return out;
+    for (std::size_t i = 0; i + 1 < seq.children.size(); ++i) {
+        const Node& a = g.node(g.resolve_ref(seq.children[i]));
+        const Node& b = g.node(g.resolve_ref(seq.children[i + 1]));
+        if (a.kind != NodeKind::Value || !a.is_name) continue;
+        auto fname = as_string(a.value);
+        if (!fname) continue;
+        if (ValuePtr cv = discriminator_const_value(g, b)) {
+            out.push_back({fname->data(), {std::move(cv)}});
+            continue;
+        }
+        auto multi = discriminator_choice_values(g, b);
+        if (!multi.empty()) {
+            out.push_back({fname->data(), std::move(multi)});
+        }
+    }
+    return out;
+}
+
 std::optional<bool>
 discriminator_pair_matches(const Grammar& g, const std::string& name,
                             const Node& b_resolved, const DictValue& dict) {
@@ -385,10 +417,92 @@ discriminator_pair_matches(const Grammar& g, const std::string& name,
     return std::nullopt;
 }
 
+// Detect the `repeat <X>:field[]=@` pattern at a Sequence child position
+// and check whether the dict satisfies it. The loader represents this as
+// a Repeat node whose single child is a wrapper Sequence containing:
+//   [V-name "field[]", <X>]
+// — so the V-name is INSIDE the Repeat, not adjacent to it at the outer
+// Sequence level. This function pulls the inner V-name out, then checks
+// whether <X>'s own discriminators match the dict's array entries.
+//
+// Used by the outer Sequence-Dict can_consume walk for the precedence-
+// ladder chain pattern:
+//   `<NEXT>:lhs=@, repeat+ <X_TAIL>:tail[]=@`
+// where X_TAIL is `sequence dict { "||":op="||", <NEXT>:rhs=@ }`.
+// Without this, the save-side Choice dispatcher commits to the first
+// chain alt whose top-level surface shape matches and silently drops
+// or mis-emits tail entries whose op string belongs to a different
+// precedence level.
+//
+// Returns the same tri-state as discriminator_pair_matches:
+//   * nullopt — node isn't a Repeat-with-discriminating-item.
+//   * false — pattern recognised but the dict's array doesn't satisfy it.
+//   * true — pattern recognised and matches.
+std::optional<bool>
+repeat_field_matches(const Grammar& g, const Node& repeat_node,
+                      const DictValue& dict) {
+    if (repeat_node.kind != NodeKind::Repeat) return std::nullopt;
+    std::size_t item_idx = repeat_node.has_separator ? 1 : 0;
+    if (item_idx >= repeat_node.children.size()) return std::nullopt;
+    const Node& wrapper = g.node(
+        g.resolve_ref(repeat_node.children[item_idx]));
+    if (wrapper.kind != NodeKind::Sequence) return std::nullopt;
+    // First wrapper child should be the V-name marker the loader inserted
+    // for the `field[]=@` binding; the second is the actual item.
+    if (wrapper.children.size() < 2) return std::nullopt;
+    const Node& vn = g.node(g.resolve_ref(wrapper.children[0]));
+    if (vn.kind != NodeKind::Value || !vn.is_name) return std::nullopt;
+    auto vn_name = as_string(vn.value);
+    if (!vn_name) return std::nullopt;
+    bool is_list = false;
+    std::string field = strip_list_suffix(vn_name->data(), is_list);
+    if (!is_list) return std::nullopt;  // not the `[]=@` pattern
+    const Node& item = g.node(g.resolve_ref(wrapper.children[1]));
+    auto discs = collect_child_discriminators(g, item);
+    if (discs.empty()) return std::nullopt;
+    auto it = dict.data().find(field);
+    if (it == dict.data().end()) {
+        // Missing / empty list. `repeat+` (min>=1) requires at least
+        // one entry, so absence rules this alt out. `repeat` (min=0)
+        // is ambiguous — leave it nullopt so the surrounding
+        // field-presence walk can decide.
+        return repeat_node.min > 0
+            ? std::optional<bool>{false}
+            : std::nullopt;
+    }
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
+    if (!arr) return std::nullopt;
+    if (arr->data().empty()) {
+        return repeat_node.min > 0
+            ? std::optional<bool>{false}
+            : std::nullopt;
+    }
+    for (const auto& elt : arr->data()) {
+        auto elt_dict = std::dynamic_pointer_cast<DictValue>(elt);
+        if (!elt_dict) return std::nullopt;
+        for (const auto& d : discs) {
+            auto eit = elt_dict->data().find(d.field);
+            if (eit == elt_dict->data().end()) return false;
+            bool ok = false;
+            for (const auto& v : d.values) {
+                if (values_equal_v2(eit->second, v.get())) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) return false;
+        }
+    }
+    return true;
+}
+
 // Does this Choice alternative have any explicit discriminator?
 // Explicit discriminator forms recognised:
 //   * `(Value-name X, Value-const C)` adjacent — dict[X]==C must hold.
 //   * `(Value-name X, Key K with Value-child C)` adjacent — same.
+//   * Bare Repeat child whose wrapper carries a V-name + an item with
+//     its own discriminator (the `repeat <X>:field[]=@` precedence-
+//     ladder chain pattern).
 //   * First-child Key with literal token — key-based dispatch.
 // Catch-all alternatives have none of these and are tried last.
 bool has_explicit_discriminator(const Grammar& g, NodeId alt_id) {
@@ -403,6 +517,22 @@ bool has_explicit_discriminator(const Grammar& g, NodeId alt_id) {
             // Ref-to-Choice-of-emit-keys also counts (LEF `<VIA_KW>:
             // type=@` pattern).
             if (!discriminator_choice_values(g, b).empty()) return true;
+        }
+        // Bare Repeat children carrying a V-name + discriminating item.
+        for (NodeId child_id : n.children) {
+            const Node& cn = g.node(g.resolve_ref(child_id));
+            if (cn.kind != NodeKind::Repeat) continue;
+            std::size_t item_idx = cn.has_separator ? 1 : 0;
+            if (item_idx >= cn.children.size()) continue;
+            const Node& wrapper = g.node(
+                g.resolve_ref(cn.children[item_idx]));
+            if (wrapper.kind != NodeKind::Sequence) continue;
+            if (wrapper.children.size() < 2) continue;
+            const Node& item = g.node(
+                g.resolve_ref(wrapper.children[1]));
+            if (!collect_child_discriminators(g, item).empty()) {
+                return true;
+            }
         }
         if (!n.children.empty()) {
             const Node& first = g.node(g.resolve_ref(n.children[0]));
@@ -642,6 +772,23 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                         && dict.data().find(name_sv->data()) == dict.data().end()) {
                         continue;
                     }
+                    return false;
+                }
+                found_disc_match = true;
+            }
+            // Repeat-with-discriminating-item pattern: the loader wraps
+            // `repeat <X>:field[]=@` as a Repeat whose item is a wrapper
+            // sequence carrying the V-name inside, NOT adjacent to the
+            // Repeat at the outer Sequence level. So the (V-name, sibling)
+            // walk above can't see it; check each Repeat child directly
+            // for the precedence-ladder discriminator pattern.
+            for (NodeId child_id : n.children) {
+                const Node& orig = g.node(child_id);
+                const Node& cn = g.node(g.resolve_ref(child_id));
+                auto m = repeat_field_matches(g, cn, dict);
+                if (!m.has_value()) continue;
+                if (!*m) {
+                    if (orig.is_optional) continue;
                     return false;
                 }
                 found_disc_match = true;

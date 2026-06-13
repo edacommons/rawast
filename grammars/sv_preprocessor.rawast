@@ -186,18 +186,17 @@ PP_TEXT: sequence dict {
 //   !  -            PP_UNARY  (prefix)
 //   primary         PP_DEFINED, int, ident, (expr)
 //
-// Each binary level is `choice { CHAIN, NEXT }`:
-//   * CHAIN matches `<NEXT> (op <NEXT>)+` via `repeat+` — fires only
-//     when there's at least one operator at this precedence, emits
-//     `{lhs, tail: [{op, rhs}, ...]}` for left-associative folding.
-//   * NEXT is the higher-precedence rule — when there's no operator
-//     here, the choice passes through to the next level cleanly.
+// Each binary level uses the head+tail-list idiom required by
+// rawast's predictive (non-memoizing) PEG engine:
 //
-// The result: an expression that uses only one precedence level
-// (`defined(X)`) emits the bare primary `{type: "defined", name: "X"}`
-// without a stack of empty-tail wrappers around it. An expression
-// like `defined(A) && B > 8` emits a single AND chain with two ops
-// in its tail.
+//   PP_X: sequence dict { <NEXT>:lhs=@, repeat <X_TAIL>:tail[]=@ }
+//
+// The level parses NEXT exactly once, then the `repeat` does an
+// O(1) first-byte check at each iteration for the operator. No
+// backtracking, no re-parsing of NEXT on the fallthrough path,
+// linear total cost. The AST has a wrapper per level (`{lhs, tail}`)
+// — that's the intrinsic trade-off for predictive parsing of an
+// existing language with ungrouped chains like `a + b - c`.
 //
 // Why no internal evaluator: SV's `\`if` semantics — what `defined`
 // queries, how a macro body coerces to integer, how `>` compares
@@ -206,72 +205,26 @@ PP_TEXT: sequence dict {
 // `python/rawast/preprocessor.py` for the default Python evaluator
 // (recursive walk, undefined-name → 0).
 
-PP_EXPR: choice {
-  <PP_OR_CHAIN>,
-  <PP_AND>
-}
-PP_OR_CHAIN: sequence dict {
-  <PP_AND>:lhs=@,
-  repeat+ <PP_OR_TAIL>:tail[]=@
-}
+PP_EXPR: sequence dict { <PP_AND>:lhs=@, repeat <PP_OR_TAIL>:tail[]=@ }
 PP_OR_TAIL: sequence dict { "||":op="||", <PP_AND>:rhs=@ }
 
-PP_AND: choice {
-  <PP_AND_CHAIN>,
-  <PP_EQUALITY>
-}
-PP_AND_CHAIN: sequence dict {
-  <PP_EQUALITY>:lhs=@,
-  repeat+ <PP_AND_TAIL>:tail[]=@
-}
+PP_AND: sequence dict { <PP_EQUALITY>:lhs=@, repeat <PP_AND_TAIL>:tail[]=@ }
 PP_AND_TAIL: sequence dict { "&&":op="&&", <PP_EQUALITY>:rhs=@ }
 
-PP_EQUALITY: choice {
-  <PP_EQUALITY_CHAIN>,
-  <PP_RELATIONAL>
-}
-PP_EQUALITY_CHAIN: sequence dict {
-  <PP_RELATIONAL>:lhs=@,
-  repeat+ <PP_EQUALITY_TAIL>:tail[]=@
-}
-PP_EQUALITY_TAIL: sequence dict {
-  <PP_EQUALITY_OP>:op=@, <PP_RELATIONAL>:rhs=@
-}
+PP_EQUALITY: sequence dict { <PP_RELATIONAL>:lhs=@, repeat <PP_EQUALITY_TAIL>:tail[]=@ }
+PP_EQUALITY_TAIL: sequence dict { <PP_EQUALITY_OP>:op=@, <PP_RELATIONAL>:rhs=@ }
 PP_EQUALITY_OP: choice { "==":@, "!=":@ }
 
-PP_RELATIONAL: choice {
-  <PP_RELATIONAL_CHAIN>,
-  <PP_ADD>
-}
-PP_RELATIONAL_CHAIN: sequence dict {
-  <PP_ADD>:lhs=@,
-  repeat+ <PP_RELATIONAL_TAIL>:tail[]=@
-}
-PP_RELATIONAL_TAIL: sequence dict {
-  <PP_RELATIONAL_OP>:op=@, <PP_ADD>:rhs=@
-}
+PP_RELATIONAL: sequence dict { <PP_ADD>:lhs=@, repeat <PP_RELATIONAL_TAIL>:tail[]=@ }
+PP_RELATIONAL_TAIL: sequence dict { <PP_RELATIONAL_OP>:op=@, <PP_ADD>:rhs=@ }
 // Longest-first so `<=`/`>=` win over `<`/`>`.
 PP_RELATIONAL_OP: choice { "<=":@, ">=":@, "<":@, ">":@ }
 
-PP_ADD: choice {
-  <PP_ADD_CHAIN>,
-  <PP_MUL>
-}
-PP_ADD_CHAIN: sequence dict {
-  <PP_MUL>:lhs=@,
-  repeat+ <PP_ADD_TAIL>:tail[]=@
-}
+PP_ADD: sequence dict { <PP_MUL>:lhs=@, repeat <PP_ADD_TAIL>:tail[]=@ }
 PP_ADD_TAIL: sequence dict { <PP_ADD_OP>:op=@, <PP_MUL>:rhs=@ }
 PP_ADD_OP: choice { "+":@, "-":@ }
 
-PP_MUL: choice {
-  <PP_MUL_CHAIN>,
-  <PP_UNARY>
-}
-PP_MUL_CHAIN: sequence dict {
-  <PP_UNARY>:lhs=@,
-  repeat+ <PP_MUL_TAIL>:tail[]=@
-}
+PP_MUL: sequence dict { <PP_UNARY>:lhs=@, repeat <PP_MUL_TAIL>:tail[]=@ }
 PP_MUL_TAIL: sequence dict { <PP_MUL_OP>:op=@, <PP_UNARY>:rhs=@ }
 PP_MUL_OP: choice { "*":@, "/":@, "%":@ }
 
