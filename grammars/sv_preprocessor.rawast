@@ -38,6 +38,7 @@ PP_ITEM: choice {
   <PP_UNDEF>,
   <PP_IFDEF>,
   <PP_IFNDEF>,
+  <PP_IF>,
   <PP_INCLUDE>,
   <PP_MACRO_USE>,
   <PP_TEXT>
@@ -88,6 +89,40 @@ PP_IFNDEF: sequence dict {
   sv_eol
 }:#role="ifndef"
 
+// `if EXPR
+//   ...body...
+// [`elsif EXPR
+//   ...body...]*
+// [`else
+//   ...else_branch...]
+// `endif
+//
+// Generalised `ifdef`: the condition is an arbitrary expression that
+// the host evaluator (PpOptions::expr_eval callback) reduces to a
+// truthy / falsy value. The walker selects the first branch whose
+// condition is true — the `if` body first, then each `elsif` body
+// in order, then the `else` body if none of the above matched.
+//
+// `cond` is a `PP_EXPR` AST dict (see the EXPR section below); the
+// walker passes it straight to the callback unchanged.
+PP_IF: sequence dict {
+  "`if":type="if",
+  <PP_EXPR>:cond=@,
+  sv_eol,
+  <PP_BODY>:body=@,
+  repeat <PP_ELSIF_CLAUSE>:elsif_branches[]=@,
+  ?<PP_ELSE_CLAUSE>:else_branch=@,
+  "`endif",
+  sv_eol
+}:#role="if"
+
+PP_ELSIF_CLAUSE: sequence dict {
+  "`elsif",
+  <PP_EXPR>:cond=@,
+  sv_eol,
+  <PP_BODY>:body=@
+}
+
 PP_BODY: sequence array { repeat <PP_ITEM> }
 
 PP_ELSE_CLAUSE: sequence array {
@@ -129,8 +164,122 @@ PP_MACRO_ARGS: sequence array {
 }
 
 // Pass-through line. Captures one source line including its trailing
-// newline. sv_pp_text_line fails on `\`endif`/`\`else` so this rule
-// (last in the PP_ITEM choice) does not eat conditional terminators.
+// newline. sv_pp_text_line fails on `\`endif`/`\`else`/`\`elsif` so
+// this rule (last in the PP_ITEM choice) does not eat conditional
+// terminators.
 PP_TEXT: sequence dict {
   sv_pp_text_line:type="text":text=@
 }:#role="text"
+
+// ─── PP_EXPR — `\`if` / `\`elsif` condition expressions ────────────────
+//
+// A small expression grammar restricted to what makes sense in
+// preprocessor conditionals. Precedence ladder follows Verilog
+// operator precedence (LRM §11.3.2), lowest to highest:
+//
+//   ||              PP_EXPR  (top — logical OR)
+//   &&              PP_AND
+//   ==  !=          PP_EQUALITY
+//   <  <=  >  >=    PP_RELATIONAL
+//   +  -            PP_ADD
+//   *  /  %         PP_MUL
+//   !  -            PP_UNARY  (prefix)
+//   primary         PP_DEFINED, int, ident, (expr)
+//
+// Each binary level uses the head-plus-tail-list idiom (same as the
+// SV grammar's expression ladder): the parse produces a dict
+// `{lhs, tail: [{op, rhs}, ...]}` and the host evaluator folds
+// left-associatively. Primary nodes carry an explicit `type` field
+// (defined, int, ident, paren, not, neg); the binary levels don't,
+// so the evaluator dispatches by checking for `tail` first.
+//
+// Why no internal evaluator: SV's `\`if` semantics — what `defined`
+// queries, how a macro body coerces to integer, how `>` compares
+// across bit-widths — are host-language concerns. The walker hands
+// the AST to PpOptions::expr_eval and gets back a boolean. See
+// `python/rawast/preprocessor.py` for the default Python evaluator
+// (recursive walk, undefined-name → 0).
+
+PP_EXPR: sequence dict {
+  <PP_AND>:lhs=@,
+  repeat <PP_OR_TAIL>:tail[]=@
+}
+PP_OR_TAIL: sequence dict { "||":op="||", <PP_AND>:rhs=@ }
+
+PP_AND: sequence dict {
+  <PP_EQUALITY>:lhs=@,
+  repeat <PP_AND_TAIL>:tail[]=@
+}
+PP_AND_TAIL: sequence dict { "&&":op="&&", <PP_EQUALITY>:rhs=@ }
+
+PP_EQUALITY: sequence dict {
+  <PP_RELATIONAL>:lhs=@,
+  repeat <PP_EQUALITY_TAIL>:tail[]=@
+}
+PP_EQUALITY_TAIL: sequence dict {
+  <PP_EQUALITY_OP>:op=@, <PP_RELATIONAL>:rhs=@
+}
+PP_EQUALITY_OP: choice { "==":@, "!=":@ }
+
+PP_RELATIONAL: sequence dict {
+  <PP_ADD>:lhs=@,
+  repeat <PP_RELATIONAL_TAIL>:tail[]=@
+}
+PP_RELATIONAL_TAIL: sequence dict {
+  <PP_RELATIONAL_OP>:op=@, <PP_ADD>:rhs=@
+}
+// Longest-first so `<=`/`>=` win over `<`/`>`.
+PP_RELATIONAL_OP: choice { "<=":@, ">=":@, "<":@, ">":@ }
+
+PP_ADD: sequence dict {
+  <PP_MUL>:lhs=@,
+  repeat <PP_ADD_TAIL>:tail[]=@
+}
+PP_ADD_TAIL: sequence dict { <PP_ADD_OP>:op=@, <PP_MUL>:rhs=@ }
+PP_ADD_OP: choice { "+":@, "-":@ }
+
+PP_MUL: sequence dict {
+  <PP_UNARY>:lhs=@,
+  repeat <PP_MUL_TAIL>:tail[]=@
+}
+PP_MUL_TAIL: sequence dict { <PP_MUL_OP>:op=@, <PP_UNARY>:rhs=@ }
+PP_MUL_OP: choice { "*":@, "/":@, "%":@ }
+
+PP_UNARY: choice {
+  <PP_NOT>,
+  <PP_NEG>,
+  <PP_PRIMARY>
+}
+PP_NOT: sequence dict { "!":type="not", <PP_UNARY>:operand=@ }
+PP_NEG: sequence dict { "-":type="neg", <PP_UNARY>:operand=@ }
+
+PP_PRIMARY: choice {
+  <PP_DEFINED>,
+  <PP_PAREN>,
+  <PP_INT>,
+  <PP_IDENT>
+}
+
+// `defined(NAME)` — the preprocessor's own predicate, not a host
+// function. The walker / Python evaluator queries the macro table
+// directly; the host doesn't need to provide any binding for
+// `defined`.
+PP_DEFINED: sequence dict {
+  "defined":type="defined",
+  "(", sv_identifier:name=@, ")"
+}
+
+// `(expr)` — grouping. Emits a `paren` node whose `inner` is the
+// wrapped expression. The evaluator's `paren` handler just unwraps.
+// Keeping the node visible in the AST means the round-trip
+// (parse → host AST → re-save) preserves the user's parens for
+// future surface-printing without inferring them from precedence.
+PP_PAREN: sequence dict {
+  "(":type="paren",
+  <PP_EXPR>:inner=@,
+  ")"
+}
+
+PP_INT: sequence dict { int:value=@:type="int" }
+
+PP_IDENT: sequence dict { sv_identifier:name=@:type="ident" }

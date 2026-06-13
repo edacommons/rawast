@@ -382,7 +382,7 @@ ParseResult SvPpTextLineParser::parse(StreamReader& sr) {
         }
         sr.reject();   // unwind the lookahead — caller's mark still live
 
-        if (at_boundary && (kw == "endif" || kw == "else")) {
+        if (at_boundary && (kw == "endif" || kw == "else" || kw == "elsif")) {
             sr.reject();
             return tl::unexpected(ParseError{
                 sr.position(),
@@ -503,9 +503,9 @@ ParseResult SvPpMacroNameParser::parse(StreamReader& sr) {
         sr.get();
     }
     // Preprocessor terminator keywords — refuse to match them as
-    // a macro name so the enclosing `\`ifdef`/`\`ifndef` rule can
-    // claim the `\`endif` / `\`else` directive instead.
-    if (name == "endif" || name == "else") {
+    // a macro name so the enclosing `\`ifdef`/`\`ifndef`/`\`if` rule
+    // can claim the `\`endif`/`\`else`/`\`elsif` directive instead.
+    if (name == "endif" || name == "else" || name == "elsif") {
         sr.reject();
         return tl::unexpected(ParseError{
             sr.position(),
