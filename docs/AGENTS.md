@@ -373,6 +373,32 @@ Subparse is the right tool when the inner content is a genuinely DIFFERENT sub-l
 
 **Default keywords to strict (`'token'`).** When the format spec defines a reserved-word vocabulary that mustn't collide with identifiers — language keywords, section names, named clauses — author them as `'KEYWORD'` (single-quote, word-bounded) rather than `"KEYWORD"` (byte-prefix). Catches a whole class of bugs at parse time: byte-prefix `"not"` silently matches the prefix of `"notch"`, leaving `"ch"` as a phantom identifier; strict `'not'` correctly rejects, so a Choice over `'not'` / `notch` dispatches to the right branch without depending on hand-ordering. The cost of strict is one peek per match; the benefit is a class of bugs that doesn't reach runtime.
 
+**Reach for hierarchy, not flat "always wrap." When you write a precedence ladder (or any layered grammar), don't make every level emit a wrapper unconditionally.** The tempting pattern looks like:
+
+```
+LOR:  sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
+LAND: sequence dict { <BOR>:lhs=@,  repeat <LAND_TAIL>:tail[]=@ }
+BOR:  sequence dict { <BXOR>:lhs=@, repeat <BOR_TAIL>:tail[]=@ }
+...
+```
+
+Each level emits `{lhs, tail}` whether or not its operator fired. A bare identifier ends up with 10 layers of `{lhs:{lhs:{lhs:...}}}` wrappers piled around it from every precedence level above. That noise is real cost: every consumer downstream (Python tests, codegen, save dispatch, semantic analyzers) has to walk through those empty wrappers, and the JSON dump for `defined(X)` becomes ~80 lines of dict-of-dict before reaching the actual primary.
+
+Use `choice { CHAIN, NEXT }` instead. CHAIN matches only when there's ≥1 operator (via `repeat+`); otherwise the choice falls through to NEXT cleanly:
+
+```
+LOR:       choice { <LOR_CHAIN>, <LAND> }
+LOR_CHAIN: sequence dict { <LAND>:lhs=@, repeat+ <LOR_TAIL>:tail[]=@ }
+```
+
+Now a bare identifier is emitted as `{type:"ident", name:"X"}` with no wrappers. `a && b` is one chain node at the AND level — every other level passes through. The AST shape mirrors the actual operator structure of the expression instead of the structure of the grammar's precedence ladder.
+
+The general principle: **emit structure that reflects what's in the source, not what's in the grammar.** Always-wrap is tempting because it's mechanical to write — every level looks the same. But the savings at authoring time become a tax forever after, paid by every consumer of the AST. Hierarchical parsing close to the language's actual structure makes semantics extraction easier downstream, makes the AST diffable / serializable as something a human can read, and avoids embedding the grammar's implementation detail into the data shape. When you find yourself writing a sequence of identical-shaped rules at each level of a ladder, stop and ask whether the choice+`repeat+` form would give you a more honest tree.
+
+This applies beyond expression ladders — any time you're modeling layers of optional structure (modifier chains, port qualifiers, declaration prefixes), prefer the "chain if present, otherwise skip the wrapper" form.
+
+**Save-side caveat (current implementation).** The save-side dispatcher commits to the first Choice alternative whose surface shape matches the value, with no lookahead through the rest of the rule. The `choice { CHAIN, NEXT }` form works for parse but trips the save dispatcher when CHAIN and NEXT both produce shapes that look like `{lhs, tail}` at the same precedence in NEXT's body — the dispatcher has no way to distinguish a `LOR_CHAIN`-shaped value from an `LAND_CHAIN`-shaped one without inspecting the `op` strings in `tail`, which it doesn't currently do. The pattern is fine for grammars whose CHAIN and NEXT shapes are structurally distinct (e.g., `PP_EXPR` where the leaves are typed primaries like `{type:"defined",...}` and `{type:"int",...}`), but the SV expression ladder hits this issue because every level can emit the same `{lhs, tail}` shape. Until the save dispatcher learns to peek at discriminator fields inside tail entries, the SV-style ladder stays on the always-wrap form. Greenfield grammars should still reach for the choice form first and only fall back to always-wrap if save round-trip is required AND the levels share output shapes.
+
 **Diagnose grammar gaps with `RAWAST_TRACE`, not bisection.** When a parse fails with `unexpected content after start rule completed (byte N, line L, column C)`, the engine has told you *where* it stopped but not *why*. Resist the urge to manually shrink the input until you find the breaking construct — set `RAWAST_TRACE=1` in the environment and re-run the same parse. The trace dumps every frame the engine pushed, every alternative tried, and the exact failure message for each one, indented by stack depth. Read from the bottom (the deepest failures) upward to see which rule got the furthest before bailing.
 
 A typical session for diagnosing one failing file:

@@ -73,8 +73,8 @@ def test_module_with_ansi_ports(sv_grammar):
     # Range [7:0] captured
     assert "range" in ports[2]
     rng = ports[2]["range"]
-    assert unwrap(rng["msb"])["type"] == "number"
-    assert unwrap(rng["lsb"])["type"] == "number"
+    assert unwrap(rng["msb"])["type"] == "integer"
+    assert unwrap(rng["lsb"])["type"] == "integer"
 
 
 def test_module_with_nonansi_ports(sv_grammar):
@@ -233,10 +233,8 @@ def test_sized_hex_literal(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    num = unwrap(cont["assignments"][0]["rhs"])
-    assert num["type"] == "number"
-    n = num["number"]
-    assert n["kind"] == "based"
+    n = unwrap(cont["assignments"][0]["rhs"])
+    assert n["type"] == "based_num"
     assert n["size"] == 8
     assert n["base"] == "h"
     assert n["value"] == "FF"
@@ -251,8 +249,8 @@ def test_unsized_decimal(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    n = unwrap(cont["assignments"][0]["rhs"])["number"]
-    assert n["kind"] == "integer"
+    n = unwrap(cont["assignments"][0]["rhs"])
+    assert n["type"] == "integer"
     assert n["value"] == 42
 
 
@@ -314,13 +312,11 @@ def test_macro_use_in_number_size(sv_grammar):
         if rhs.get("tail"):
             break
         rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "number"
-    n = rhs["number"]
-    assert n["kind"] == "based"
-    assert n["base"] == "d"
-    assert n["value"] == "42"
-    assert n["size"]["type"] == "macro_use"
-    assert n["size"]["name"] == "WIDTH"
+    assert rhs["type"] == "based_num"
+    assert rhs["base"] == "d"
+    assert rhs["value"] == "42"
+    assert rhs["size"]["type"] == "macro_use"
+    assert rhs["size"]["name"] == "WIDTH"
 
 
 def test_macro_call_with_args(sv_grammar):

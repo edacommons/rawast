@@ -1638,7 +1638,7 @@ UNARY_OP: choice {
 
 // ─── Primaries ──────────────────────────────────────────────────────────
 
-// NUMBER_PRIMARY comes BEFORE MACRO_USE so `` `WIDTH'd42 `` is
+// NUMBER comes BEFORE MACRO_USE so `` `WIDTH'd42 `` is
 // recognized as a based number (with `` `WIDTH `` as the size)
 // rather than as a bare macro followed by orphan `'d42`. BASED_NUM
 // uses INT_OR_MACRO at its size slot, so macros-as-size work.
@@ -1655,7 +1655,7 @@ PRIMARY: choice {
   <FUNC_CALL>,
   <STREAMING_CONCAT>,
   <CONCAT_OR_REPLICATION>,
-  <NUMBER_PRIMARY>,
+  <NUMBER>,
   <MACRO_USE>,
   <STRING_PRIMARY>,
   <THIS_REF>,
@@ -1895,10 +1895,10 @@ REPLICATION: sequence dict {
 // Order matters in NUMBER's Choice: BASED tried first because `8'hFF`
 // shares the leading integer with plain `42`; TIME_LIT before INTEGER
 // for the same reason (`42ns` shares its `42` with `42` alone).
-NUMBER_PRIMARY: sequence dict {
-  <NUMBER>:number=@:type="number"
-}
-
+// Each NUMBER variant carries its own `type` discriminator — no
+// outer wrapper needed. A plain `42` emits `{type:"integer",value:42}`
+// directly instead of `{type:"number",number:{kind:"integer",value:42}}`
+// — same information without the redundant nesting.
 NUMBER: choice {
   <BASED_NUM>,
   <TIME_LIT>,
@@ -1911,7 +1911,7 @@ NUMBER: choice {
 // size, `'`, base, or digit run.
 BASED_NUM ignore: sequence dict {
   ?<INT_OR_MACRO>:size=@,
-  "'":kind="based",
+  "'":type="based_num",
   ?<SIGNED_FLAG>:signed=true,
   <BASE_CHAR>:base=@,
   sv_based_digits:value=@
@@ -1929,7 +1929,7 @@ BASE_CHAR: choice {
 // LIMITATION: uses std.int so doesn't accept underscores in the
 // numeric prefix (`1_000ns` won't match here, but `1000ns` will).
 TIME_LIT ignore: sequence dict {
-  <INT_OR_MACRO>:value=@:kind="time",
+  <INT_OR_MACRO>:value=@:type="time_lit",
   <TIME_UNIT>:unit=@
 }
 
@@ -1945,11 +1945,11 @@ TIME_UNIT: choice {
 // TIME_LIT (value) because in those rules a *required* follow-up
 // token (`'b/'d/'h` or a time unit) disambiguates.
 REAL_NUM: sequence dict {
-  float:value=@:kind="real"
+  float:value=@:type="real"
 }
 
 INTEGER_NUM: sequence dict {
-  int:value=@:kind="integer"
+  int:value=@:type="integer"
 }
 
 STRING_PRIMARY: sequence dict {
