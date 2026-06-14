@@ -2,6 +2,7 @@
 
 #include <rawast/node.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -190,6 +191,47 @@ struct PpOptions {
     // letting the host parser handle the token.
     PpOnUndefined on_undefined = PpOnUndefined::Leave;
 
+    // Host-supplied evaluator for `\`if` / `\`elsif` expressions.
+    // Called with the AST node the grammar produced for the
+    // expression — typically a structured dict tree (e.g.
+    // {type:"binop", op:"&&", lhs:..., rhs:...}), but a leaf
+    // StringValue is fine for trivial cases like `\`if FOO` where
+    // the grammar just captures the identifier text.
+    //
+    // Returns:
+    //   true  — branch is taken
+    //   false — branch is not taken; walker tries the next elsif or
+    //           falls to else_branch
+    //   nullopt — evaluator can't decide; walker records a warning
+    //           and treats the branch as false (consumers can elevate
+    //           to error via their own policy if they need to).
+    //
+    // If unset and the walker hits an `\`if` directive, no branch is
+    // taken and a warning is recorded — `\`if` without an evaluator
+    // is a configuration error.
+    //
+    // Passing the AST (not the raw source text) keeps the grammar
+    // as the only parser in the system — the host walks the tree
+    // the same way the preprocessor walker does, rather than
+    // re-parsing the expression by hand.
+    std::function<std::optional<bool>(const ValuePtr& cond)> expr_eval;
+
+    // Host-supplied fallback for undefined macro uses. Called when
+    // a `\`NAME` site references a macro not in the active table.
+    // If it returns a value, that string is emitted as the expansion
+    // (recursively re-expanded — host can return text containing
+    // further `\`uses) and the `on_undefined` policy is bypassed.
+    // If it returns nullopt, processing falls through to the
+    // `on_undefined` policy as if the callback weren't set.
+    //
+    // Args mirror what the AST reports: macro name (without the
+    // leading backtick) and the captured argument strings.
+    // Default-empty means "no callback" — bypass; existing behaviour
+    // is unchanged for callers that don't set it.
+    std::function<std::optional<std::string>(
+        const std::string& name,
+        const std::vector<std::string>& args)> undefined_handler;
+
     // Macro expansion recursion limit. Protects against cycles
     // that blue-painting alone doesn't catch (e.g. mutual
     // expansion via include + redefine). Hitting the limit
@@ -237,6 +279,24 @@ public:
     // records the path in `included_files()` (first-seen order;
     // duplicates suppressed). Returns the preprocessed text.
     std::string process_file(const std::string& path);
+
+    // Walk a pre-built AST. Bypasses the grammar layer entirely —
+    // useful for unit-testing the walker (and the dynamic_macros /
+    // expr_eval / undefined_handler callbacks) against synthesized
+    // ASTs, and for tooling that builds the AST through some other
+    // mechanism (programmatic, deserialized from JSON, etc.).
+    //
+    // `source` is the byte string the walker should treat as the
+    // original input — used by `locate_item` to position spans and
+    // emit text. For synthesized ASTs that don't correspond to a
+    // real source file, pass a synthetic string containing each
+    // referenced token (the helpers `synth_text` etc. in the test
+    // file build conforming sources). For ASTs deserialized from a
+    // real file, pass that file's contents.
+    //
+    // Returns the preprocessed text. State accumulates on the
+    // instance across calls, same as process().
+    std::string process_ast(const ValuePtr& ast, const std::string& source);
 
     // ─── Inspection ─────────────────────────────────────────────────
 
@@ -298,6 +358,10 @@ private:
                       const std::string& source,
                       std::uint32_t parent_span_id,
                       bool invert);
+    void handle_if(const class DictValue& d, std::string& out,
+                   std::size_t& src_cursor,
+                   const std::string& source,
+                   std::uint32_t parent_span_id);
     void handle_include(const class DictValue& d, std::string& out,
                         std::size_t& src_cursor,
                         const std::string& source,

@@ -162,21 +162,27 @@ std::string Preprocessor::process(const std::string& text) {
         // handle the directives.
         return text;
     }
+    return process_ast(*parsed, text);
+}
+
+std::string Preprocessor::process_ast(const ValuePtr& ast,
+                                       const std::string& source) {
     // Reset the source map for this call. Spans are scoped to one
-    // process(); callers that need to retain a map across calls
-    // (multi-file workflows) snapshot the state themselves.
+    // process_*() invocation; callers that need to retain a map
+    // across calls (multi-file workflows) snapshot the state
+    // themselves.
     state_.spans.clear();
     // Root span: covers the entire input text. No parent. Source-
     // structure only (no output offset of its own — child spans
     // record output ranges).
     std::uint32_t root_id =
         record_span(Span::NoParent, /*parent_offset=*/0,
-                    text.size(), Span::NoOutput,
+                    source.size(), Span::NoOutput,
                     state_.current_file.empty() ? "<input>"
                                                 : state_.current_file);
     std::string out;
     std::size_t src_cursor = 0;
-    walk(*parsed, out, src_cursor, text, root_id);
+    walk(ast, out, src_cursor, source, root_id);
     return out;
 }
 
@@ -337,6 +343,10 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
         if (type == "ifndef") {
             handle_ifdef(*dict, out, src_cursor, source,
                          parent_span_id, /*invert=*/true);
+            return;
+        }
+        if (type == "if") {
+            handle_if(*dict, out, src_cursor, source, parent_span_id);
             return;
         }
         if (type == "macro_use") {
@@ -794,7 +804,25 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
         return;
     }
 
-    // Undefined — apply policy.
+    // Undefined — give the host's undefined_handler first refusal.
+    // If it returns a value, that's the expansion (recursively
+    // re-expanded so the host can return text containing macro
+    // uses). If it returns nullopt, fall through to the static
+    // on_undefined policy.
+    if (opts_.undefined_handler) {
+        if (auto replacement = opts_.undefined_handler(name, args)) {
+            state_.active_expansions.insert(name);
+            ++state_.current_depth;
+            std::string emitted = expand_recursive(*replacement);
+            --state_.current_depth;
+            state_.active_expansions.erase(name);
+            emit_expansion(emitted,
+                            "undefined_handler expansion of " + name);
+            src_cursor = use_src_end;
+            return;
+        }
+    }
+
     auto leave_emit = [&]() {
         std::string emit = "`" + name;
         if (!args.empty()) {
@@ -986,6 +1014,82 @@ void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
     }
 
     // Position past `\`endif`.
+    src_cursor = locate_item(source, src_cursor, "`endif");
+    src_cursor = scan_past_directive_line(source, src_cursor);
+}
+
+void Preprocessor::handle_if(const DictValue& d, std::string& out,
+                              std::size_t& src_cursor,
+                              const std::string& source,
+                              std::uint32_t parent_span_id) {
+    // Branches AST shape (flat):
+    //   { type:"if",
+    //     branches: [ {cond:"EXPR", body:[...]},
+    //                 {cond:"EXPR", body:[...]} ],
+    //     else_branch: [...] }
+    // The first `if` is branches[0]; subsequent entries are `elsif`s.
+    // Grammar producers normalize their nested `\`if/\`elsif/\`else/
+    // \`endif` syntax into this shape so the walker stays linear.
+
+    src_cursor = locate_item(source, src_cursor, "`if");
+    src_cursor = scan_past_directive_line(source, src_cursor);
+
+    auto walk_or_discard = [&](const ValuePtr& branch, bool emit) {
+        if (!branch) return;
+        if (emit) {
+            walk(branch, out, src_cursor, source, parent_span_id);
+        } else {
+            std::string discard;
+            std::size_t saved = state_.spans.size();
+            walk(branch, discard, src_cursor, source, parent_span_id);
+            state_.spans.resize(saved);
+        }
+    };
+
+    bool any_taken = false;
+    if (auto branches_val = dict_value_or_null(d, "branches")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(branches_val)) {
+            std::size_t branch_idx = 0;
+            for (const auto& b : arr->data()) {
+                auto bd = std::dynamic_pointer_cast<DictValue>(b);
+                if (!bd) continue;
+                auto cond = dict_value_or_null(*bd, "cond");
+                bool take = false;
+                if (!opts_.expr_eval) {
+                    state_.warnings.push_back(
+                        {"`if encountered without expr_eval callback; "
+                         "treating branch as false",
+                         state_.current_file, state_.current_line});
+                } else if (auto v = opts_.expr_eval(cond)) {
+                    take = *v;
+                } else {
+                    state_.warnings.push_back(
+                        {"expr_eval could not evaluate `if condition; "
+                         "treating as false",
+                         state_.current_file, state_.current_line});
+                }
+                // Position past `\`elsif` line for branches beyond the
+                // first — only walks if the first branch hasn't
+                // already taken; otherwise the locator scan will
+                // skip ahead through suppressed text.
+                if (branch_idx > 0) {
+                    src_cursor = locate_item(source, src_cursor, "`elsif");
+                    src_cursor = scan_past_directive_line(source, src_cursor);
+                }
+                bool emit = take && !any_taken;
+                walk_or_discard(dict_value_or_null(*bd, "body"), emit);
+                if (take) any_taken = true;
+                ++branch_idx;
+            }
+        }
+    }
+
+    if (auto eb = dict_value_or_null(d, "else_branch")) {
+        src_cursor = locate_item(source, src_cursor, "`else");
+        src_cursor = scan_past_directive_line(source, src_cursor);
+        walk_or_discard(eb, !any_taken);
+    }
+
     src_cursor = locate_item(source, src_cursor, "`endif");
     src_cursor = scan_past_directive_line(source, src_cursor);
 }
