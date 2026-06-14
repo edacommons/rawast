@@ -1,0 +1,107 @@
+// SystemVerilog preprocessor `\`if` / `\`elsif` expression subset.
+//
+// Covers the operator set seen in real-world `\`if` conditions:
+//   ||  &&  !  ==  !=  defined(NAME)  parens  identifiers  decimal ints
+//
+// Out of scope (deliberately — keep this small until corpus demands more):
+//   arithmetic, bitwise, sized literals, ternary, <  >  <=  >=
+//
+// AST contract (the host evaluator dispatches on these shapes):
+//
+//   Leaves — discriminated by `type`
+//     {type:"macro_ref", name:"FOO"}
+//     {type:"int_lit",   value:42}                // IntValue (decimal only)
+//     {type:"call",      name:"defined", args:[…]} // generic call form
+//     {type:"paren",     inner:<expr>}            // kept for save fidelity
+//
+//   Operations — discriminated by `op` (no `type` field)
+//     {op:"||", args:[a, b, …]}                   // n-ary, ≥2
+//     {op:"&&", args:[a, b, …]}                   // n-ary, ≥2
+//     {op:"!",  args:[x]}                         // unary, args[0]
+//     {op:"==", args:[a, b]}                      // binary
+//     {op:"!=", args:[a, b]}                      // binary
+//
+// Evaluator dispatch is uniform: presence of `op` → operator handler,
+// presence of `type` → leaf handler. Args are always under `args[]`.
+
+use: std
+
+start: <PP_EXPR>
+
+// ─── Precedence ladder (low → high) ─────────────────────────────
+// OR  <  AND  <  EQ  <  UNARY  <  PRIMARY
+// Each level is `choice { CHAIN, NEXT }` — chain branch for the
+// multi-operand case, fall-through to NEXT for the single-operand
+// case. Surface AST is n-ary `{op, args}` whenever the chain fires;
+// bare leaves bypass the wrapper and carry only their own fields.
+
+PP_EXPR ignore whitespace: <OR_EXPR>
+
+OR_EXPR ignore whitespace: choice {
+    <OR_CHAIN>,
+    <AND_EXPR>
+}
+OR_CHAIN ignore whitespace: sequence dict {
+    repeat+2 <AND_EXPR>:args[]=@ separator '||':op="||"
+}
+
+AND_EXPR ignore whitespace: choice {
+    <AND_CHAIN>,
+    <EQ_EXPR>
+}
+AND_CHAIN ignore whitespace: sequence dict {
+    repeat+2 <EQ_EXPR>:args[]=@ separator '&&':op="&&"
+}
+
+EQ_EXPR ignore whitespace: choice {
+    <EQ_BINOP>,
+    <UNARY_EXPR>
+}
+EQ_BINOP ignore whitespace: sequence dict {
+    <UNARY_EXPR>:args[]=@,
+    choice { '==':op="==", '!=':op="!=" },
+    <UNARY_EXPR>:args[]=@
+}
+
+UNARY_EXPR ignore whitespace: choice {
+    <NOT_EXPR>,
+    <PRIMARY>
+}
+NOT_EXPR ignore whitespace: sequence dict {
+    "!":op="!",
+    <UNARY_EXPR>:args[]=@
+}
+
+// ─── Primaries ──────────────────────────────────────────────────
+// CALL_EXPR must precede MACRO_REF in the choice — both start with an
+// identifier, but CALL has a trailing `(`. PEG choice tries in order;
+// CALL_EXPR commits only after seeing the `(`, so the fall-through
+// to MACRO_REF works for bare identifiers.
+
+PRIMARY ignore whitespace: choice {
+    <INT_LIT>,
+    <CALL_EXPR>,
+    <MACRO_REF>,
+    <PAREN_EXPR>
+}
+
+CALL_EXPR ignore whitespace: sequence dict {
+    identifier:type="call":name=@,
+    "(",
+    repeat <PP_EXPR>:args[]=@ separator ",",
+    ")"
+}
+
+MACRO_REF ignore whitespace: sequence dict {
+    identifier:type="macro_ref":name=@
+}
+
+INT_LIT ignore whitespace: sequence dict {
+    int:type="int_lit":value=@
+}
+
+PAREN_EXPR ignore whitespace: sequence dict {
+    "(":type="paren",
+    <PP_EXPR>:inner=@,
+    ")"
+}
