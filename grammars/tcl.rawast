@@ -2,12 +2,12 @@
 //
 // Two logical contexts handled within one grammar via #subparse:
 //   SCRIPT         — main grammar body; ignore tcl.hspace
-//   WORD_SEGMENTS  — word internals; no ignore (whitespace is literal)
+//   SEGMENTS       — word internals; no ignore (whitespace is literal)
 //
 // Tcl is parsed structurally per the Dodekalogue: a script is a list
 // of commands separated by `;` or newline; each command is a list of
 // words; each word is one of {brace, quoted, bracket, bare}. Bare and
-// quoted words are sub-parsed through WORD_SEGMENTS to split out
+// quoted words are sub-parsed through SEGMENTS to split out
 // variable references ($x / ${x} / $arr(idx)), command substitutions
 // ([cmd]), and backslash escapes from literal text. Brace words are
 // opaque per Dodekalogue rule 6; bracket words are nested Tcl
@@ -104,29 +104,32 @@ BRACKET_WORD: sequence dict {
 }
 
 // Quoted/bare words: substitutions DO apply — re-parse via
-// WORD_SEGMENTS (rule-local ignore: none, so whitespace is literal).
+// SEGMENTS (rule-local ignore: none, so whitespace is literal).
 QUOTED_WORD: sequence dict {
-  tcl.quoted_string:type="quoted":value=@:#subparse="WORD_SEGMENTS"
+  tcl.quoted_string:type="quoted":value=@:#subparse="SEGMENTS"
 }
 
 BARE_WORD: sequence dict {
-  tcl.bare_word:type="bare":value=@:#subparse="WORD_SEGMENTS"
+  tcl.bare_word:type="bare":value=@:#subparse="SEGMENTS"
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 2. WORD_SEGMENTS context — word internals
+// 2. SEGMENTS context — word internals
 // ═══════════════════════════════════════════════════════════════════
 //
 // Re-parses a bare or quoted word's raw text into a list of segments:
 // literal text, variable references, command substitutions, escapes.
-// Per `ignore WORD_SEGMENTS:` (empty) below, whitespace is literal —
-// nothing is skipped between tokens.
+// The empty rule-local `ignore` declaration ("nothing skipped") keeps
+// whitespace literal — no skipping between tokens — so each segment's
+// position survives the round trip.
+//
+// Subparsed directly: BARE_WORD / QUOTED_WORD route the captured raw
+// text through this rule via `:#subparse="SEGMENTS"`. The resulting
+// AST is a flat array of segment dicts living under the word's
+// `value:` field — no wrapper dict, no `segments:` key. The schema is
+// self-documenting via each segment's own `type:` discriminator.
 
-WORD_SEGMENTS ignore: sequence dict {
-  <SEGMENTS>:segments=@
-}
-
-SEGMENTS: sequence array {
+SEGMENTS ignore: sequence array {
   repeat <SEGMENT>
 }
 
@@ -190,7 +193,7 @@ VAR_SEG_BRACED: sequence dict {
 // systemverilog.rawast's NET_INIT.
 VAR_INDEX: sequence {
   "(",
-  *:index=@:#subparse="WORD_SEGMENTS",
+  *:index=@:#subparse="SEGMENTS",
   ")"
 }
 
