@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <rawast/grammar.hpp>
+#include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 
 #include <memory>
@@ -190,4 +191,79 @@ TEST_CASE("Parse-then-save with JSONC input: comments stripped, canonical output
         "// header\n"
         "{ \"a\": 1 /* inline */, \"b\": 2 }");
     CHECK(save_to_string(g, v) == "{\"a\":1,\"b\":2}");
+}
+
+// ─── Save dispatcher: separator-as-discriminator ────────────────
+// Regression suite for the precedence-ladder chain pattern where
+// the discriminator lives on the separator, not on the item:
+//
+//     CHAIN: sequence dict {
+//         repeat+2 <NEXT>:args[]=@ separator '||':op="||"
+//     }
+//
+// The dispatcher must recognise that CHAIN's discriminator is
+// `dict[op] == "||"` (set by the separator's literal binding),
+// not a catch-all wildcard. Previously the bug:
+//   * A top-level Choice between CHAIN and a leaf rule treats
+//     CHAIN as the catch-all and dispatches every dict to it,
+//     including type-tagged leaves that have nothing to do with
+//     CHAIN.
+//   * Two parallel chain rules (`OR_CHAIN` with `||`, `AND_CHAIN`
+//     with `&&`) become indistinguishable: both dispatch to the
+//     first chain alt regardless of the dict's actual op.
+
+TEST_CASE("save: separator-discriminator — chain rule does not eat type-tagged leaves") {
+    Grammar g;
+    register_std_parser_group();
+    const char* src = R"(
+        use: std
+        start: <TOP>
+        TOP ignore whitespace: choice { <CHAIN>, <LEAF> }
+        CHAIN: sequence dict {
+            repeat+2 <LEAF>:args[]=@ separator '||':op="||"
+        }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Bare LEAF — no `args`, no `op`. Must dispatch to LEAF, not CHAIN.
+    auto leaf_ast = parse_to_value(g, "FOO");
+    CHECK(save_to_string(g, leaf_ast) == "FOO");
+
+    // Chain — dispatch to CHAIN, emit operator between args.
+    auto chain_ast = parse_to_value(g, "A || B");
+    CHECK(save_to_string(g, chain_ast) == "A||B");
+}
+
+TEST_CASE("save: separator-discriminator — two chains with different ops dispatch correctly") {
+    Grammar g;
+    register_std_parser_group();
+    const char* src = R"(
+        use: std
+        start: <OR>
+        OR ignore whitespace: choice { <OR_CHAIN>, <AND> }
+        OR_CHAIN: sequence dict {
+            repeat+2 <AND>:args[]=@ separator '||':op="||"
+        }
+        AND: choice { <AND_CHAIN>, <LEAF> }
+        AND_CHAIN: sequence dict {
+            repeat+2 <LEAF>:args[]=@ separator '&&':op="&&"
+        }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Same surface dict shape ({args, op}), different op — dispatcher
+    // must pick the right chain rule via the op discriminator.
+    auto or_ast = parse_to_value(g, "A || B");
+    CHECK(save_to_string(g, or_ast) == "A||B");
+
+    auto and_ast = parse_to_value(g, "A && B");
+    CHECK(save_to_string(g, and_ast) == "A&&B");
 }

@@ -459,7 +459,16 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     if (!is_list) return std::nullopt;  // not the `[]=@` pattern
     const Node& item = g.node(g.resolve_ref(wrapper.children[1]));
     auto discs = collect_child_discriminators(g, item);
-    if (discs.empty()) return std::nullopt;
+    // n-ary chain pattern: the separator can carry the rule's
+    // discriminator as a const-binding (`separator '||':op="||"`).
+    // Collect those too; if neither item nor separator yields any,
+    // there's no discriminator and the function is inapplicable.
+    std::vector<ChildDisc> sep_discs;
+    if (repeat_node.has_separator && !repeat_node.children.empty()) {
+        const Node& sep = g.node(g.resolve_ref(repeat_node.children[0]));
+        sep_discs = collect_child_discriminators(g, sep);
+    }
+    if (discs.empty() && sep_discs.empty()) return std::nullopt;
     auto it = dict.data().find(field);
     if (it == dict.data().end()) {
         // Missing / empty list. `repeat+` (min>=1) requires at least
@@ -493,6 +502,24 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
             if (!ok) return false;
         }
     }
+    // n-ary chain pattern: verify the rule-level discriminator the
+    // separator carries (e.g. `separator '||':op="||"` means
+    // dict[op] must equal "||" for this rule to apply). Without
+    // this check, two CHAIN rules differing only in operator —
+    // OR_CHAIN with '||', AND_CHAIN with '&&' — both look like
+    // catch-alls and the dispatcher picks whichever comes first.
+    for (const auto& d : sep_discs) {
+        auto dit = dict.data().find(d.field);
+        if (dit == dict.data().end()) return false;
+        bool ok = false;
+        for (const auto& v : d.values) {
+            if (values_equal_v2(dit->second, v.get())) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) return false;
+    }
     return true;
 }
 
@@ -518,20 +545,35 @@ bool has_explicit_discriminator(const Grammar& g, NodeId alt_id) {
             // type=@` pattern).
             if (!discriminator_choice_values(g, b).empty()) return true;
         }
-        // Bare Repeat children carrying a V-name + discriminating item.
+        // Bare Repeat children carrying a V-name + discriminating
+        // item, OR a separator with a const-binding discriminator.
+        // The second case covers the n-ary chain pattern:
+        //   repeat+2 <NEXT>:args[]=@ separator '||':op="||"
+        // where the rule-distinguishing constant lives on the
+        // separator, not on the item. Without this branch the rule
+        // looks like a wildcard catch-all and the save dispatcher
+        // routes every {args:...}-shaped dict here regardless of op.
         for (NodeId child_id : n.children) {
             const Node& cn = g.node(g.resolve_ref(child_id));
             if (cn.kind != NodeKind::Repeat) continue;
             std::size_t item_idx = cn.has_separator ? 1 : 0;
-            if (item_idx >= cn.children.size()) continue;
-            const Node& wrapper = g.node(
-                g.resolve_ref(cn.children[item_idx]));
-            if (wrapper.kind != NodeKind::Sequence) continue;
-            if (wrapper.children.size() < 2) continue;
-            const Node& item = g.node(
-                g.resolve_ref(wrapper.children[1]));
-            if (!collect_child_discriminators(g, item).empty()) {
-                return true;
+            if (item_idx < cn.children.size()) {
+                const Node& wrapper = g.node(
+                    g.resolve_ref(cn.children[item_idx]));
+                if (wrapper.kind == NodeKind::Sequence
+                    && wrapper.children.size() >= 2) {
+                    const Node& item = g.node(
+                        g.resolve_ref(wrapper.children[1]));
+                    if (!collect_child_discriminators(g, item).empty()) {
+                        return true;
+                    }
+                }
+            }
+            if (cn.has_separator && !cn.children.empty()) {
+                const Node& sep = g.node(g.resolve_ref(cn.children[0]));
+                if (!collect_child_discriminators(g, sep).empty()) {
+                    return true;
+                }
             }
         }
         if (!n.children.empty()) {
