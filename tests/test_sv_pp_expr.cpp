@@ -32,6 +32,13 @@ Grammar load_grammar() {
     return g;
 }
 
+std::string save(Grammar& g, ValuePtr v) {
+    std::ostringstream out;
+    auto r = g.save(out, std::move(v));
+    REQUIRE_MESSAGE(r, "save failed: " << (r ? "" : r.error().message));
+    return out.str();
+}
+
 ValuePtr parse(Grammar& g, const std::string& input) {
     std::istringstream is{input};
     StreamReader sr{is};
@@ -283,4 +290,93 @@ TEST_CASE("sv_pp_expr: realistic — !defined(LEGACY)") {
     auto inner = arg_at(ast, 0);
     CHECK(str_field(inner, "type") == "call");
     CHECK(str_field(inner, "name") == "defined");
+}
+
+// ─── Round-trip via save ────────────────────────────────────────
+// Real test of whether the save-side dispatcher can tell our op-
+// tagged dicts apart. parse → save → parse must yield the same AST
+// (text may differ in whitespace; we don't require byte-equality).
+
+TEST_CASE("sv_pp_expr round-trip: bare leaves") {
+    auto g = load_grammar();
+    for (const std::string& input : {"FOO", "42", "(FOO)"}) {
+        auto ast = parse(g, input);
+        auto saved = save(g, ast);
+        auto reparsed = parse(g, saved);
+        // Save should produce something parseable that yields the
+        // same AST shape — we check by re-parsing and comparing the
+        // top-level type field. Stronger byte-equality is over-
+        // strict (whitespace insertion is allowed).
+        CHECK_MESSAGE(str_field(reparsed, "type") == str_field(ast, "type"),
+                      "input=" << input << " saved=" << saved);
+    }
+}
+
+TEST_CASE("sv_pp_expr round-trip: || chain — op discriminator must survive save") {
+    auto g = load_grammar();
+    auto ast = parse(g, "A || B || C");
+    auto saved = save(g, ast);
+    INFO("saved: " << saved);
+    auto reparsed = parse(g, saved);
+    CHECK(str_field(reparsed, "op") == "||");
+    REQUIRE(args_size(reparsed) == 3);
+}
+
+TEST_CASE("sv_pp_expr round-trip: && chain") {
+    auto g = load_grammar();
+    auto ast = parse(g, "A && B && C");
+    auto saved = save(g, ast);
+    INFO("saved: " << saved);
+    auto reparsed = parse(g, saved);
+    CHECK(str_field(reparsed, "op") == "&&");
+    REQUIRE(args_size(reparsed) == 3);
+}
+
+TEST_CASE("sv_pp_expr round-trip: == and != — same shape, different op") {
+    auto g = load_grammar();
+    {
+        auto ast = parse(g, "A == B");
+        auto saved = save(g, ast);
+        INFO("saved: " << saved);
+        auto reparsed = parse(g, saved);
+        CHECK(str_field(reparsed, "op") == "==");
+    }
+    {
+        auto ast = parse(g, "A != B");
+        auto saved = save(g, ast);
+        INFO("saved: " << saved);
+        auto reparsed = parse(g, saved);
+        CHECK(str_field(reparsed, "op") == "!=");
+    }
+}
+
+TEST_CASE("sv_pp_expr round-trip: unary !") {
+    auto g = load_grammar();
+    auto ast = parse(g, "!FOO");
+    auto saved = save(g, ast);
+    INFO("saved: " << saved);
+    auto reparsed = parse(g, saved);
+    CHECK(str_field(reparsed, "op") == "!");
+    REQUIRE(args_size(reparsed) == 1);
+}
+
+TEST_CASE("sv_pp_expr round-trip: defined() call") {
+    auto g = load_grammar();
+    auto ast = parse(g, "defined(FOO)");
+    auto saved = save(g, ast);
+    INFO("saved: " << saved);
+    auto reparsed = parse(g, saved);
+    CHECK(str_field(reparsed, "type") == "call");
+    CHECK(str_field(reparsed, "name") == "defined");
+}
+
+TEST_CASE("sv_pp_expr round-trip: realistic mixed expr — defined() && (A == 32 || A == 64)") {
+    auto g = load_grammar();
+    const std::string input = "defined(FOO) && (A == 32 || A == 64)";
+    auto ast = parse(g, input);
+    auto saved = save(g, ast);
+    INFO("saved: " << saved);
+    auto reparsed = parse(g, saved);
+    CHECK(str_field(reparsed, "op") == "&&");
+    REQUIRE(args_size(reparsed) == 2);
 }

@@ -28,6 +28,12 @@ use: std
 
 start: <PP_EXPR>
 
+// The ignore policy lives on the start rule and propagates to all
+// callees until something overrides it — so a single `ignore
+// whitespace` here covers the whole grammar.
+
+PP_EXPR: <OR_EXPR>
+
 // ─── Precedence ladder (low → high) ─────────────────────────────
 // OR  <  AND  <  EQ  <  UNARY  <  PRIMARY
 // Each level is `choice { CHAIN, NEXT }` — chain branch for the
@@ -35,39 +41,37 @@ start: <PP_EXPR>
 // case. Surface AST is n-ary `{op, args}` whenever the chain fires;
 // bare leaves bypass the wrapper and carry only their own fields.
 
-PP_EXPR ignore whitespace: <OR_EXPR>
-
 OR_EXPR ignore whitespace: choice {
     <OR_CHAIN>,
     <AND_EXPR>
 }
-OR_CHAIN ignore whitespace: sequence dict {
+OR_CHAIN: sequence dict {
     repeat+2 <AND_EXPR>:args[]=@ separator '||':op="||"
 }
 
-AND_EXPR ignore whitespace: choice {
+AND_EXPR: choice {
     <AND_CHAIN>,
     <EQ_EXPR>
 }
-AND_CHAIN ignore whitespace: sequence dict {
+AND_CHAIN: sequence dict {
     repeat+2 <EQ_EXPR>:args[]=@ separator '&&':op="&&"
 }
 
-EQ_EXPR ignore whitespace: choice {
+EQ_EXPR: choice {
     <EQ_BINOP>,
     <UNARY_EXPR>
 }
-EQ_BINOP ignore whitespace: sequence dict {
+EQ_BINOP: sequence dict {
     <UNARY_EXPR>:args[]=@,
     choice { '==':op="==", '!=':op="!=" },
     <UNARY_EXPR>:args[]=@
 }
 
-UNARY_EXPR ignore whitespace: choice {
+UNARY_EXPR: choice {
     <NOT_EXPR>,
     <PRIMARY>
 }
-NOT_EXPR ignore whitespace: sequence dict {
+NOT_EXPR: sequence dict {
     "!":op="!",
     <UNARY_EXPR>:args[]=@
 }
@@ -78,29 +82,29 @@ NOT_EXPR ignore whitespace: sequence dict {
 // CALL_EXPR commits only after seeing the `(`, so the fall-through
 // to MACRO_REF works for bare identifiers.
 
-PRIMARY ignore whitespace: choice {
+PRIMARY: choice {
     <INT_LIT>,
     <CALL_EXPR>,
     <MACRO_REF>,
     <PAREN_EXPR>
 }
 
-CALL_EXPR ignore whitespace: sequence dict {
+CALL_EXPR: sequence dict {
     identifier:type="call":name=@,
     "(",
     repeat <PP_EXPR>:args[]=@ separator ",",
     ")"
 }
 
-MACRO_REF ignore whitespace: sequence dict {
+MACRO_REF: sequence dict {
     identifier:type="macro_ref":name=@
 }
 
-INT_LIT ignore whitespace: sequence dict {
+INT_LIT: sequence dict {
     int:type="int_lit":value=@
 }
 
-PAREN_EXPR ignore whitespace: sequence dict {
+PAREN_EXPR: sequence dict {
     "(":type="paren",
     <PP_EXPR>:inner=@,
     ")"
