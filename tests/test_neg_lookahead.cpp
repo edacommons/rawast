@@ -36,6 +36,49 @@ bool parses(Grammar& g, const std::string& input) {
 
 } // namespace
 
+TEST_CASE("`!<parser>` as the SOLE consumer — Parse-node inversion") {
+    // Parse-node negative lookahead. The inversion path for
+    // NodeKind::Parse must mirror the Key case in src/grammar.cpp.
+    auto g = make_target();
+    const char* src = R"(
+        use: std
+        start: <STMT>
+        STMT: sequence { !identifier }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(g, src));
+
+    CHECK_FALSE(parses(g, "foo"));    // identifier matches → invert to fail
+    CHECK(parses(g, ""));             // EOF — identifier fails → success empty
+    CHECK_FALSE(parses(g, " "));      // identifier fails at " ", succeeds empty, then bytes remain
+}
+
+TEST_CASE("`!'literal'` as the SOLE consumer — proves the inversion fires") {
+    // STMT: sequence { !'end' }  — the negative lookahead is the
+    // entire rule. There's no following item that could mask the
+    // bug by failing after the Key incorrectly succeeded.
+    //
+    // Input "end": `!'end'` matches → MUST invert to failure → STMT
+    // fails → parse rejects.
+    //
+    // Input "": cursor at EOF, `!'end'` succeeds with zero bytes
+    // consumed → STMT succeeds → no remaining bytes → parse accepts.
+    //
+    // Input "alpha": `!'end'` succeeds (no 'end' match at cursor) →
+    // STMT succeeds → cursor still at 0, 5 bytes remain → parse
+    // rejects with "unexpected content after start rule completed".
+    auto g = make_target();
+    const char* src = R"(
+        use: std
+        start: <STMT>
+        STMT: sequence { !'end' }
+    )";
+    REQUIRE(load_rawast_grammar_from_string(g, src));
+
+    CHECK_FALSE(parses(g, "end"));    // negative MUST reject 'end'
+    CHECK(parses(g, ""));             // negative succeeds on EOF
+    CHECK_FALSE(parses(g, "alpha"));  // negative succeeds but bytes remain
+}
+
 TEST_CASE("`!'literal'` rejects matching input, succeeds on non-matching") {
     auto g = make_target();
     // STMT: !'end' identifier  — accept any identifier *except* `end`.

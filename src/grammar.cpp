@@ -1264,6 +1264,36 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 captured.push_back(*c);
                 sr.get();
             }
+            // Negative-lookahead inversion for Raw. Same shape as the
+            // Key and Parse arms: a Raw frame marked `!*` inverts its
+            // outcome before any value processing. The neg-inversion
+            // happens BEFORE pool intern / subparse hook so the
+            // captured string is discarded entirely on the
+            // success-to-failure path (we wanted the inner to fail).
+            if (top.is_negative()) {
+                // Whichever way the inner went, rewind the byte mark
+                // taken at entry and pop the frame.
+                if (found) sr.accept(); else sr.reject();
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (found) {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead matched (failing)");
+                    }
+                    handle_failure(ParseError{
+                        sr.position(), "negative lookahead matched"});
+                } else {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead inner failed (succeeding empty)");
+                    }
+                    if (!stack.empty()) advance_after_child();
+                }
+                break;
+            }
             if (!found) {
                 sr.reject();
                 handle_failure(ParseError{
@@ -1333,6 +1363,36 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (trace_enabled) trace("  key \"" + sv->data() + "\"");
             KeyParser p(sv->data(), n.strict);
             auto r = p.parse(sr);
+            // Negative-lookahead inversion. A Key frame marked
+            // `!"literal"` flips the success/failure of the inner
+            // parse. We handle this BEFORE the normal pop path
+            // because a terminal Key with no Value children pops
+            // inline (does not pass through `advance_after_child`'s
+            // negative-check arm at line ~1052), so the flag would
+            // otherwise be silently dropped. Same inversion shape
+            // as the advance_after_child arms; mirror in NodeKind::
+            // Parse and NodeKind::Raw below.
+            if (top.is_negative()) {
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (r) {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead matched (failing)");
+                    }
+                    handle_failure(ParseError{
+                        sr.position(), "negative lookahead matched"});
+                } else {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead inner failed (succeeding empty)");
+                    }
+                    if (!stack.empty()) advance_after_child();
+                }
+                break;
+            }
             if (r) {
                 // Key matched. The literal itself is not emitted; any
                 // Value-kind children, however, contribute their
@@ -1373,6 +1433,32 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             Parser* p = parser(sv->data());
             assert(p);
             auto r = p->parse(sr);
+            // Same negative-lookahead inversion as Key (see comment
+            // there). Applies whether or not this Parse has Value
+            // children — a terminal Parse marked `!<parser>` pops
+            // inline and never reaches advance_after_child's negative
+            // arm.
+            if (top.is_negative()) {
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (r) {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead matched (failing)");
+                    }
+                    handle_failure(ParseError{
+                        sr.position(), "negative lookahead matched"});
+                } else {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead inner failed (succeeding empty)");
+                    }
+                    if (!stack.empty()) advance_after_child();
+                }
+                break;
+            }
             if (r) {
                 ValuePtr produced = *r;
                 // Subparse hook: if this Parse node carries a
