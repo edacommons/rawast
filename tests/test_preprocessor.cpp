@@ -75,6 +75,19 @@ DOC ignore linespace: sequence array {
   repeat <ITEM>
 }
 
+// Directive alternatives are tried before TEXT. Each directive's
+// leading literal (`\`define`, `\`ifdef`, …) is the discriminator;
+// `\`endif` and `\`else` deliberately have no matching ITEM, so
+// BODY's repeat stops cleanly at the close of a conditional block.
+//
+// MACRO_USE (`\`IDENT`) is intentionally omitted from the minimal
+// harness because it would otherwise consume `\`endif` as a macro
+// reference and break IFDEF's close detection — `\`endif` parses as
+// `\`` + identifier `endif`. The grammar-level fix is `!"\`endif"` in
+// MACRO_USE, but the engine's negative-lookahead doesn't currently
+// fire on direct-popped Key frames (see grammar.cpp:1336-1360 vs.
+// the is_negative check in advance_after_child). Adding MACRO_USE
+// belongs with that engine fix; not blocking task #182.
 ITEM: choice {
   <DEFINE>,
   <UNDEF>,
@@ -82,7 +95,6 @@ ITEM: choice {
   <IFNDEF>,
   <IF>,
   <INCLUDE>,
-  <MACRO_USE>,
   <TEXT>
 }
 
@@ -141,17 +153,13 @@ INCLUDE: sequence dict {
   string:path=@, nl
 }:#role="include"
 
-MACRO_USE: sequence dict {
-  "`":type="macro_use",
-  identifier:name=@
-}:#role="macro_use"
-
-// TEXT here captures one identifier-shaped token per line. The
-// minimal harness focuses on directive-handling behaviour; arbitrary
-// free-text passthrough belongs in a more capable preprocessor
-// grammar.
+// TEXT captures one identifier-shaped token per line. No leading
+// `!"\`"` guard is needed: `identifier` requires a letter/underscore
+// start, so a `\`endif` line (or any backtick-prefixed line) cleanly
+// fails to match here. Arbitrary free-text passthrough belongs in a
+// more capable preprocessor grammar — this minimal harness is about
+// driving the walker, not modelling real source.
 TEXT: sequence dict {
-  !"`",
   identifier:text=@:type="text",
   nl
 }:#role="text"
