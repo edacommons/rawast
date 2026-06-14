@@ -333,3 +333,67 @@ TEST_CASE("save: inline-Choice discriminator — rule with inner op-Choice rejec
     auto ne_ast = parse_to_value(g, "A != B");
     CHECK(save_to_string(g, ne_ast) == "A!=B");
 }
+
+// ─── Save dispatcher: scope-aware recursion ─────────────────────
+// The recursive dispatchability check needs to track scope changes
+// across `:field=@` and `:field[]=@` bindings. Without scope
+// tracking the recursion checks the next sibling's discriminators
+// against the OUTER dict — wrong for a Ref like `<UNARY>:args[]=@`,
+// where UNARY is meant to dispatch each element of dict.args, not
+// the outer dict itself.
+//
+// Reproduces sv_pp_expr.rawast's remaining round-trip failures
+// (== / != chain and the realistic mixed expression) using a
+// minimal precedence ladder with the same shape.
+
+TEST_CASE("save: scope-aware recursion through `:args[]=@` bindings") {
+    Grammar g;
+    register_std_parser_group();
+    const char* src = R"(
+        use: std
+        start: <OR>
+        OR ignore whitespace: choice { <OR_CHAIN>, <AND> }
+        OR_CHAIN: sequence dict {
+            repeat+2 <AND>:args[]=@ separator '||':op="||"
+        }
+        AND: choice { <AND_CHAIN>, <EQ> }
+        AND_CHAIN: sequence dict {
+            repeat+2 <EQ>:args[]=@ separator '&&':op="&&"
+        }
+        EQ: choice { <EQ_BINOP>, <UNARY> }
+        EQ_BINOP: sequence dict {
+            <UNARY>:args[]=@,
+            choice { '==':op="==", '!=':op="!=" },
+            <UNARY>:args[]=@
+        }
+        UNARY: choice { <NOT_EXPR>, <PRIMARY> }
+        NOT_EXPR: sequence dict {
+            '!':op="!",
+            <UNARY>:args[]=@
+        }
+        PRIMARY: choice { <LEAF> }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Equality + inequality: dict.op is "==" / "!=". EQ_BINOP needs
+    // to accept these; my non-scope-aware recursion rejects them
+    // because it checks UNARY's discriminators against the outer
+    // dict (which has op="==", not type="leaf").
+    auto eq_ast = parse_to_value(g, "A == B");
+    CHECK(save_to_string(g, eq_ast) == "A==B");
+
+    auto ne_ast = parse_to_value(g, "A != B");
+    CHECK(save_to_string(g, ne_ast) == "A!=B");
+
+    // Mixed: && containing == — exercises the scope flowing through
+    // a chain into a binop arg list.
+    auto mixed = parse_to_value(g, "A && B == C");
+    auto saved = save_to_string(g, mixed);
+    INFO("saved: " << saved);
+    auto reparsed = parse_to_value(g, saved);
+    CHECK(reparsed);
+}

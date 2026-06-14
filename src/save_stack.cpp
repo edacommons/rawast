@@ -465,25 +465,55 @@ bool dispatchable_for_dict(const Grammar& g, NodeId node_id,
                 break;
             }
             case NodeKind::Sequence: {
+                // Scope-aware walk: a V-name marker "claims" the
+                // next sibling — that sibling consumes a field's
+                // value (or iterates a field's array), so its own
+                // discriminators apply to the FIELD'S value, not the
+                // outer dict. Without distinguishing this case from
+                // a bare Ref / Choice, we'd recurse into `<X>` with
+                // the outer dict for `<X>:foo=@` and reject because
+                // X's discriminator doesn't match outer-level fields.
                 result = true;
+                bool prev_was_vname = false;
                 for (std::size_t i = 0; i < n.children.size(); ++i) {
                     const Node& c = g.node(g.resolve_ref(n.children[i]));
-                    if (c.kind == NodeKind::Choice
-                        || c.kind == NodeKind::Ref) {
-                        if (!dispatchable_for_dict(g, n.children[i], dict, visited)) {
-                            result = false;
-                            break;
+                    if (c.kind == NodeKind::Value && c.is_name) {
+                        // V-name marker. Try the discriminator-pair
+                        // form against the next sibling (Value-const,
+                        // Key-with-Value-child, Ref-to-Choice-of-keys
+                        // — discriminator_pair_matches checks those).
+                        // For non-discriminator siblings (Refs,
+                        // Choices, Parse), no constraint is enforced
+                        // here; the sibling will be consumed by the
+                        // V-name binding at emission time and its
+                        // own discriminators apply to the field's
+                        // value, not the outer dict.
+                        if (i + 1 < n.children.size()) {
+                            auto fname = as_string(c.value);
+                            if (fname) {
+                                const Node& nb = g.node(
+                                    g.resolve_ref(n.children[i + 1]));
+                                auto m = discriminator_pair_matches(
+                                    g, fname->data(), nb, dict);
+                                if (m.has_value() && !*m) {
+                                    result = false;
+                                    break;
+                                }
+                            }
                         }
+                        prev_was_vname = true;
                         continue;
                     }
-                    if (c.kind == NodeKind::Value && c.is_name
-                        && i + 1 < n.children.size()) {
-                        auto fname = as_string(c.value);
-                        if (!fname) continue;
-                        const Node& nb = g.node(g.resolve_ref(n.children[i + 1]));
-                        auto m = discriminator_pair_matches(
-                            g, fname->data(), nb, dict);
-                        if (m.has_value() && !*m) {
+                    if (prev_was_vname) {
+                        // Consumed by the preceding V-name binding;
+                        // skip discriminator-recursion on it.
+                        prev_was_vname = false;
+                        continue;
+                    }
+                    if (c.kind == NodeKind::Choice
+                        || c.kind == NodeKind::Ref) {
+                        if (!dispatchable_for_dict(g, n.children[i],
+                                                    dict, visited)) {
                             result = false;
                             break;
                         }
@@ -930,8 +960,11 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             // value at save."
             for (NodeId child_id : n.children) {
                 const Node& orig = g.node(child_id);
-                const Node& cn = g.node(g.resolve_ref(child_id));
-                if (cn.kind != NodeKind::Choice) continue;
+                // Only fire on INLINE Choice children — Refs that
+                // resolve to a Choice body are scope-changers (the
+                // V-name preceding the Ref takes care of dispatch),
+                // not in-body discriminators.
+                if (orig.kind != NodeKind::Choice) continue;
                 std::unordered_set<std::uint32_t> visited;
                 if (!dispatchable_for_dict(g, child_id, dict, visited)) {
                     if (orig.is_optional) continue;
