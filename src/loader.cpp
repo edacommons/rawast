@@ -1167,6 +1167,31 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
         }
     }
 
+    // Validate that every Parse-node references a registered parser.
+    // Without this, an unresolved name (typo, wrong group, std parser
+    // referenced before the `use:` declaration) is accepted by the
+    // loader and only blows up at parse time with a null deref on the
+    // parser pointer — a hostile failure mode for grammar authors,
+    // since the diagnostic is "segfault" with no context. By the time
+    // we reach this point, `use:` groups have been applied and all
+    // host-side `register_parser()` calls that ran before load have
+    // landed; any remaining unresolved name is a real bug in the
+    // grammar text.
+    for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
+        NodeId nid{idx};
+        const Node& n = g.node(nid);
+        if (n.kind != NodeKind::Parse) continue;
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv) continue;            // shouldn't happen — Parse always has a name
+        const std::string& name = sv->data();
+        if (g.parser(name) != nullptr) continue;
+        return tl::unexpected(
+            "unknown parser '" + name + "' referenced by grammar; "
+            "either register it on the Grammar before load, or add the "
+            "appropriate `use: <group>` line if it comes from a parser "
+            "group (e.g. `use: std` for `int` / `identifier` / etc.)");
+    }
+
     return {};
 }
 

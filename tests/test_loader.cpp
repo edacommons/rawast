@@ -40,7 +40,12 @@ std::string save_with(const Grammar& g, ValuePtr value) {
 
 TEST_CASE("Loader builds JSON grammar from inline JSON-grammar text") {
     auto g = make_json_target();
+    // `use: [std]` is required for `{"type": "int"}` and
+    // `{"type": "string"}` Parse nodes to resolve. Loader now
+    // validates that every Parse-node parser name exists at load
+    // time, so omitting `use` here would be a clear loader error.
     const char* schema = R"({
+        "use": ["std"],
         "start": "VALUE",
         "VALUE": {
             "type": "choice",
@@ -249,6 +254,27 @@ TEST_CASE("Loaded .rawast grammar parses a single ref rule") {
         start_dict->data().at("type"));
     REQUIRE(type_val);
     CHECK(type_val->data() == "VALUE");
+}
+
+TEST_CASE(".rawast loader: unresolved parser reference errors at load time, not at parse") {
+    // Regression test for a SIGSEGV: writing `<X>: sequence { foo:=@ }`
+    // where `foo` is not a registered std parser used to be accepted by
+    // the loader, then crash the parse engine with a null deref at the
+    // assert(p) site in NodeKind::Parse dispatch. The right behaviour is
+    // a clear loader-time error naming the offending parser, so the
+    // grammar author can fix the typo without reaching the runtime path.
+    Grammar target;
+    register_std_parser_group();
+    const char* bad_source = R"(
+        use: std
+        start: <X>
+        X: sequence { definitely_not_a_real_parser:=@ }
+    )";
+    auto r = load_rawast_grammar_from_string(target, bad_source);
+    REQUIRE_FALSE(r);
+    // Error should mention the unknown parser name so the user can
+    // search for it directly.
+    CHECK(r.error().find("definitely_not_a_real_parser") != std::string::npos);
 }
 
 TEST_CASE("Loaded .rawast grammar parses a choice of parser-name expressions") {
