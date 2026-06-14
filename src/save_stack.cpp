@@ -417,6 +417,89 @@ discriminator_pair_matches(const Grammar& g, const std::string& name,
     return std::nullopt;
 }
 
+// Recursive check: could this grammar node dispatch the given dict?
+// Used by the Sequence-Dict can_consume branch to validate inline
+// Choice children (and Choices nested inside them) without
+// committing to a particular dispatch path.
+//
+// Mirrors the prototype's `_check_element` — symmetry with parse:
+// any shape parse can accept, save can dispatch through the same
+// recursion. Without this, an inline Choice with non-trivial alts
+// (nested Choices, Refs, Sequences with their own discriminators)
+// reads as a catch-all to the dispatcher and bad dicts commit then
+// fail at emission with "no matching grammar alternative for value
+// at save."
+//
+// Recursion rules:
+//
+//   * Choice — at least one alt must be dispatchable.
+//   * Ref    — resolve and recurse into the body.
+//   * Sequence — recurse into Choice / Ref children; check every
+//     (V-name + expr) pair as a discriminator (false → reject this
+//     subtree). Other children don't constrain at this level.
+//   * Other  — permissive; let the actual emission path decide.
+bool dispatchable_for_dict(const Grammar& g, NodeId node_id,
+                            const DictValue& dict,
+                            std::unordered_set<std::uint32_t>& visited) {
+    NodeId resolved = g.resolve_ref(node_id);
+    // Cycle guard. TCL has BRACKET_WORD → ... → SCRIPT → COMMAND →
+    // ... → BRACKET_WORD (command substitution inside a script).
+    // Without the visited set the recursion stack-overflows on any
+    // real Tcl input. When a node is already on the stack, assume
+    // it's dispatchable — the surrounding context will reject
+    // mismatches at the actual emission site.
+    if (!visited.insert(resolved.value()).second) return true;
+    bool result;
+    {
+        const Node& n = g.node(resolved);
+        switch (n.kind) {
+            case NodeKind::Choice: {
+                if (n.children.empty()) { result = true; break; }
+                result = false;
+                for (NodeId alt : n.children) {
+                    if (dispatchable_for_dict(g, alt, dict, visited)) {
+                        result = true;
+                        break;
+                    }
+                }
+                break;
+            }
+            case NodeKind::Sequence: {
+                result = true;
+                for (std::size_t i = 0; i < n.children.size(); ++i) {
+                    const Node& c = g.node(g.resolve_ref(n.children[i]));
+                    if (c.kind == NodeKind::Choice
+                        || c.kind == NodeKind::Ref) {
+                        if (!dispatchable_for_dict(g, n.children[i], dict, visited)) {
+                            result = false;
+                            break;
+                        }
+                        continue;
+                    }
+                    if (c.kind == NodeKind::Value && c.is_name
+                        && i + 1 < n.children.size()) {
+                        auto fname = as_string(c.value);
+                        if (!fname) continue;
+                        const Node& nb = g.node(g.resolve_ref(n.children[i + 1]));
+                        auto m = discriminator_pair_matches(
+                            g, fname->data(), nb, dict);
+                        if (m.has_value() && !*m) {
+                            result = false;
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+            default:
+                result = true;
+                break;
+        }
+    }
+    visited.erase(resolved.value());
+    return result;
+}
+
 // Detect the `repeat <X>:field[]=@` pattern at a Sequence child position
 // and check whether the dict satisfies it. The loader represents this as
 // a Repeat node whose single child is a wrapper Sequence containing:
@@ -830,6 +913,27 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 auto m = repeat_field_matches(g, cn, dict);
                 if (!m.has_value()) continue;
                 if (!*m) {
+                    if (orig.is_optional) continue;
+                    return false;
+                }
+                found_disc_match = true;
+            }
+            // Inline-Choice walk via the recursive dispatchability
+            // check. Symmetric with parse: a Choice in the rule body
+            // dispatches if at least one alt could fire on the
+            // current dict — checked recursively so nested Choices,
+            // Refs, and Sequences with their own discriminators all
+            // participate. Without this, the rule reads as a catch-
+            // all and the dispatcher commits to it for any dict
+            // whose field-presence walk passes — then errors at
+            // emission with "no matching grammar alternative for
+            // value at save."
+            for (NodeId child_id : n.children) {
+                const Node& orig = g.node(child_id);
+                const Node& cn = g.node(g.resolve_ref(child_id));
+                if (cn.kind != NodeKind::Choice) continue;
+                std::unordered_set<std::uint32_t> visited;
+                if (!dispatchable_for_dict(g, child_id, dict, visited)) {
                     if (orig.is_optional) continue;
                     return false;
                 }

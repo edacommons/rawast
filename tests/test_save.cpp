@@ -267,3 +267,69 @@ TEST_CASE("save: separator-discriminator — two chains with different ops dispa
     auto and_ast = parse_to_value(g, "A && B");
     CHECK(save_to_string(g, and_ast) == "A&&B");
 }
+
+// ─── Save dispatcher: inline-Choice discriminator ───────────────
+// A rule whose body contains an inline `choice { K1:f=v1, K2:f=v2 }`
+// is currently treated as a wildcard catch-all because no top-level
+// (V-name + Value-const) pair is found. The dispatcher commits to
+// it for any dict whose field-presence walk passes — even when
+// the inner Choice cannot dispatch — and then errors out at
+// emission time with "no matching grammar alternative for value
+// at save".
+//
+// Rule pattern this exercises:
+//
+//   EQ: choice { EQ_BINOP, LEAF }
+//   EQ_BINOP: sequence dict {
+//       <LEAF>:args[]=@,
+//       choice { '==':op="==", '!=':op="!=" },
+//       <LEAF>:args[]=@
+//   }
+//
+// For a dict that does NOT carry `op` in {"==", "!="} (e.g. a bare
+// LEAF), EQ_BINOP must be rejected so the LEAF alt can take over.
+
+TEST_CASE("save: inline-Choice discriminator — rule with inner op-Choice rejects non-matching dicts") {
+    Grammar g;
+    register_std_parser_group();
+    // Reproduces the sv_pp_expr round-trip failure shape: a unary
+    // rule (NOT_EXPR with op="!") whose AST has the SAME args-list
+    // shape as EQ_BINOP, but a different op constant. The dict has
+    // `args` so the field-presence check on EQ_BINOP passes; only
+    // the inner Choice's op discriminator can tell them apart.
+    const char* src = R"(
+        use: std
+        start: <EQ>
+        EQ ignore whitespace: choice { <EQ_BINOP>, <UNARY> }
+        EQ_BINOP: sequence dict {
+            <LEAF>:args[]=@,
+            choice { '==':op="==", '!=':op="!=" },
+            <LEAF>:args[]=@
+        }
+        UNARY: choice { <NOT_EXPR>, <LEAF> }
+        NOT_EXPR: sequence dict {
+            '!':op="!",
+            <LEAF>:args[]=@
+        }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // EQ_BINOP first in catch-all order; field-presence on `args`
+    // passes; the inner Choice's op = "==" / "!=" doesn't match
+    // dict.op = "!". Without the fix, dispatcher commits to
+    // EQ_BINOP, then errors at the inner Choice with
+    // "no matching grammar alternative for value at save".
+    auto not_ast = parse_to_value(g, "!FOO");
+    CHECK(save_to_string(g, not_ast) == "!FOO");
+
+    // Equality still routes correctly (regression guard).
+    auto eq_ast = parse_to_value(g, "A == B");
+    CHECK(save_to_string(g, eq_ast) == "A==B");
+
+    auto ne_ast = parse_to_value(g, "A != B");
+    CHECK(save_to_string(g, ne_ast) == "A!=B");
+}
