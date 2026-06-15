@@ -23,6 +23,7 @@
 #include <rawast/value.hpp>
 
 #include <cassert>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -377,7 +378,10 @@ std::vector<ChildDisc>
 collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
     std::vector<ChildDisc> out;
     if (seq.kind != NodeKind::Sequence) return out;
-    if (depth > 4) return out;  // cycle / runaway guard
+    // Recursion depth guard against grammars where a Choice's alts
+    // reach back into this Sequence through a Ref chain (rare but
+    // possible; surfaced as a stack overflow without the cap).
+    if (depth > 4) return out;
     for (std::size_t i = 0; i + 1 < seq.children.size(); ++i) {
         const Node& a = g.node(g.resolve_ref(seq.children[i]));
         const Node& b = g.node(g.resolve_ref(seq.children[i + 1]));
@@ -394,10 +398,18 @@ collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
         }
     }
     // Inline Choice children whose alts each carry a single
-    // discriminator on the same field — the dict's field must be
-    // in the union of alt values. Without this a rule like
-    //   TAIL: sequence dict { choice { '+':op="+", '-':op="-" }, ... }
-    // would have no discriminator visible to the outer dispatcher.
+    // discriminator on the same field are themselves discriminators:
+    // the dict's field must be in the union of alt values. Without
+    // this, a rule like
+    //
+    //   TAIL: sequence dict {
+    //       choice { '+':op="+", '-':op="-" },
+    //       <NEXT>:rhs=@
+    //   }
+    //
+    // exposes no discriminator to its enclosing Repeat — so a chain
+    // rule whose tail items use TAIL looks like a wildcard and
+    // accepts any dict whose `tail` field happens to be non-empty.
     for (NodeId child_id : seq.children) {
         const Node& c = g.node(g.resolve_ref(child_id));
         if (c.kind != NodeKind::Choice) continue;
@@ -1998,7 +2010,19 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     if (has_opchain_in_chain(start)) {
         auto op_compat = build_op_compat_map(*this);
         value = expand_opchain(value, op_compat);
-        value = wrap_atom_as_chain(value);
+        // Wrap atoms only when the start chain resolves to a
+        // Sequence-Dict (plain always-wrap pattern, like
+        // test_opchain's flat ADD grammar). For the
+        // `choice { CHAIN, NEXT }` ladder pattern used by sv_pp_expr,
+        // atoms naturally fall through the catch-all NEXT and the
+        // wrap would break dispatch (the dict would have
+        // `lhs`+`tail:[]` instead of the leaf's `type` field, so
+        // PRIMARY's type-discriminated leaves wouldn't match).
+        NodeId resolved_start = resolve_ref(start);
+        if (resolved_start.value() < node_count()
+            && node(resolved_start).kind == NodeKind::Sequence) {
+            value = wrap_atom_as_chain(value);
+        }
     }
     SaveState s;
     s.push_q({value, false, ""});
