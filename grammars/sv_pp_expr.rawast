@@ -10,10 +10,14 @@
 // AST contract (uniform `{op, args[]}` plus `{type, ...}` leaves):
 //
 //   Leaves — discriminated by `type`
-//     {type:"macro_ref", name:"FOO"}
-//     {type:"int_lit",   value:42}
+//     {type:"ref",       value:"FOO"}      // bare identifier — the
+//                                           // consumer's expr_eval
+//                                           // decides whether to
+//                                           // resolve, test, or pass
+//                                           // through
+//     {type:"int",       value:42}
 //     {type:"call",      name:"defined", args:[…]}
-//     {type:"paren",     inner:<expr>}
+//     {type:"paren",     value:<expr>}
 //
 //   Operations — discriminated by `op`, evaluated left-to-right
 //     {op:"||", args:[a, b, …]}    // n-ary, same-op collapse
@@ -132,9 +136,9 @@ NOT_EXPR: sequence dict {
 // ─── Primaries ──────────────────────────────────────────────────
 
 PRIMARY: choice {
-    <INT_LIT>,
+    <INT>,
     <CALL_EXPR>,
-    <MACRO_REF>,
+    <REF>,
     <PAREN_EXPR>
 }
 
@@ -145,12 +149,12 @@ CALL_EXPR: sequence dict {
     ")"
 }
 
-MACRO_REF: sequence dict {
-    identifier:type="macro_ref":name=@
+REF: sequence dict {
+    identifier:type="ref":value=@
 }
 
-INT_LIT: sequence dict {
-    int:type="int_lit":value=@
+INT: sequence dict {
+    int:type="int":value=@
 }
 
 // `scope { "(", <PAREN_EXPR>, std.string, ")" }` captures the body
@@ -165,7 +169,7 @@ INT_LIT: sequence dict {
 // and save serializes the sub-tree through the subparse hook.
 // Avoids the nested `{lhs:{lhs:..., tail:[...]}, tail:[...]}`
 // shapes the engine's dispatcher struggles with when the body is
-// consumed inline via `<PP_EXPR>:inner=@`.
+// consumed inline via `<PP_EXPR>:value=@`.
 PAREN_EXPR: sequence dict {
-    scope { "(", <PAREN_EXPR>, std.string, ")" }:type="paren":inner=@:#subparse="PP_EXPR"
+    scope { "(", <PAREN_EXPR>, std.string, ")" }:type="paren":value=@:#subparse="PP_EXPR"
 }

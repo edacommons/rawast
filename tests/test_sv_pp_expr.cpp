@@ -1,14 +1,14 @@
 // SystemVerilog preprocessor `\`if` expression subset.
 //
 // Coverage:
-//   * Every leaf type (macro_ref, int_lit, call, paren) parses to the
+//   * Every leaf type (ref, int, call, paren) parses to the
 //     documented AST shape.
 //   * Every operator (||, &&, ==, !=, !) produces the {op, args[]}
 //     shape, with n-ary collapse for || and &&.
 //   * Precedence: `A || B && C` parses as `A || (B && C)`, not
 //     `(A || B) && C`.
 //   * `defined(EXPR)` parses as a generic call — the grammar does NOT
-//     enforce that the arg is a macro_ref; that's the host evaluator's
+//     enforce that the arg is a ref; that's the host evaluator's
 //     job per the contract.
 
 #include <doctest/doctest.h>
@@ -83,32 +83,32 @@ ValuePtr arg_at(const ValuePtr& v, std::size_t i) {
 
 // ─── Leaves ─────────────────────────────────────────────────────
 
-TEST_CASE("sv_pp_expr: bare identifier → {type:'macro_ref', name:...}") {
+TEST_CASE("sv_pp_expr: bare identifier → {type:'ref', value:...}") {
     auto g = load_grammar();
     auto ast = parse(g, "FOO");
-    CHECK(str_field(ast, "type") == "macro_ref");
-    CHECK(str_field(ast, "name") == "FOO");
+    CHECK(str_field(ast, "type") == "ref");
+    CHECK(str_field(ast, "value") == "FOO");
 }
 
-TEST_CASE("sv_pp_expr: integer literal → {type:'int_lit', value:42} as IntValue") {
+TEST_CASE("sv_pp_expr: integer literal → {type:'int', value:42} as IntValue") {
     auto g = load_grammar();
     auto ast = parse(g, "42");
-    CHECK(str_field(ast, "type") == "int_lit");
+    CHECK(str_field(ast, "type") == "int");
     auto v = value_field(ast, "value");
     REQUIRE(v);
     auto i = std::dynamic_pointer_cast<IntValue>(v);
-    REQUIRE_MESSAGE(i, "int_lit value should be IntValue");
+    REQUIRE_MESSAGE(i, "int value should be IntValue");
     CHECK(i->data() == 42);
 }
 
-TEST_CASE("sv_pp_expr: paren expression → {type:'paren', inner:<expr>}") {
+TEST_CASE("sv_pp_expr: paren expression → {type:'paren', value:<expr>}") {
     auto g = load_grammar();
     auto ast = parse(g, "(FOO)");
     CHECK(str_field(ast, "type") == "paren");
-    auto inner = value_field(ast, "inner");
+    auto inner = value_field(ast, "value");
     REQUIRE(inner);
-    CHECK(str_field(inner, "type") == "macro_ref");
-    CHECK(str_field(inner, "name") == "FOO");
+    CHECK(str_field(inner, "type") == "ref");
+    CHECK(str_field(inner, "value") == "FOO");
 }
 
 // ─── Calls ──────────────────────────────────────────────────────
@@ -120,8 +120,8 @@ TEST_CASE("sv_pp_expr: defined(FOO) → generic call form") {
     CHECK(str_field(ast, "name") == "defined");
     REQUIRE(args_size(ast) == 1);
     auto arg0 = arg_at(ast, 0);
-    CHECK(str_field(arg0, "type") == "macro_ref");
-    CHECK(str_field(arg0, "name") == "FOO");
+    CHECK(str_field(arg0, "type") == "ref");
+    CHECK(str_field(arg0, "value") == "FOO");
 }
 
 TEST_CASE("sv_pp_expr: defined(FOO || BAR) — grammar does NOT validate, accepts nested expr") {
@@ -132,8 +132,8 @@ TEST_CASE("sv_pp_expr: defined(FOO || BAR) — grammar does NOT validate, accept
     REQUIRE(args_size(ast) == 1);
     auto arg0 = arg_at(ast, 0);
     // Per "host validates calls" — the grammar happily parses this.
-    // The host evaluator is responsible for rejecting non-macro_ref
-    // args at defined-call time.
+    // The host evaluator is responsible for rejecting non-ref args
+    // at defined-call time.
     CHECK(str_field(arg0, "op") == "||");
     REQUIRE(args_size(arg0) == 2);
 }
@@ -144,9 +144,9 @@ TEST_CASE("sv_pp_expr: call with multiple args (e.g. some_pred(A, B, C))") {
     CHECK(str_field(ast, "type") == "call");
     CHECK(str_field(ast, "name") == "some_pred");
     REQUIRE(args_size(ast) == 3);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
-    CHECK(str_field(arg_at(ast, 1), "name") == "B");
-    CHECK(str_field(arg_at(ast, 2), "name") == "C");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
+    CHECK(str_field(arg_at(ast, 1), "value") == "B");
+    CHECK(str_field(arg_at(ast, 2), "value") == "C");
 }
 
 // ─── Unary ──────────────────────────────────────────────────────
@@ -157,8 +157,8 @@ TEST_CASE("sv_pp_expr: !FOO → {op:'!', args:[<FOO>]}") {
     CHECK(str_field(ast, "op") == "!");
     REQUIRE(args_size(ast) == 1);
     auto inner = arg_at(ast, 0);
-    CHECK(str_field(inner, "type") == "macro_ref");
-    CHECK(str_field(inner, "name") == "FOO");
+    CHECK(str_field(inner, "type") == "ref");
+    CHECK(str_field(inner, "value") == "FOO");
 }
 
 TEST_CASE("sv_pp_expr: !!FOO chains unary correctly") {
@@ -169,7 +169,7 @@ TEST_CASE("sv_pp_expr: !!FOO chains unary correctly") {
     auto inner = arg_at(ast, 0);
     CHECK(str_field(inner, "op") == "!");
     REQUIRE(args_size(inner) == 1);
-    CHECK(str_field(arg_at(inner, 0), "name") == "FOO");
+    CHECK(str_field(arg_at(inner, 0), "value") == "FOO");
 }
 
 // ─── Binary ─────────────────────────────────────────────────────
@@ -179,8 +179,8 @@ TEST_CASE("sv_pp_expr: A || B → n-ary {op:'||', args:[A, B]}") {
     auto ast = parse(g, "A || B");
     CHECK(str_field(ast, "op") == "||");
     REQUIRE(args_size(ast) == 2);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
-    CHECK(str_field(arg_at(ast, 1), "name") == "B");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
+    CHECK(str_field(arg_at(ast, 1), "value") == "B");
 }
 
 TEST_CASE("sv_pp_expr: A || B || C collapses to flat args[3]") {
@@ -188,9 +188,9 @@ TEST_CASE("sv_pp_expr: A || B || C collapses to flat args[3]") {
     auto ast = parse(g, "A || B || C");
     CHECK(str_field(ast, "op") == "||");
     REQUIRE(args_size(ast) == 3);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
-    CHECK(str_field(arg_at(ast, 1), "name") == "B");
-    CHECK(str_field(arg_at(ast, 2), "name") == "C");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
+    CHECK(str_field(arg_at(ast, 1), "value") == "B");
+    CHECK(str_field(arg_at(ast, 2), "value") == "C");
 }
 
 TEST_CASE("sv_pp_expr: A && B && C && D collapses to flat args[4]") {
@@ -205,8 +205,8 @@ TEST_CASE("sv_pp_expr: A == B → binary equality") {
     auto ast = parse(g, "A == B");
     CHECK(str_field(ast, "op") == "==");
     REQUIRE(args_size(ast) == 2);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
-    CHECK(str_field(arg_at(ast, 1), "name") == "B");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
+    CHECK(str_field(arg_at(ast, 1), "value") == "B");
 }
 
 TEST_CASE("sv_pp_expr: A != 0 → binary inequality with int literal") {
@@ -214,9 +214,9 @@ TEST_CASE("sv_pp_expr: A != 0 → binary inequality with int literal") {
     auto ast = parse(g, "A != 0");
     CHECK(str_field(ast, "op") == "!=");
     REQUIRE(args_size(ast) == 2);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
     auto rhs = arg_at(ast, 1);
-    CHECK(str_field(rhs, "type") == "int_lit");
+    CHECK(str_field(rhs, "type") == "int");
 }
 
 // ─── Precedence ─────────────────────────────────────────────────
@@ -226,7 +226,7 @@ TEST_CASE("sv_pp_expr: && binds tighter than || — A || B && C parses as A || (
     auto ast = parse(g, "A || B && C");
     REQUIRE(str_field(ast, "op") == "||");
     REQUIRE(args_size(ast) == 2);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
     auto rhs = arg_at(ast, 1);
     CHECK(str_field(rhs, "op") == "&&");
     REQUIRE(args_size(rhs) == 2);
@@ -237,7 +237,7 @@ TEST_CASE("sv_pp_expr: == binds tighter than && — A && B == C parses as A && (
     auto ast = parse(g, "A && B == C");
     REQUIRE(str_field(ast, "op") == "&&");
     REQUIRE(args_size(ast) == 2);
-    CHECK(str_field(arg_at(ast, 0), "name") == "A");
+    CHECK(str_field(arg_at(ast, 0), "value") == "A");
     auto rhs = arg_at(ast, 1);
     CHECK(str_field(rhs, "op") == "==");
 }
@@ -249,7 +249,7 @@ TEST_CASE("sv_pp_expr: ! binds tighter than == — !A == B parses as (!A) == B")
     REQUIRE(args_size(ast) == 2);
     auto lhs = arg_at(ast, 0);
     CHECK(str_field(lhs, "op") == "!");
-    CHECK(str_field(arg_at(ast, 1), "name") == "B");
+    CHECK(str_field(arg_at(ast, 1), "value") == "B");
 }
 
 TEST_CASE("sv_pp_expr: parens override precedence — (A || B) && C") {
@@ -260,7 +260,7 @@ TEST_CASE("sv_pp_expr: parens override precedence — (A || B) && C") {
     auto lhs = arg_at(ast, 0);
     // Top of LHS is a paren wrapper per "keep paren in AST"
     CHECK(str_field(lhs, "type") == "paren");
-    auto inner = value_field(lhs, "inner");
+    auto inner = value_field(lhs, "value");
     REQUIRE(inner);
     CHECK(str_field(inner, "op") == "||");
 }
@@ -277,7 +277,7 @@ TEST_CASE("sv_pp_expr: realistic — defined(FOO) && (WIDTH == 32 || WIDTH == 64
     CHECK(str_field(lhs, "name") == "defined");
     auto rhs = arg_at(ast, 1);
     CHECK(str_field(rhs, "type") == "paren");
-    auto rinner = value_field(rhs, "inner");
+    auto rinner = value_field(rhs, "value");
     REQUIRE(rinner);
     CHECK(str_field(rinner, "op") == "||");
 }
