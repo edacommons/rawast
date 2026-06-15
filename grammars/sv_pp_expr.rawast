@@ -42,7 +42,7 @@
 // Precedence (low → high), matching C/SV conventions:
 //   ||  <  &&  <  ==/!=  <  </>/<=/>=  <  +/-  <  */ / /%  <  !  <  PRIMARY
 
-use: std, scope
+use: std
 
 start: <PP_EXPR>
 
@@ -153,14 +153,19 @@ INT_LIT: sequence dict {
     int:type="int_lit":value=@
 }
 
-// `scope.paren` captures the body of `(...)` as a string and
-// `#subparse="PP_EXPR"` re-parses it through PP_EXPR as an
-// independent sub-tree. This decouples PAREN's body from the
-// outer parse: the sub-parse triggers its own `#opchain` compaction
-// at its own frame exit, and save serializes the sub-tree through
-// the subparse hook. Avoids the nested `{lhs:{lhs:..., tail:[...]},
-// tail:[...]}` shapes that the engine's dispatcher struggles with
-// when the body is consumed inline via `<PP_EXPR>:inner=@`.
+// `scope { "(", <PAREN_EXPR>, std.string, ")" }` captures the body
+// of `(...)` as a string and `#subparse="PP_EXPR"` re-parses it
+// through PP_EXPR as an independent sub-tree. Self-Ref INNER makes
+// nested parens transparent (the body of `(a (b) c)` is `a (b) c`);
+// `std.string` INNER keeps embedded `"...(...)..."` strings atomic
+// so a `)` inside a string can't close the scope.
+//
+// Decouples PAREN's body from the outer parse: the sub-parse
+// triggers its own `#opchain` compaction at its own frame exit,
+// and save serializes the sub-tree through the subparse hook.
+// Avoids the nested `{lhs:{lhs:..., tail:[...]}, tail:[...]}`
+// shapes the engine's dispatcher struggles with when the body is
+// consumed inline via `<PP_EXPR>:inner=@`.
 PAREN_EXPR: sequence dict {
-    scope.paren:type="paren":inner=@:#subparse="PP_EXPR"
+    scope { "(", <PAREN_EXPR>, std.string, ")" }:type="paren":inner=@:#subparse="PP_EXPR"
 }

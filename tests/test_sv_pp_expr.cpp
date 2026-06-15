@@ -15,7 +15,6 @@
 #include <rawast/grammar.hpp>
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
-#include <rawast/parsers_scope.hpp>
 #include <rawast/value.hpp>
 
 #include <sstream>
@@ -26,7 +25,6 @@ namespace {
 
 Grammar load_grammar() {
     register_std_parser_group();
-    register_scope_parser_group();
     Grammar g;
     auto r = load_rawast_grammar_from_file(g, "grammars/sv_pp_expr.rawast");
     REQUIRE_MESSAGE(r, "loading sv_pp_expr.rawast failed: "
