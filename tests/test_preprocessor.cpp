@@ -35,7 +35,7 @@ Grammar make_passthrough_grammar() {
 class TestNewlineParser final : public Parser {
 public:
     TestNewlineParser() : Parser("nl") {}
-    ParseResult parse(StreamReader& sr) override {
+    WalkResult walk(StreamReader& sr) override {
         sr.mark();
         const Position start = sr.position();
         auto c = sr.peek();
@@ -45,8 +45,9 @@ public:
         }
         sr.get();
         sr.accept();
-        return null_value();
+        return {};
     }
+    ValuePtr value() const override { return null_value(); }
     SaveResult unparse(const Value& /*v*/) const override {
         return std::string{"\n"};
     }
