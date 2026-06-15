@@ -211,6 +211,14 @@ NAME_BIND: sequence {
 RESERVED_VALUE_BIND: sequence {
   "#",
   identifier:name=@:reserved=true,
+  ?<RESERVED_VALUE_TAIL>
+}
+
+// Optional value tail. Bare `:#name` (no `=value`) is a flag-style
+// annotation; the loader's per-annotation dispatch decides whether
+// each particular name requires a value (`#subparse`, `#role`,
+// `#field`) or is a pure flag (`#opchain`).
+RESERVED_VALUE_TAIL: sequence {
   "=",
   <BIND_VAL>:value=@
 }

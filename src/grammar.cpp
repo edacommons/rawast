@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <unordered_set>
 #include <map>
 #include <memory>
 #include <ostream>
@@ -410,6 +411,32 @@ void Grammar::set_backtrack(NodeId id) {
     nodes_[id.value()].backtrack = true;
 }
 
+void Grammar::set_opchain(NodeId id) {
+    nodes_[id.value()].opchain = true;
+}
+
+bool Grammar::has_opchain(NodeId id) const noexcept {
+    if (id.value() >= nodes_.size()) return false;
+    return nodes_[id.value()].opchain;
+}
+
+bool Grammar::has_opchain_in_chain(NodeId id) const noexcept {
+    NodeId cur = id;
+    std::unordered_set<std::uint32_t> seen;
+    while (cur.valid() && cur.value() < nodes_.size()
+           && seen.insert(cur.value()).second) {
+        if (nodes_[cur.value()].opchain) return true;
+        if (nodes_[cur.value()].kind != NodeKind::Ref) return false;
+        auto sv = std::dynamic_pointer_cast<StringValue>(
+            nodes_[cur.value()].value);
+        if (!sv) return false;
+        auto it = named_rules_.find(sv->data());
+        if (it == named_rules_.end()) return false;
+        cur = it->second;
+    }
+    return false;
+}
+
 void Grammar::set_fixed_schema(NodeId id) {
     nodes_[id.value()].fixed_schema = true;
 }
@@ -662,6 +689,151 @@ void note_progress(ParseError& max_progress, const ParseError& err) {
     if (err.position.bytes > max_progress.position.bytes) {
         max_progress = err;
     }
+}
+
+// Recursively compact `{lhs, tail:[{op,rhs},...]}` always-wrap shapes
+// into `{op, args[]}` with same-op runs collapsed and mixed-op
+// boundaries nested.
+//
+// Algorithm:
+//   * Atoms and non-dicts pass through unchanged (recursing into
+//     arrays so list-shaped fields get compacted element-wise).
+//   * Dicts have their fields recursively compacted first.
+//   * If the resulting dict has `lhs` and a non-empty `tail`, fold
+//     the tail left-to-right onto lhs:
+//       - acc = lhs
+//       - For each (op, rhs) in tail: if acc is `{op:OP, args:[...]}`
+//         with same OP, extend args; otherwise wrap acc as
+//         `{op:OP, args:[acc, rhs]}`.
+//   * The original `lhs` / `tail` keys are dropped from the output;
+//     any other keys on the wrapper carry through.
+//   * Empty tail (or no tail at all): unwrap to `lhs`.
+ValuePtr compact_opchain(const ValuePtr& v) {
+    if (!v) return v;
+
+    if (auto arr = as_array(v)) {
+        auto out = std::make_shared<ArrayValue>();
+        for (const auto& elt : arr->data()) {
+            out->data().push_back(compact_opchain(elt));
+        }
+        return out;
+    }
+
+    auto d = as_dict(v);
+    if (!d) return v;
+
+    // Recurse on field values first.
+    auto recursed = std::make_shared<DictValue>();
+    for (const auto& [k, val] : d->data()) {
+        recursed->data().emplace(k, compact_opchain(val));
+    }
+
+    auto lhs_it = recursed->data().find("lhs");
+    if (lhs_it == recursed->data().end()) {
+        // Not an always-wrap shape; return with compacted fields.
+        return recursed;
+    }
+    ValuePtr lhs = lhs_it->second;
+
+    auto tail_it = recursed->data().find("tail");
+    auto tail_arr = (tail_it != recursed->data().end())
+        ? as_array(tail_it->second) : nullptr;
+    bool has_tail = tail_arr && !tail_arr->data().empty();
+
+    // Count non-{lhs,tail} fields — those need to carry through.
+    bool has_other = false;
+    for (const auto& [k, _] : recursed->data()) {
+        if (k != "lhs" && k != "tail") { has_other = true; break; }
+    }
+
+    if (!has_tail) {
+        // No chain; unwrap to lhs (or merge other fields onto lhs if
+        // there were any — rare but supported).
+        if (!has_other) return lhs;
+        // Other fields exist: build a fresh dict combining lhs's fields
+        // (if lhs is itself a dict) with the wrapper's extras.
+        auto out = std::make_shared<DictValue>();
+        if (auto ld = as_dict(lhs)) {
+            for (const auto& [k, v2] : ld->data()) out->data().emplace(k, v2);
+        }
+        for (const auto& [k, v2] : recursed->data()) {
+            if (k == "lhs" || k == "tail") continue;
+            out->data().emplace(k, v2);
+        }
+        return out;
+    }
+
+    // Fold the tail left-to-right.
+    ValuePtr acc = lhs;
+    for (const auto& te : tail_arr->data()) {
+        auto td = as_dict(te);
+        if (!td) continue;
+        auto op_it  = td->data().find("op");
+        auto rhs_it = td->data().find("rhs");
+        if (op_it == td->data().end() || rhs_it == td->data().end()) continue;
+        auto op_sv = as_string(op_it->second);
+        if (!op_sv) continue;
+        const std::string& op = op_sv->data();
+        ValuePtr rhs = rhs_it->second;
+
+        // Extend acc's args if it already has the same op.
+        bool extended = false;
+        if (auto ad = as_dict(acc)) {
+            auto ao_it = ad->data().find("op");
+            auto aa_it = ad->data().find("args");
+            if (ao_it != ad->data().end() && aa_it != ad->data().end()) {
+                auto ao_sv = as_string(ao_it->second);
+                auto aa_arr = as_array(aa_it->second);
+                if (ao_sv && aa_arr && ao_sv->data() == op
+                    // Same-op collapse only if no nested mixed-op
+                    // boundary lies inside — i.e. args contains only
+                    // values produced by THIS fold (not a user-given
+                    // {op,args} dict from the input). The fold itself
+                    // produces nested same-op dicts only via this
+                    // branch, so reaching here implies acc was either
+                    // the original lhs (atom) or a previously
+                    // extended same-op chain. Either case is safe.
+                ) {
+                    auto new_args = std::make_shared<ArrayValue>();
+                    for (const auto& a : aa_arr->data()) {
+                        new_args->data().push_back(a);
+                    }
+                    new_args->data().push_back(rhs);
+
+                    auto new_acc = std::make_shared<DictValue>();
+                    new_acc->data().emplace("op", ao_it->second);
+                    new_acc->data().emplace("args", new_args);
+                    acc = new_acc;
+                    extended = true;
+                }
+            }
+        }
+        if (extended) continue;
+
+        // Different op (or first iteration): wrap acc as
+        // `{op:OP, args:[acc, rhs]}`.
+        auto new_args = std::make_shared<ArrayValue>();
+        new_args->data().push_back(acc);
+        new_args->data().push_back(rhs);
+
+        auto new_acc = std::make_shared<DictValue>();
+        new_acc->data().emplace("op", make_string(op));
+        new_acc->data().emplace("args", new_args);
+        acc = new_acc;
+    }
+
+    if (!has_other) return acc;
+
+    // Carry through extra wrapper fields.
+    auto out = std::make_shared<DictValue>();
+    if (auto ad = as_dict(acc)) {
+        for (const auto& [k, v2] : ad->data()) out->data().emplace(k, v2);
+    }
+    for (const auto& [k, v2] : recursed->data()) {
+        if (k == "lhs" || k == "tail") continue;
+        out->data().emplace(k, v2);
+    }
+    return out;
 }
 
 } // namespace
@@ -1684,6 +1856,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 sr.position(),
                 "unexpected content after start rule completed"
             });
+        }
+        // `#opchain` post-process: when the start rule body (or any
+        // Ref along the chain to it) carries the flag, compact any
+        // always-wrap chain shape in the produced AST. See
+        // `compact_opchain` for the transform.
+        if (has_opchain_in_chain(start)) {
+            result_value = compact_opchain(result_value);
         }
         return result_value;
     }

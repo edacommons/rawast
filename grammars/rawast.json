@@ -639,6 +639,15 @@
         ]
       },
       {
+        "type": "RESERVED_VALUE_TAIL",
+        "optional": true
+      }
+    ]
+  },
+  "RESERVED_VALUE_TAIL": {
+    "type": "sequence",
+    "value": [
+      {
         "type": "key",
         "key": "="
       },

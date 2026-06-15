@@ -881,9 +881,20 @@ populate(Grammar& g, NodeId target, const Value& body) {
                 // on the same pattern.
                 continue;
             }
+            if (e.name == "opchain") {
+                // Bare flag — no value expected. Marks the rule body
+                // for parse-side always-wrap → {op, args[]} compaction
+                // (and save-side reversal). See Grammar::set_opchain.
+                if (e.value) {
+                    return tl::unexpected(
+                        "#opchain: takes no value (use bare `:#opchain`)");
+                }
+                g.set_opchain(target);
+                continue;
+            }
             return tl::unexpected(
                 "unknown engine annotation '#" + e.name +
-                "' on rule body; valid: #role, #field");
+                "' on rule body; valid: #role, #field, #opchain");
         }
     }
 

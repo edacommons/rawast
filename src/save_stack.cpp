@@ -1715,6 +1715,108 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     return {};
 }
 
+// Inverse of `compact_opchain` (defined in grammar.cpp). When the
+// save engine is about to dispatch a value through an opchain-marked
+// rule, the input AST is in `{op, args[]}` form; the rule's grammar
+// expects always-wrap `{lhs, tail:[{op,rhs}, ...]}`. Expand
+// recursively before save.
+//
+// Top-level wrap: a non-chain atom (e.g. `{type:"num", value:1}`) is
+// wrapped as `{lhs: atom, tail: []}` so the rule's `<NEXT>:lhs=@`
+// binding can find the `lhs` field. The caller decides when to wrap
+// (only at the top of an opchain rule's dispatch, not on every
+// recursion — args inside compacted chains are leaves at the NEXT
+// precedence level and shouldn't be wrapped here).
+ValuePtr expand_opchain(const ValuePtr& v) {
+    if (!v) return v;
+
+    if (auto arr = as_array(v)) {
+        auto out = std::make_shared<ArrayValue>();
+        for (const auto& e : arr->data()) {
+            out->data().push_back(expand_opchain(e));
+        }
+        return out;
+    }
+
+    auto d = as_dict(v);
+    if (!d) return v;
+
+    // Detect compacted shape: `{op:OP, args:[a, b, ...]}` with at
+    // least two args. Unary `{op:"!", args:[x]}` (NOT_EXPR etc.)
+    // stays as-is; it's not a chain.
+    auto op_it = d->data().find("op");
+    auto args_it = d->data().find("args");
+    auto args_arr = (args_it != d->data().end())
+        ? as_array(args_it->second) : nullptr;
+    bool is_chain = (op_it != d->data().end())
+                    && args_arr
+                    && args_arr->data().size() >= 2;
+
+    if (!is_chain) {
+        // Not compacted at this level — recurse on field values so
+        // nested compacted nodes get expanded too.
+        auto out = std::make_shared<DictValue>();
+        for (const auto& [k, val] : d->data()) {
+            out->data().emplace(k, expand_opchain(val));
+        }
+        return out;
+    }
+
+    auto op_sv = as_string(op_it->second);
+    if (!op_sv) return v;
+    const std::string& op = op_sv->data();
+
+    // Expand args[0]; if it's itself a chain, absorb its tail prefix.
+    ValuePtr first = expand_opchain(args_arr->data()[0]);
+    ValuePtr lhs;
+    std::vector<ValuePtr> tail;
+    if (auto fd = as_dict(first); fd && fd->data().count("lhs")) {
+        lhs = fd->data().at("lhs");
+        auto ft_it = fd->data().find("tail");
+        if (ft_it != fd->data().end()) {
+            if (auto ft_arr = as_array(ft_it->second)) {
+                for (const auto& t : ft_arr->data()) tail.push_back(t);
+            }
+        }
+    } else {
+        lhs = first;
+    }
+
+    // Each remaining arg becomes a tail entry `{op:OP, rhs:arg}`.
+    for (std::size_t i = 1; i < args_arr->data().size(); ++i) {
+        auto te = std::make_shared<DictValue>();
+        te->data().emplace("op", make_string(op));
+        te->data().emplace("rhs", expand_opchain(args_arr->data()[i]));
+        tail.push_back(te);
+    }
+
+    auto out = std::make_shared<DictValue>();
+    out->data().emplace("lhs", lhs);
+    auto tail_arr_v = std::make_shared<ArrayValue>();
+    for (const auto& t : tail) tail_arr_v->data().push_back(t);
+    out->data().emplace("tail", tail_arr_v);
+    // Carry any other wrapper-level fields (not op/args).
+    for (const auto& [k, val] : d->data()) {
+        if (k == "op" || k == "args") continue;
+        out->data().emplace(k, expand_opchain(val));
+    }
+    return out;
+}
+
+// Ensure top-level value is wrapped as `{lhs:..., tail:[]}` if it
+// isn't already a chain shape. Used by save-side opchain dispatch
+// so the start rule's `<NEXT>:lhs=@` binding always finds the
+// `lhs` field, even for atoms (`1` → `{lhs:{type:num,value:1},
+// tail:[]}`).
+ValuePtr wrap_atom_as_chain(const ValuePtr& v) {
+    if (!v) return v;
+    if (auto d = as_dict(v); d && d->data().count("lhs")) return v;
+    auto out = std::make_shared<DictValue>();
+    out->data().emplace("lhs", v);
+    out->data().emplace("tail", std::make_shared<ArrayValue>());
+    return out;
+}
+
 } // namespace
 
 // Definition of Grammar::save lives here (rather than in
@@ -1730,9 +1832,18 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     // for the duration of this save call. Idempotent and amortised
     // across subsequent calls.
     ensure_refs_resolved_();
+    if (!start.valid()) start = top();
+    // `#opchain` pre-process: when the start rule chain carries the
+    // flag, the input AST is in compacted `{op, args[]}` form but
+    // the grammar expects always-wrap `{lhs, tail:[...]}`. Expand
+    // recursively, then wrap atoms so the top-level rule's
+    // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
+    if (has_opchain_in_chain(start)) {
+        value = expand_opchain(value);
+        value = wrap_atom_as_chain(value);
+    }
     SaveState s;
     s.push_q({value, false, ""});
-    if (!start.valid()) start = top();
     return do_consume(*this, out, start, s, 0, pretty);
 }
 

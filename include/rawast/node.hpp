@@ -128,6 +128,14 @@ public:
     // by the grammar via `"fixed_schema": true` in JSON form.
     bool fixed_schema  = false;
 
+    // `#opchain` reserved flag — when set on a rule body's node, the
+    // parse engine post-processes the produced AST: any dict in the
+    // subtree matching always-wrap shape `{lhs, tail:[{op,rhs}, ...]}`
+    // is compacted to `{op, args[]}` (same-op runs collapse flat,
+    // mixed-op boundaries nest). Save-side reverses the transform
+    // before normal dispatch. See `Grammar::set_opchain`.
+    bool opchain       = false;
+
     // Key-only: word-boundary strict matching. When set on a Key node,
     // the KeyParser additionally checks that the byte immediately after
     // the matched literal is NOT a word character (alphanumeric or

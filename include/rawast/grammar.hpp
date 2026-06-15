@@ -68,6 +68,22 @@ public:
     void set_separator(NodeId parent, NodeId sep);
     void set_backtrack(NodeId id);
     void set_fixed_schema(NodeId id);
+    // `#opchain` reserved flag — when a rule body carries this
+    // annotation, parse-side post-processing compacts always-wrap
+    // `{lhs, tail:[{op,rhs},...]}` shapes into `{op, args[]}` (same-op
+    // runs collapse flat, mixed-op boundaries nest). Save-side
+    // reverses the transform before normal dispatch. Shape-based —
+    // the engine doesn't track which subtree node produced which dict;
+    // it walks the AST under the marked rule and applies the
+    // transform wherever the shape matches.
+    void set_opchain(NodeId id);
+    bool has_opchain(NodeId id) const noexcept;
+    // Walk the Ref chain starting at `id` and return true if any
+    // node along the way carries the opchain flag. resolve_ref jumps
+    // to the chain's end and misses intermediate Refs (e.g. the
+    // `start:` top_ Ref → EXPR Ref → ADD body where EXPR carries
+    // the flag).
+    bool has_opchain_in_chain(NodeId id) const noexcept;
     // Key-only: opt the KeyParser into word-boundary strict matching at
     // parse time. The literal still matches byte-by-byte; the strict
     // flag additionally requires the byte after the match to be non-word
