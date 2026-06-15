@@ -919,6 +919,18 @@ populate(Grammar& g, NodeId target, const Value& body) {
         return append_items_array(g, target, items_val, type);
     }
 
+    if (type == "scope") {
+        // `scope { OPEN, INNER..., CLOSE }`. Children are appended like a
+        // sequence; the parse/save engines treat children[0] as OPEN,
+        // children.back() as CLOSE, and the rest as INNERs. Structural
+        // validation (need at least two children; first and last must be
+        // Key) is deferred to a post-load pass once items are built.
+        n.kind = NodeKind::Scope;
+        auto items_val = dict_value(*dv, "value");
+        if (!items_val) items_val = dict_value(*dv, "items");
+        return append_items_array(g, target, items_val, type);
+    }
+
     if (type == "repeat") {
         if (auto sep_val = dict_value(*dv, "separator")) {
             auto sep_r = build_item(g, *sep_val);

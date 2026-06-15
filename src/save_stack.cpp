@@ -1256,6 +1256,14 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         if (n.subparse_start.valid()) return true;
         return peek_value->type() == ValueType::String;
 
+    case NodeKind::Scope:
+        // Scope at the top of an alt — same shape as Raw. Parse-side
+        // produced a StringValue holding the body bytes; with
+        // #subparse it's a structured sub-tree.
+        if (!peek_value) return false;
+        if (n.subparse_start.valid()) return true;
+        return peek_value->type() == ValueType::String;
+
     case NodeKind::Ref:
         return can_consume_peek(g, g.resolve_ref(node_id), peek_value, peek_key, s);
     }
@@ -1430,6 +1438,58 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 "Raw save expects a StringValue payload"});
         }
         out << sv->data();
+        return {};
+    }
+
+    case NodeKind::Scope: {
+        // Scope save: emit OPEN literal + captured body + CLOSE literal.
+        // The body StringValue was produced verbatim on the parse side
+        // (bytes between OPEN and CLOSE, exclusive); INNERs were
+        // atomic spans whose text round-trips through the body. With
+        // #subparse, the stored value is the structured sub-tree —
+        // re-serialize through the subparse rule to recover the body
+        // text first.
+        if (n.children.size() < 2) {
+            return tl::unexpected(SaveError{
+                "scope save: node needs OPEN and CLOSE children"});
+        }
+        auto literal_of = [&](NodeId id) -> std::string {
+            const Node& cn = g.node(g.resolve_ref(id));
+            if (cn.kind != NodeKind::Key) return {};
+            auto sv = as_string(cn.value);
+            return sv ? sv->data() : std::string{};
+        };
+        const std::string open_str  = literal_of(n.children.front());
+        const std::string close_str = literal_of(n.children.back());
+        if (open_str.empty() || close_str.empty()) {
+            return tl::unexpected(SaveError{
+                "scope save: OPEN/CLOSE must be non-empty Key literals"});
+        }
+
+        const bool is_optional = n.is_optional;
+        auto r = s.pull_value(is_optional);
+        if (!r) return tl::unexpected(r.error());
+        ValuePtr v = r->value ? r->value : null_value();
+
+        std::string body_text;
+        if (n.subparse_start.valid()) {
+            std::ostringstream sub_out;
+            SaveState sub_s;
+            sub_s.push_q({v, false, ""});
+            auto sub_r = do_consume(g, sub_out, n.subparse_start,
+                                    sub_s, 0, pretty);
+            if (!sub_r) return tl::unexpected(sub_r.error());
+            body_text = sub_out.str();
+        } else {
+            auto sv = as_string(v);
+            if (!sv) {
+                return tl::unexpected(SaveError{
+                    "scope save expects a StringValue payload"});
+            }
+            body_text = sv->data();
+        }
+
+        out << open_str << body_text << close_str;
         return {};
     }
 

@@ -186,6 +186,9 @@
         "type": "REPEAT_EXPR"
       },
       {
+        "type": "SCOPE_EXPR"
+      },
+      {
         "type": "RAW_EXPR"
       },
       {
@@ -303,6 +306,38 @@
           {
             "name": "type",
             "value": "choice"
+          }
+        ]
+      },
+      {
+        "type": "key",
+        "key": "{"
+      },
+      {
+        "type": "ITEMS",
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ]
+      },
+      {
+        "type": "key",
+        "key": "}"
+      }
+    ]
+  },
+  "SCOPE_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "key",
+        "key": "scope",
+        "bindings": [
+          {
+            "name": "type",
+            "value": "scope"
           }
         ]
       },

@@ -51,6 +51,19 @@ public:
     std::size_t mark_count() const noexcept { return marks_.size(); }
     Position position() const noexcept;
 
+    // Return bytes from absolute position `start` up to (but not
+    // including) the current cursor. Used by the `scope { ... }`
+    // driver to capture an INNER's matched-text span verbatim,
+    // including delimiters the INNER parser may strip from its own
+    // value (e.g. DoubleQuoteStringParser drops the outer `"`s).
+    //
+    // Contract: caller MUST hold a live mark covering `start` —
+    // otherwise the retained buffer has been trimmed past `start`
+    // and the call returns an empty / truncated string. The scope
+    // driver holds its entry mark for the whole scope-body span,
+    // so this is always satisfied there.
+    std::string bytes_from(const Position& start) const;
+
 private:
     struct MarkData {
         std::size_t pos;

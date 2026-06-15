@@ -254,6 +254,18 @@ FirstByteResult compute_node_first_bytes(
         // unconstrained.
         result = any_byte_result();
         break;
+    case NodeKind::Scope: {
+        // Scope's first byte is the first byte of its OPEN Key
+        // (children[0]). Defer to that child. Never nullable: OPEN
+        // must consume at least one byte to enter.
+        if (n.children.empty()) {
+            result = any_byte_result();
+        } else {
+            result = compute_node_first_bytes(g, n.children[0], state, cache);
+            result.nullable = false;
+        }
+        break;
+    }
     case NodeKind::Choice: {
         // Union of children's first-byte sets. Nullable iff any
         // alternative is nullable.
@@ -836,6 +848,144 @@ ValuePtr compact_opchain(const ValuePtr& v) {
     return out;
 }
 
+// `scope { OPEN, INNER..., CLOSE }` — string-aware bracket scanner.
+// Match the OPEN Key, then loop scanning bytes: try CLOSE first, then
+// each INNER (terminal parser walk() or recursive Scope), else consume
+// one raw byte. Captures the body bytes between OPEN and CLOSE
+// (exclusive) and returns them as a string.
+//
+// INNERs are atomic: when an INNER succeeds, the matched bytes are
+// appended to the body verbatim and CLOSE-matching skips over them.
+// This is what makes embedded `std.string`, `std.line_comment`, etc.
+// transparent to the scope — a `")"` inside a string doesn't end the
+// scope because the string parser swallowed it.
+//
+// Mark discipline: the caller MUST hold a live mark at scope entry;
+// the helper does its own internal marks for OPEN, CLOSE, and INNER
+// trials and balances them. On failure return, the stream is left
+// wherever the failure happened — the caller's outer mark provides
+// the rewind.
+tl::expected<std::string, ParseError> walk_scope_helper(
+    const Grammar& g, StreamReader& sr, NodeId scope_id) {
+    const Node& sn = g.node(scope_id);
+    if (sn.children.size() < 2) {
+        return tl::unexpected(ParseError{
+            sr.position(), "scope: needs OPEN and CLOSE children"});
+    }
+    const Position entry = sr.position();
+
+    // Extract OPEN / CLOSE literal strings (children[0] and back() must
+    // be Key nodes — enforced at load time, but defend here too).
+    auto literal_of = [&](NodeId id) -> std::optional<std::string> {
+        const Node& n = g.node(g.resolve_ref(id));
+        if (n.kind != NodeKind::Key) return std::nullopt;
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv) return std::nullopt;
+        return sv->data();
+    };
+    auto open_opt  = literal_of(sn.children.front());
+    auto close_opt = literal_of(sn.children.back());
+    if (!open_opt || !close_opt || open_opt->empty() || close_opt->empty()) {
+        return tl::unexpected(ParseError{
+            entry, "scope: OPEN and CLOSE must be non-empty Key literals"});
+    }
+    const std::string& open_str  = *open_opt;
+    const std::string& close_str = *close_opt;
+
+    // Match OPEN. No ignore-set skipping inside scope; embedded
+    // whitespace is part of the body.
+    sr.mark();
+    for (char c : open_str) {
+        auto g_ = sr.get();
+        if (!g_ || *g_ != c) {
+            sr.reject();
+            return tl::unexpected(ParseError{
+                entry, "scope: expected OPEN literal '" + open_str + "'"});
+        }
+    }
+    sr.accept();
+
+    // Inner children (between OPEN and CLOSE).
+    std::vector<NodeId> inners(sn.children.begin() + 1,
+                               sn.children.end()   - 1);
+
+    std::string body;
+    while (true) {
+        auto pk = sr.peek();
+        if (!pk) {
+            return tl::unexpected(ParseError{
+                entry, "scope: unterminated, no CLOSE '" + close_str +
+                        "' before EOF"});
+        }
+
+        // Try CLOSE first (most common stop condition).
+        if (*pk == close_str[0]) {
+            sr.mark();
+            bool ok = true;
+            for (char e : close_str) {
+                auto gc = sr.get();
+                if (!gc || *gc != e) { ok = false; break; }
+            }
+            if (ok) {
+                sr.accept();
+                return body;
+            }
+            sr.reject();
+        }
+
+        // Try each INNER in order.
+        bool inner_ok = false;
+        for (NodeId inner_id : inners) {
+            const Node& inner = g.node(g.resolve_ref(inner_id));
+
+            if (inner.kind == NodeKind::Parse) {
+                auto sv = std::dynamic_pointer_cast<StringValue>(inner.value);
+                if (!sv) continue;
+                Parser* p = g.parser(sv->data());
+                if (!p) continue;
+                p->reset();
+                const Position before = sr.position();
+                auto wr = p->walk(sr);
+                if (wr) {
+                    // Capture the FULL matched bytes (delimiters and
+                    // all) by reading the stream's retained window —
+                    // text_value() reports the parser's accumulator,
+                    // which strips delimiters (e.g. `"..."` outer
+                    // quotes) the body needs to round-trip verbatim.
+                    body.append(sr.bytes_from(before));
+                    inner_ok = true;
+                    break;
+                }
+                // walk() rewound on failure (its own mark/reject);
+                // try next INNER.
+            } else if (inner.kind == NodeKind::Scope) {
+                // Recursive nested scope — capture OPEN + sub_body +
+                // CLOSE into the outer body. Inner OPEN/CLOSE come
+                // from the inner scope node itself.
+                auto inner_open  = literal_of(inner.children.front());
+                auto inner_close = literal_of(inner.children.back());
+                if (!inner_open || !inner_close) continue;
+                auto sub = walk_scope_helper(g, sr, g.resolve_ref(inner_id));
+                if (sub) {
+                    body.append(*inner_open);
+                    body.append(*sub);
+                    body.append(*inner_close);
+                    inner_ok = true;
+                    break;
+                }
+            }
+            // Other inner kinds (Ref-to-non-scope, etc.) are unsupported
+            // in V1. Silently skip; the raw-byte fallback below still
+            // makes progress.
+        }
+        if (inner_ok) continue;
+
+        // No INNER matched. Consume one raw byte into the body.
+        auto cb = sr.get();
+        body.push_back(*cb);
+    }
+}
+
 } // namespace
 
 tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
@@ -964,6 +1114,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             case NodeKind::Ref:      kind = "ref"; break;
             case NodeKind::Value:    kind = "value"; break;
             case NodeKind::Raw:      kind = "raw"; break;
+            case NodeKind::Scope:    kind = "scope"; break;
         }
         return std::string{kind} + "#" + std::to_string(id.value());
     };
@@ -1510,6 +1661,97 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // mark stays on the StreamReader's mark stack and the
                 // NEXT mark-pop (Choice accept or any reject) targets
                 // the WRONG mark — subtle and ugly.
+                if (popped.is_optional() && popped.has_mark()) {
+                    on_mark_accept();
+                    popped.set_has_mark(false);
+                }
+                popped.finish(pool);
+                fire_callbacks_for_frame(popped);
+                if (stack.empty()) {
+                    result_value = popped.result();
+                    parse_finished = true;
+                    break;
+                }
+                popped.pass_values_to(stack.back());
+                advance_after_child();
+            }
+            break;
+        }
+
+        case NodeKind::Scope: {
+            // Bracketed-region terminal. Apply the surrounding ignore
+            // set once at entry (so leading whitespace before the
+            // OPEN is tolerated), then hand off to walk_scope_helper
+            // which scans OPEN/INNER/CLOSE atomically. Inside the
+            // body, ignore-set skipping is bypassed — embedded
+            // whitespace / comments are part of the captured string.
+            run_ignore(sr, current_ignore());
+            const Node& n = nodes_[top.node_id().value()];
+            if (trace_enabled) trace("  scope");
+            sr.mark();
+            auto r = walk_scope_helper(*this, sr, top.node_id());
+            // Negative-lookahead inversion — same shape as Key / Raw.
+            if (top.is_negative()) {
+                if (r) sr.accept(); else sr.reject();
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (r) {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead matched (failing)");
+                    }
+                    handle_failure(ParseError{
+                        sr.position(), "negative lookahead matched"});
+                } else {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead inner failed (succeeding empty)");
+                    }
+                    if (!stack.empty()) advance_after_child();
+                }
+                break;
+            }
+            if (!r) {
+                sr.reject();
+                handle_failure(r.error());
+                break;
+            }
+            sr.accept();
+            ValuePtr produced = make_string(std::move(*r));
+            // Subparse hook — same as Raw / Parse: if the scope node
+            // carries a subparse_start, re-enter the engine on the
+            // captured body with the named rule as entry.
+            if (n.subparse_start.valid()) {
+                auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
+                if (!produced_sv) {
+                    handle_failure(ParseError{
+                        sr.position(),
+                        "scope subparse requires a string-valued body"});
+                    break;
+                }
+                std::istringstream sub_is(produced_sv->data());
+                StreamReader sub_sr(sub_is);
+                auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
+                if (!sub_r) {
+                    handle_failure(ParseError{
+                        sr.position(),
+                        "scope subparse: " + sub_r.error().message});
+                    break;
+                }
+                produced = *sub_r;
+            }
+            produced = pool.intern(produced);
+            top.add_value(produced, top.is_name());
+            // Scope is a terminal in the Frame model — its OPEN /
+            // INNER / CLOSE children were consumed atomically by
+            // walk_scope_helper, never as Frame-iteration children.
+            // Always pop here (do NOT call push_or_skip_optional on
+            // a child cursor — there is no leftover child to dispatch).
+            {
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
                 if (popped.is_optional() && popped.has_mark()) {
                     on_mark_accept();
                     popped.set_has_mark(false);

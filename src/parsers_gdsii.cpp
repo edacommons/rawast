@@ -304,7 +304,7 @@ encode_payload(std::uint8_t data_type, const Value& v) {
 GdsiiRecordParser::GdsiiRecordParser(std::string name, std::uint16_t rec_id)
     : Parser(std::move(name)), expected_rec_id_(rec_id) {}
 
-ParseResult GdsiiRecordParser::parse(StreamReader& sr) {
+WalkResult GdsiiRecordParser::walk(StreamReader& sr) {
     const Position start = sr.position();
     sr.mark();
 
@@ -329,7 +329,16 @@ ParseResult GdsiiRecordParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "GDSII: EOF in record payload"});
     }
     sr.accept();
-    return decode_payload(static_cast<std::uint8_t>(expected_rec_id_ & 0xFF), data);
+    decoded_ = decode_payload(
+        static_cast<std::uint8_t>(expected_rec_id_ & 0xFF), data);
+    return {};
+}
+
+ValuePtr GdsiiRecordParser::value() const { return decoded_; }
+
+void GdsiiRecordParser::reset() {
+    accum_.clear();
+    decoded_.reset();
 }
 
 SaveResult GdsiiRecordParser::unparse(const Value& value) const {
@@ -362,22 +371,29 @@ namespace {
 // added to the grammar's ignore list, since record payloads (DT_STR
 // fields in particular) can legitimately contain NUL bytes mid-file.
 class GdsiiPaddingParser : public Parser {
+    std::int64_t count_ = 0;
 public:
     GdsiiPaddingParser() : Parser("padding") {}
-    ParseResult parse(StreamReader& sr) override {
+    WalkResult walk(StreamReader& sr) override {
         // No mark/accept envelope: this parser cannot fail, so we
         // never need to rewind. Skipping the mark means consumed
         // bytes are NOT buffered by StreamReader, keeping memory at
         // O(1) regardless of padding size (a malicious file with
         // gigabytes of trailing NULs would otherwise force buffering
         // of every byte until accept()).
-        std::int64_t count = 0;
         while (auto b = sr.peek()) {
             if (*b != '\0') break;
             sr.get();
-            ++count;
+            ++count_;
         }
-        return std::make_shared<IntValue>(count);
+        return {};
+    }
+    ValuePtr value() const override {
+        return std::make_shared<IntValue>(count_);
+    }
+    void reset() override {
+        accum_.clear();
+        count_ = 0;
     }
     SaveResult unparse(const Value& v) const override {
         // Round-trip: emit the same number of NUL bytes we consumed

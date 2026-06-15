@@ -27,6 +27,17 @@ enum class NodeKind {
                // StringValue; ignore-set skipping is bypassed so embedded
                // whitespace and newlines round-trip verbatim. The stop
                // literal is stashed on `value` (StringValue) at load time.
+    Scope,     // `scope { OPEN, INNER..., CLOSE }` — string-aware bracket
+               // scanner. children[0] is OPEN (must be a Key), children.back()
+               // is CLOSE (must be a Key); intermediate children are INNERs
+               // (rule Refs or terminal-Parser invocations) that consume
+               // atomic spans where embedded close bytes must not trigger
+               // a false CLOSE match. The scan loop tries CLOSE first at
+               // each step, then each INNER in order; on no match it
+               // advances one raw byte. The captured body bytes (between
+               // OPEN end and CLOSE start, exclusive) are emitted as a
+               // StringValue. Ignore-set skipping is bypassed inside the
+               // scope body so embedded whitespace round-trips verbatim.
 };
 
 // What kind of container the surrounding level materialises at end-of-frame.

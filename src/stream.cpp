@@ -77,4 +77,14 @@ Position StreamReader::position() const noexcept {
     return {consumed_ + pos_, line_, column_};
 }
 
+std::string StreamReader::bytes_from(const Position& start) const {
+    // buf_ holds bytes [consumed_, consumed_+buf_.size()). Bytes
+    // before consumed_ were trimmed when the retained-buffer
+    // window slid past them.
+    if (start.bytes < consumed_) return {};         // out of window
+    std::size_t off = start.bytes - consumed_;
+    if (off >= pos_) return {};                     // past cursor
+    return std::string(buf_.data() + off, pos_ - off);
+}
+
 } // namespace rawast

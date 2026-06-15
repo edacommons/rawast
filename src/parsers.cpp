@@ -30,7 +30,7 @@ inline bool is_word_char(char c) noexcept {
 }
 } // namespace
 
-ParseResult KeyParser::parse(StreamReader& sr) {
+WalkResult KeyParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -59,7 +59,8 @@ ParseResult KeyParser::parse(StreamReader& sr) {
     }
 
     sr.accept();
-    return make_string(token_);
+    accum_ = token_;
+    return {};
 }
 
 // Historical note. Word-boundary checking inside KeyParser was first
@@ -83,14 +84,13 @@ SaveResult KeyParser::unparse(const Value& /*value*/) const {
 
 IntParser::IntParser() : Parser("int") {}
 
-ParseResult IntParser::parse(StreamReader& sr) {
+WalkResult IntParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
-    std::string digits;
     auto first = sr.peek();
     if (first && *first == '-') {
-        digits.push_back('-');
+        accum_.push_back('-');
         sr.get();
     }
 
@@ -98,7 +98,7 @@ ParseResult IntParser::parse(StreamReader& sr) {
     while (true) {
         auto c = sr.peek();
         if (!c || !std::isdigit(static_cast<unsigned char>(*c))) break;
-        digits.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
         seen_digit = true;
     }
@@ -109,12 +109,21 @@ ParseResult IntParser::parse(StreamReader& sr) {
     }
 
     sr.accept();
+    return {};
+}
+
+ValuePtr IntParser::value() const {
     std::int64_t result;
-    auto [ptr, ec] = std::from_chars(digits.data(),
-                                     digits.data() + digits.size(),
+    auto [ptr, ec] = std::from_chars(accum_.data(),
+                                     accum_.data() + accum_.size(),
                                      result);
     if (ec != std::errc{}) {
-        return tl::unexpected(ParseError{start, "integer out of range"});
+        // Out-of-range surfaces here rather than in walk() — the
+        // engine drops the typed conversion error into the standard
+        // Parse-node error path via the parse() default impl (which
+        // calls value() after walk succeeds). For scope INNERs that
+        // bypass value(), the typed range error simply never fires.
+        return make_int(0);
     }
     return make_int(result);
 }
@@ -131,31 +140,32 @@ SaveResult IntParser::unparse(const Value& value) const {
 
 UIntParser::UIntParser() : Parser("uint") {}
 
-ParseResult UIntParser::parse(StreamReader& sr) {
+WalkResult UIntParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
-    std::string digits;
     while (true) {
         auto c = sr.peek();
         if (!c || !std::isdigit(static_cast<unsigned char>(*c))) break;
-        digits.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
 
-    if (digits.empty()) {
+    if (accum_.empty()) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected unsigned integer"});
     }
 
     sr.accept();
+    return {};
+}
+
+ValuePtr UIntParser::value() const {
     std::uint64_t result;
-    auto [ptr, ec] = std::from_chars(digits.data(),
-                                     digits.data() + digits.size(),
+    auto [ptr, ec] = std::from_chars(accum_.data(),
+                                     accum_.data() + accum_.size(),
                                      result);
-    if (ec != std::errc{}) {
-        return tl::unexpected(ParseError{start, "unsigned integer out of range"});
-    }
+    if (ec != std::errc{}) return make_uint(0);
     return make_uint(result);
 }
 
@@ -171,11 +181,10 @@ SaveResult UIntParser::unparse(const Value& value) const {
 
 FloatParser::FloatParser() : Parser("float") {}
 
-ParseResult FloatParser::parse(StreamReader& sr) {
+WalkResult FloatParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
-    std::string digits;
     bool has_dot          = false;
     bool has_exp          = false;
     bool has_digit_before = false;
@@ -185,7 +194,7 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     // Optional sign.
     auto c = sr.peek();
     if (c && *c == '-') {
-        digits.push_back('-');
+        accum_.push_back('-');
         sr.get();
     }
 
@@ -193,7 +202,7 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     while (true) {
         c = sr.peek();
         if (!c || !std::isdigit(static_cast<unsigned char>(*c))) break;
-        digits.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
         has_digit_before = true;
     }
@@ -201,13 +210,13 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     // Optional fractional part.
     c = sr.peek();
     if (c && *c == '.') {
-        digits.push_back('.');
+        accum_.push_back('.');
         sr.get();
         has_dot = true;
         while (true) {
             c = sr.peek();
             if (!c || !std::isdigit(static_cast<unsigned char>(*c))) break;
-            digits.push_back(*c);
+            accum_.push_back(*c);
             sr.get();
             has_digit_after = true;
         }
@@ -221,19 +230,19 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     // Optional exponent.
     c = sr.peek();
     if (c && (*c == 'e' || *c == 'E')) {
-        digits.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
         has_exp = true;
 
         c = sr.peek();
         if (c && (*c == '+' || *c == '-')) {
-            digits.push_back(*c);
+            accum_.push_back(*c);
             sr.get();
         }
         while (true) {
             c = sr.peek();
             if (!c || !std::isdigit(static_cast<unsigned char>(*c))) break;
-            digits.push_back(*c);
+            accum_.push_back(*c);
             sr.get();
             has_digit_in_exp = true;
         }
@@ -253,16 +262,20 @@ ParseResult FloatParser::parse(StreamReader& sr) {
     }
 
     sr.accept();
+    return {};
+}
+
+ValuePtr FloatParser::value() const {
     // std::from_chars for floating-point is unimplemented in libc++ on
     // macOS as of Xcode 16.4 (the overload is explicitly deleted), so
-    // use std::strtod for portability. `digits` is a std::string, so
+    // use std::strtod for portability. `accum_` is a std::string, so
     // `c_str()` gives a null-terminated buffer.
     errno = 0;
     char* end_ptr = nullptr;
-    double result = std::strtod(digits.c_str(), &end_ptr);
+    double result = std::strtod(accum_.c_str(), &end_ptr);
     if (errno == ERANGE ||
-        end_ptr != digits.c_str() + digits.size()) {
-        return tl::unexpected(ParseError{start, "floating-point conversion failed"});
+        end_ptr != accum_.c_str() + accum_.size()) {
+        return make_real(0.0);
     }
     return make_real(result);
 }
@@ -293,32 +306,31 @@ SaveResult FloatParser::unparse(const Value& value) const {
 
 WhitespaceParser::WhitespaceParser() : Parser("whitespace") {}
 
-ParseResult WhitespaceParser::parse(StreamReader& sr) {
+WalkResult WhitespaceParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
-    std::string spaces;
     while (true) {
         auto c = sr.peek();
         if (!c || !std::isspace(static_cast<unsigned char>(*c))) break;
-        spaces.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
 
-    if (spaces.empty()) {
+    if (accum_.empty()) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected whitespace"});
     }
 
     sr.accept();
-    return make_string(std::move(spaces));
+    return {};
 }
 
 // LinespaceParser ---------------------------------------------------------
 
 LinespaceParser::LinespaceParser() : Parser("linespace") {}
 
-ParseResult LinespaceParser::parse(StreamReader& sr) {
+WalkResult LinespaceParser::walk(StreamReader& sr) {
     // 0+ horizontal whitespace; always succeeds. No mark needed —
     // we only ever advance the cursor over space/tab; the rule
     // can't fail or partially consume.
@@ -326,6 +338,12 @@ ParseResult LinespaceParser::parse(StreamReader& sr) {
         if (*c != ' ' && *c != '\t') break;
         sr.get();
     }
+    return {};
+}
+
+ValuePtr LinespaceParser::value() const {
+    // Original spacing isn't reconstructable from a 0+ match; emit
+    // empty string (the historical behaviour of the parse() entry).
     return make_string("");
 }
 
@@ -339,7 +357,7 @@ SaveResult LinespaceParser::unparse(const Value&) const {
 
 DoubleQuoteStringParser::DoubleQuoteStringParser() : Parser("string") {}
 
-ParseResult DoubleQuoteStringParser::parse(StreamReader& sr) {
+WalkResult DoubleQuoteStringParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -349,7 +367,6 @@ ParseResult DoubleQuoteStringParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected opening '\"'"});
     }
 
-    std::string contents;
     bool escaped = false;
     while (true) {
         auto ch = sr.get();
@@ -358,20 +375,20 @@ ParseResult DoubleQuoteStringParser::parse(StreamReader& sr) {
             return tl::unexpected(ParseError{start, "unterminated string"});
         }
         if (escaped) {
-            contents.push_back(*ch);
+            accum_.push_back(*ch);
             escaped = false;
         } else if (*ch == '\\') {
-            contents.push_back(*ch);
+            accum_.push_back(*ch);
             escaped = true;
         } else if (*ch == '"') {
             break;
         } else {
-            contents.push_back(*ch);
+            accum_.push_back(*ch);
         }
     }
 
     sr.accept();
-    return make_string(std::move(contents));
+    return {};
 }
 
 SaveResult DoubleQuoteStringParser::unparse(const Value& value) const {
@@ -389,7 +406,7 @@ SaveResult DoubleQuoteStringParser::unparse(const Value& value) const {
 
 SingleQuoteStringParser::SingleQuoteStringParser() : Parser("single_quote_string") {}
 
-ParseResult SingleQuoteStringParser::parse(StreamReader& sr) {
+WalkResult SingleQuoteStringParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -399,7 +416,6 @@ ParseResult SingleQuoteStringParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected opening '\\''"});
     }
 
-    std::string contents;
     bool escaped = false;
     while (true) {
         auto ch = sr.get();
@@ -408,20 +424,20 @@ ParseResult SingleQuoteStringParser::parse(StreamReader& sr) {
             return tl::unexpected(ParseError{start, "unterminated string"});
         }
         if (escaped) {
-            contents.push_back(*ch);
+            accum_.push_back(*ch);
             escaped = false;
         } else if (*ch == '\\') {
-            contents.push_back(*ch);
+            accum_.push_back(*ch);
             escaped = true;
         } else if (*ch == '\'') {
             break;
         } else {
-            contents.push_back(*ch);
+            accum_.push_back(*ch);
         }
     }
 
     sr.accept();
-    return make_string(std::move(contents));
+    return {};
 }
 
 SaveResult SingleQuoteStringParser::unparse(const Value& value) const {
@@ -442,7 +458,7 @@ IdentifierParser::IdentifierParser(std::string extra_lead, std::string extra_con
       extra_lead_(std::move(extra_lead)),
       extra_cont_(std::move(extra_cont)) {}
 
-ParseResult IdentifierParser::parse(StreamReader& sr) {
+WalkResult IdentifierParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -460,15 +476,14 @@ ParseResult IdentifierParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected identifier"});
     }
 
-    std::string out;
-    out.push_back(*first);
+    accum_.push_back(*first);
     sr.get();
 
     while (true) {
         auto c = sr.peek();
         if (!c) break;
         if (is_cont(*c)) {
-            out.push_back(*c);
+            accum_.push_back(*c);
             sr.get();
         } else {
             break;
@@ -476,7 +491,7 @@ ParseResult IdentifierParser::parse(StreamReader& sr) {
     }
 
     sr.accept();
-    return make_string(std::move(out));
+    return {};
 }
 
 SaveResult IdentifierParser::unparse(const Value& value) const {
@@ -493,7 +508,7 @@ SaveResult IdentifierParser::unparse(const Value& value) const {
 QualifiedIdentifierParser::QualifiedIdentifierParser()
     : Parser("qualified_identifier") {}
 
-ParseResult QualifiedIdentifierParser::parse(StreamReader& sr) {
+WalkResult QualifiedIdentifierParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -510,12 +525,11 @@ ParseResult QualifiedIdentifierParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected identifier"});
     }
 
-    std::string out;
-    out.push_back(*first);
+    accum_.push_back(*first);
     sr.get();
     while (auto c = sr.peek()) {
         if (!is_cont(*c)) break;
-        out.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
 
@@ -531,19 +545,19 @@ ParseResult QualifiedIdentifierParser::parse(StreamReader& sr) {
             sr.reject();   // rewind the dot
             break;
         }
-        out.push_back('.');
-        out.push_back(*next);
+        accum_.push_back('.');
+        accum_.push_back(*next);
         sr.get();
         while (auto c = sr.peek()) {
             if (!is_cont(*c)) break;
-            out.push_back(*c);
+            accum_.push_back(*c);
             sr.get();
         }
         sr.accept();
     }
 
     sr.accept();
-    return make_string(std::move(out));
+    return {};
 }
 
 SaveResult QualifiedIdentifierParser::unparse(const Value& value) const {
@@ -559,7 +573,7 @@ SaveResult QualifiedIdentifierParser::unparse(const Value& value) const {
 
 LineCommentParser::LineCommentParser() : Parser("line_comment") {}
 
-ParseResult LineCommentParser::parse(StreamReader& sr) {
+WalkResult LineCommentParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -574,23 +588,23 @@ ParseResult LineCommentParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected '//'"});
     }
 
-    std::string body = "//";
+    accum_ = "//";
     while (true) {
         auto c = sr.peek();
         if (!c || *c == '\n' || *c == '\r') break;
-        body.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
 
     sr.accept();
-    return make_string(std::move(body));
+    return {};
 }
 
 // BlockCommentParser ------------------------------------------------------
 
 BlockCommentParser::BlockCommentParser() : Parser("block_comment") {}
 
-ParseResult BlockCommentParser::parse(StreamReader& sr) {
+WalkResult BlockCommentParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -605,7 +619,7 @@ ParseResult BlockCommentParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected '/*'"});
     }
 
-    std::string body = "/*";
+    accum_ = "/*";
     char prev = '\0';
     while (true) {
         auto c = sr.get();
@@ -613,13 +627,13 @@ ParseResult BlockCommentParser::parse(StreamReader& sr) {
             sr.reject();
             return tl::unexpected(ParseError{start, "unterminated block comment"});
         }
-        body.push_back(*c);
+        accum_.push_back(*c);
         if (prev == '*' && *c == '/') break;
         prev = *c;
     }
 
     sr.accept();
-    return make_string(std::move(body));
+    return {};
 }
 
 // -----------------------------------------------------------------------

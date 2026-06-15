@@ -89,6 +89,7 @@ EXPR: choice {
   <SEQUENCE_EXPR>,
   <CHOICE_EXPR>,
   <REPEAT_EXPR>,
+  <SCOPE_EXPR>,
   <RAW_EXPR>,
   <KEY_EXPR>,
   <KEY_STRICT_EXPR>,
@@ -113,6 +114,17 @@ CONTAINER_KIND: choice { "array":@, "dict":@ }
 
 CHOICE_EXPR: sequence {
   "choice":type="choice",
+  "{", <ITEMS>:value=@, "}"
+}
+
+// `scope { OPEN, INNER..., CLOSE }` — string-aware bracket scanner.
+// Walks from OPEN to the matching CLOSE, treating each INNER as an
+// atomic span (so embedded strings, comments, nested scopes can't
+// trigger a false CLOSE). Returns the body bytes between OPEN and
+// CLOSE (exclusive) as a single StringValue. See §4.5b of
+// docs/rawast-format.md.
+SCOPE_EXPR: sequence {
+  "scope":type="scope",
   "{", <ITEMS>:value=@, "}"
 }
 

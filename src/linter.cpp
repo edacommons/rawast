@@ -119,6 +119,16 @@ FirstSet first_of(const Grammar& g, NodeId id, std::set<std::size_t>& visited) {
         result.tokens.insert("R:*");
         break;
     }
+    case NodeKind::Scope: {
+        // Scope's first byte is the OPEN Key (children[0]). Defer to
+        // first_of on that child for the contribution; Scope itself
+        // is never nullable (OPEN must match to enter).
+        if (!n.children.empty()) {
+            FirstSet open_first = first_of(g, n.children[0], visited);
+            for (const auto& t : open_first.tokens) result.tokens.insert(t);
+        }
+        break;
+    }
     }
 
     if (n.is_optional) result.nullable = true;
@@ -322,8 +332,10 @@ void key_paths_sequence(const Grammar& g,
         break;
     case NodeKind::Ref:
     case NodeKind::Raw:
-        // Ref already resolved above; Raw consumes opaque bytes and
-        // doesn't contribute a Key. Walk past.
+    case NodeKind::Scope:
+        // Ref already resolved above; Raw consumes opaque bytes; Scope
+        // consumes a bracketed span as a single StringValue — none
+        // contribute a Key path. Walk past.
         key_paths_sequence(g, children, start_idx + 1, visited,
                            max_depth, prefix, out);
         break;

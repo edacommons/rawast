@@ -131,6 +131,19 @@ ValuePtr node_to_value(const Grammar& g, NodeId id) {
         break;
     }
 
+    case NodeKind::Scope: {
+        // Mirror Sequence/Choice serialization: `{type: "scope",
+        // value: [OPEN, INNER..., CLOSE]}`. Loader's `type == "scope"`
+        // branch reads `value` back into children.
+        put_str(*d, "type", "scope");
+        auto items = std::make_shared<ArrayValue>();
+        for (NodeId child : n.children) {
+            items->data().push_back(node_to_value(g, child));
+        }
+        put(*d, "value", items);
+        break;
+    }
+
     case NodeKind::Repeat: {
         put_str(*d, "type", "repeat");
         if (n.min > 0) put_int(*d, "min", static_cast<std::int64_t>(n.min));
