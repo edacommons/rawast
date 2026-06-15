@@ -374,9 +374,10 @@ struct ChildDisc {
 };
 
 std::vector<ChildDisc>
-collect_child_discriminators(const Grammar& g, const Node& seq) {
+collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
     std::vector<ChildDisc> out;
     if (seq.kind != NodeKind::Sequence) return out;
+    if (depth > 4) return out;  // cycle / runaway guard
     for (std::size_t i = 0; i + 1 < seq.children.size(); ++i) {
         const Node& a = g.node(g.resolve_ref(seq.children[i]));
         const Node& b = g.node(g.resolve_ref(seq.children[i + 1]));
@@ -390,6 +391,34 @@ collect_child_discriminators(const Grammar& g, const Node& seq) {
         auto multi = discriminator_choice_values(g, b);
         if (!multi.empty()) {
             out.push_back({fname->data(), std::move(multi)});
+        }
+    }
+    // Inline Choice children whose alts each carry a single
+    // discriminator on the same field — the dict's field must be
+    // in the union of alt values. Without this a rule like
+    //   TAIL: sequence dict { choice { '+':op="+", '-':op="-" }, ... }
+    // would have no discriminator visible to the outer dispatcher.
+    for (NodeId child_id : seq.children) {
+        const Node& c = g.node(g.resolve_ref(child_id));
+        if (c.kind != NodeKind::Choice) continue;
+        if (c.children.empty()) continue;
+        std::string common_field;
+        std::vector<ValuePtr> values;
+        bool ok = true;
+        for (NodeId alt : c.children) {
+            const Node& a = g.node(g.resolve_ref(alt));
+            auto alt_discs = collect_child_discriminators(g, a, depth + 1);
+            if (alt_discs.size() != 1) { ok = false; break; }
+            if (alt_discs[0].values.size() != 1) { ok = false; break; }
+            if (common_field.empty()) {
+                common_field = alt_discs[0].field;
+            } else if (alt_discs[0].field != common_field) {
+                ok = false; break;
+            }
+            values.push_back(alt_discs[0].values[0]);
+        }
+        if (ok && !values.empty()) {
+            out.push_back({std::move(common_field), std::move(values)});
         }
     }
     return out;
@@ -560,8 +589,6 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     const Node& wrapper = g.node(
         g.resolve_ref(repeat_node.children[item_idx]));
     if (wrapper.kind != NodeKind::Sequence) return std::nullopt;
-    // First wrapper child should be the V-name marker the loader inserted
-    // for the `field[]=@` binding; the second is the actual item.
     if (wrapper.children.size() < 2) return std::nullopt;
     const Node& vn = g.node(g.resolve_ref(wrapper.children[0]));
     if (vn.kind != NodeKind::Value || !vn.is_name) return std::nullopt;
@@ -569,7 +596,7 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     if (!vn_name) return std::nullopt;
     bool is_list = false;
     std::string field = strip_list_suffix(vn_name->data(), is_list);
-    if (!is_list) return std::nullopt;  // not the `[]=@` pattern
+    if (!is_list) return std::nullopt;
     const Node& item = g.node(g.resolve_ref(wrapper.children[1]));
     auto discs = collect_child_discriminators(g, item);
     // n-ary chain pattern: the separator can carry the rule's
@@ -584,20 +611,12 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     if (discs.empty() && sep_discs.empty()) return std::nullopt;
     auto it = dict.data().find(field);
     if (it == dict.data().end()) {
-        // Missing / empty list. `repeat+` (min>=1) requires at least
-        // one entry, so absence rules this alt out. `repeat` (min=0)
-        // is ambiguous — leave it nullopt so the surrounding
-        // field-presence walk can decide.
-        return repeat_node.min > 0
-            ? std::optional<bool>{false}
-            : std::nullopt;
+        return repeat_node.min > 0 ? std::optional<bool>{false} : std::nullopt;
     }
     auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
     if (!arr) return std::nullopt;
     if (arr->data().empty()) {
-        return repeat_node.min > 0
-            ? std::optional<bool>{false}
-            : std::nullopt;
+        return repeat_node.min > 0 ? std::optional<bool>{false} : std::nullopt;
     }
     for (const auto& elt : arr->data()) {
         auto elt_dict = std::dynamic_pointer_cast<DictValue>(elt);
@@ -607,10 +626,7 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
             if (eit == elt_dict->data().end()) return false;
             bool ok = false;
             for (const auto& v : d.values) {
-                if (values_equal_v2(eit->second, v.get())) {
-                    ok = true;
-                    break;
-                }
+                if (values_equal_v2(eit->second, v.get())) { ok = true; break; }
             }
             if (!ok) return false;
         }
@@ -1212,12 +1228,6 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
     }
 
     case NodeKind::Choice: {
-        // Try each alternative against the peek. The Choice is
-        // dispatchable iff at least one alternative could consume.
-        // Previous coarse "any non-null peek" check was too
-        // permissive and let Repeat-over-Choice loops keep iterating
-        // when no alt actually matched, masking the real "no
-        // dispatchable field" condition in fixed-schema mode.
         if (!peek_value) return false;
         for (NodeId alt : n.children) {
             if (can_consume_peek(g, alt, peek_value, peek_key, s)) return true;
@@ -1258,12 +1268,10 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
 
 NodeId choose_alternative_v2(const Grammar& g, const Node& choice_node,
                               const SaveState& s) {
-    // First pass: try alternatives with explicit discriminators.
     for (NodeId alt : choice_node.children) {
         if (!has_explicit_discriminator(g, alt)) continue;
         if (can_consume(g, alt, s)) return alt;
     }
-    // Second pass: catch-all alternatives (no explicit discriminator).
     for (NodeId alt : choice_node.children) {
         if (has_explicit_discriminator(g, alt)) continue;
         if (can_consume(g, alt, s)) return alt;
@@ -1727,13 +1735,75 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
 // (only at the top of an opchain rule's dispatch, not on every
 // recursion — args inside compacted chains are leaves at the NEXT
 // precedence level and shouldn't be wrapped here).
-ValuePtr expand_opchain(const ValuePtr& v) {
+// Build a map from `op` string → tail-rule-group id. Two ops share a
+// group id iff they appear in the same grammar rule's `op`
+// discriminator set — that is, the same tail rule accepts them
+// both. Used by `expand_opchain` to decide whether `args[0]` and the
+// outer chain op are part of the same chain (absorb) or separate
+// sub-expressions at different precedence levels (don't absorb).
+//
+// Example for sv_pp_expr:
+//   OR_TAIL    {"||"}              → group 0
+//   AND_TAIL   {"&&"}              → group 1
+//   EQ_TAIL    {"==", "!="}        → group 2
+//   COMPARE    {"<", ">", "<=", ">="} → group 3
+//   ADD_TAIL   {"+", "-"}          → group 4
+//   MUL_TAIL   {"*", "/", "%"}     → group 5
+//   NOT_EXPR   {"!"}               → group 6  (unary, args.size==1; never absorbed)
+//
+// `1 + 2 - 3` compacted: outer "-" → 4, inner "+" → 4. Same → absorb
+// into a single ADD chain `{lhs:1, tail:[{+,2}, {-,3}]}`.
+//
+// `A == B || C == D` compacted: outer "||" → 0, inner "==" → 2.
+// Different → don't absorb; the inner EQ chain stays as a complete
+// `{lhs, tail}` sub-tree at OR's lhs position.
+std::unordered_map<std::string, int>
+build_op_compat_map(const Grammar& g) {
+    std::unordered_map<std::string, int> out;
+    int next_id = 0;
+    for (const auto& [_, rule_id] : g.named_rules()) {
+        NodeId rid = g.resolve_ref(rule_id);
+        if (rid.value() >= g.node_count()) continue;
+        const Node& n = g.node(rid);
+        if (n.kind != NodeKind::Sequence) continue;
+        auto discs = collect_child_discriminators(g, n);
+        // Find the discriminator on the `op` field, if any.
+        for (const auto& d : discs) {
+            if (d.field != "op") continue;
+            int id = next_id++;
+            for (const auto& v : d.values) {
+                if (auto s = as_string(v)) {
+                    // First-seen mapping wins. Within one grammar each
+                    // op normally appears in exactly one tail rule.
+                    out.emplace(s->data(), id);
+                }
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+// Returns true iff both ops route to the same tail rule (same group
+// id in the compat map). Unknown ops never absorb (conservative).
+bool ops_in_same_tail_rule(
+    const std::unordered_map<std::string, int>& op_compat,
+    const std::string& a, const std::string& b) {
+    auto ait = op_compat.find(a);
+    auto bit = op_compat.find(b);
+    if (ait == op_compat.end() || bit == op_compat.end()) return false;
+    return ait->second == bit->second;
+}
+
+ValuePtr expand_opchain(
+    const ValuePtr& v,
+    const std::unordered_map<std::string, int>& op_compat) {
     if (!v) return v;
 
     if (auto arr = as_array(v)) {
         auto out = std::make_shared<ArrayValue>();
         for (const auto& e : arr->data()) {
-            out->data().push_back(expand_opchain(e));
+            out->data().push_back(expand_opchain(e, op_compat));
         }
         return out;
     }
@@ -1757,7 +1827,7 @@ ValuePtr expand_opchain(const ValuePtr& v) {
         // nested compacted nodes get expanded too.
         auto out = std::make_shared<DictValue>();
         for (const auto& [k, val] : d->data()) {
-            out->data().emplace(k, expand_opchain(val));
+            out->data().emplace(k, expand_opchain(val, op_compat));
         }
         return out;
     }
@@ -1766,19 +1836,46 @@ ValuePtr expand_opchain(const ValuePtr& v) {
     if (!op_sv) return v;
     const std::string& op = op_sv->data();
 
-    // Expand args[0]; if it's itself a chain, absorb its tail prefix.
-    ValuePtr first = expand_opchain(args_arr->data()[0]);
+    // Op-aware absorb: if args[0] is itself a chain whose op routes
+    // to the SAME tail rule as the outer op, the two are part of one
+    // chain (e.g. `1+2-3` → outer "-" and inner "+" are both
+    // ADD_TAIL). Absorb args[0]'s lhs as our lhs and prepend its
+    // tail. Otherwise — different precedence level — keep args[0]
+    // expanded as a complete sub-tree at the outer lhs position.
+    ValuePtr first = expand_opchain(args_arr->data()[0], op_compat);
     ValuePtr lhs;
     std::vector<ValuePtr> tail;
-    if (auto fd = as_dict(first); fd && fd->data().count("lhs")) {
-        lhs = fd->data().at("lhs");
+    bool absorbed = false;
+    if (auto fd = as_dict(first)) {
+        auto fl_it = fd->data().find("lhs");
         auto ft_it = fd->data().find("tail");
-        if (ft_it != fd->data().end()) {
-            if (auto ft_arr = as_array(ft_it->second)) {
-                for (const auto& t : ft_arr->data()) tail.push_back(t);
+        if (fl_it != fd->data().end() && ft_it != fd->data().end()) {
+            // first is a fully-expanded chain wrapper. Check if its
+            // ORIGINAL op (before expand collapsed lhs/tail) belongs
+            // to the same tail rule as outer. We recover it from the
+            // tail entries' op — they all have the chain's op.
+            auto ft_arr = as_array(ft_it->second);
+            if (ft_arr && !ft_arr->data().empty()) {
+                auto te0 = as_dict(ft_arr->data()[0]);
+                if (te0) {
+                    auto teo = te0->data().find("op");
+                    if (teo != te0->data().end()) {
+                        if (auto teos = as_string(teo->second)) {
+                            if (ops_in_same_tail_rule(
+                                op_compat, op, teos->data())) {
+                                lhs = fl_it->second;
+                                for (const auto& t : ft_arr->data()) {
+                                    tail.push_back(t);
+                                }
+                                absorbed = true;
+                            }
+                        }
+                    }
+                }
             }
         }
-    } else {
+    }
+    if (!absorbed) {
         lhs = first;
     }
 
@@ -1786,7 +1883,7 @@ ValuePtr expand_opchain(const ValuePtr& v) {
     for (std::size_t i = 1; i < args_arr->data().size(); ++i) {
         auto te = std::make_shared<DictValue>();
         te->data().emplace("op", make_string(op));
-        te->data().emplace("rhs", expand_opchain(args_arr->data()[i]));
+        te->data().emplace("rhs", expand_opchain(args_arr->data()[i], op_compat));
         tail.push_back(te);
     }
 
@@ -1798,7 +1895,7 @@ ValuePtr expand_opchain(const ValuePtr& v) {
     // Carry any other wrapper-level fields (not op/args).
     for (const auto& [k, val] : d->data()) {
         if (k == "op" || k == "args") continue;
-        out->data().emplace(k, expand_opchain(val));
+        out->data().emplace(k, expand_opchain(val, op_compat));
     }
     return out;
 }
@@ -1839,7 +1936,8 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     // recursively, then wrap atoms so the top-level rule's
     // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
     if (has_opchain_in_chain(start)) {
-        value = expand_opchain(value);
+        auto op_compat = build_op_compat_map(*this);
+        value = expand_opchain(value, op_compat);
         value = wrap_atom_as_chain(value);
     }
     SaveState s;

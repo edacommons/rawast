@@ -397,3 +397,91 @@ TEST_CASE("save: scope-aware recursion through `:args[]=@` bindings") {
     auto reparsed = parse_to_value(g, saved);
     CHECK(reparsed);
 }
+
+// ─── Engine: nested always-wrap chains ──────────────────────────
+// When a chain rule's lhs is itself an always-wrap chain dict
+// (`{lhs:{lhs:atom, tail:[{op,rhs:atom}]}, tail:[{op,rhs:...}]}`),
+// save's dispatch must follow the catch-all NEXT Ref down through
+// the precedence ladder until it reaches the rule whose tail-item
+// discriminator matches the inner chain's op. Currently the
+// recursive `can_consume` rejects too eagerly somewhere along that
+// path: even though the inner chain's op="&&" matches AND_CHAIN
+// (which IS reachable from OR_EXPR's catch-all <AND_EXPR>), the
+// dispatcher returns invalid at the outer OR_EXPR Choice and the
+// save aborts with "no matching grammar alternative".
+//
+// Reproduces sv_pp_expr's `defined() && (A == 32 || A == 64)`
+// failure shape without depending on #opchain or scope.paren —
+// pure choice+repeat+ always-wrap pattern surfaced by parsing the
+// natural input.
+
+TEST_CASE("save: nested always-wrap chain round-trips through catch-all Refs") {
+    Grammar g;
+    register_std_parser_group();
+    // 4 precedence levels — OR, AND, EQ, ADD — to match sv_pp_expr's
+    // ladder depth more closely. EQ_TAIL uses an inline `choice {...}`
+    // for ==/!= so the `collect_child_discriminators` inline-Choice
+    // extension also fires. ADD_TAIL same shape for +/-.
+    const char* src = R"(
+        use: std
+        start: <TOP>
+        TOP: <OR_EXPR>:#opchain
+        OR_EXPR ignore whitespace: choice { <OR_CHAIN>, <AND_EXPR> }
+        OR_CHAIN: sequence dict {
+            <AND_EXPR>:lhs=@,
+            repeat+ <OR_TAIL>:tail[]=@
+        }
+        OR_TAIL: sequence dict { '||':op="||", <AND_EXPR>:rhs=@ }
+
+        AND_EXPR: choice { <AND_CHAIN>, <EQ_EXPR> }
+        AND_CHAIN: sequence dict {
+            <EQ_EXPR>:lhs=@,
+            repeat+ <AND_TAIL>:tail[]=@
+        }
+        AND_TAIL: sequence dict { '&&':op="&&", <EQ_EXPR>:rhs=@ }
+
+        EQ_EXPR: choice { <EQ_CHAIN>, <ADD_EXPR> }
+        EQ_CHAIN: sequence dict {
+            <ADD_EXPR>:lhs=@,
+            repeat+ <EQ_TAIL>:tail[]=@
+        }
+        EQ_TAIL: sequence dict {
+            choice { '==':op="==", '!=':op="!=" },
+            <ADD_EXPR>:rhs=@
+        }
+
+        ADD_EXPR: choice { <ADD_CHAIN>, <LEAF> }
+        ADD_CHAIN: sequence dict {
+            <LEAF>:lhs=@,
+            repeat+ <ADD_TAIL>:tail[]=@
+        }
+        ADD_TAIL: sequence dict {
+            choice { '+':op="+", '-':op="-" },
+            <LEAF>:rhs=@
+        }
+
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Simple chain cases — these must keep working.
+    {
+        auto ast = parse_to_value(g, "A&&B");
+        CHECK(save_to_string(g, ast) == "A&&B");
+    }
+    {
+        auto ast = parse_to_value(g, "A||B");
+        CHECK(save_to_string(g, ast) == "A||B");
+    }
+
+    // The failing case (mirrors sv_pp_expr): outer || chain whose
+    // lhs and rhs are themselves == chains, and those == chains'
+    // operands cascade down to LEAF via the catch-all ADD_EXPR Ref.
+    {
+        auto ast = parse_to_value(g, "A==B||C==D");
+        CHECK(save_to_string(g, ast) == "A==B||C==D");
+    }
+}
