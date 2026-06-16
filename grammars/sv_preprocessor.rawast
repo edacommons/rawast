@@ -1,7 +1,7 @@
 // SystemVerilog preprocessor grammar.
 //
-// First cut: `\`define NAME BODY` with the body parsed as a segment
-// array via scope. Each body segment is one of:
+// First cut: `\`define NAME [(p1, p2, …)] BODY` with the body parsed
+// as a segment array via scope. Each body segment is one of:
 //
 //   {type:"macro_use", name:"OTHER"}      // ``OTHER` — nested macro invocation
 //   {type:"string",    value:"..."}       // "..." literal
@@ -10,20 +10,38 @@
 //                                          // happens at expansion time)
 //   StringValue                            // raw text run between segments
 //
-// The body terminates at the next newline. Whitespace between the
-// `\`define`, name, and body is stripped by the `ignore linespace`
-// rule attribute; whitespace INSIDE the body is preserved (scope
-// bypasses ignore-set skipping).
+// Macro parameter list — when present — is `(p1, p2, …)` IMMEDIATELY
+// after the macro name (no whitespace). Per SV LRM:
+//
+//   `define FOO(x) body     // parameterized: params=["x"], body=body
+//   `define FOO (x) body    // no params, body=`(x) body`
+//
+// The boundary is preserved by NOT applying `ignore linespace` at
+// rule level — explicit `linespace` items appear at positions where
+// whitespace is allowed; between the macro name and `(`, whitespace
+// fails the PARAMS optional and the bytes become part of the body.
+//
+// The body terminates at the next newline; scope bypasses ignore-set
+// skipping so whitespace inside the body round-trips verbatim.
 
 use: std
 
 start: <DEFINE>
 
-DEFINE ignore linespace: sequence dict {
-  "`define":type="define" space,
-  identifier:name=@ space,
+DEFINE: sequence dict {
+  "`define":type="define",
+  linespace,
+  identifier:name=@,
+  ?<PARAMS>:params=@,
+  linespace,
   scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
   "\n"
+}
+
+PARAMS: sequence array {
+  "(",
+  repeat identifier separator ",",
+  ")"
 }
 
 MACRO_USE: sequence dict {

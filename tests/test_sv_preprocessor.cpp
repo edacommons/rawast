@@ -182,3 +182,71 @@ TEST_CASE("sv_pp define: mixed body round-trips") {
     auto ast = parse(g, "`define COMBO x = \"v\" + `OTHER\n");
     CHECK(save(g, ast) == "`define COMBO x = \"v\" + `OTHER\n");
 }
+
+// ─── Macro parameters ─────────────────────────────────────────────
+
+TEST_CASE("sv_pp define: macro with one parameter") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define ID(x) x\n");
+    CHECK(str_field(ast, "name") == "ID");
+    auto params = std::dynamic_pointer_cast<ArrayValue>(
+        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    REQUIRE(params);
+    REQUIRE(params->data().size() == 1);
+    auto p0 = as_string(params->data()[0]);
+    REQUIRE(p0); CHECK(p0->data() == "x");
+    auto body = body_of(ast);
+    REQUIRE(body);
+    REQUIRE(body->data().size() == 1);
+    auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
+    REQUIRE(seg);
+    CHECK(str_field(seg, "type") == "ref");
+    CHECK(str_field(seg, "value") == "x");
+}
+
+TEST_CASE("sv_pp define: macro with multiple parameters") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define ADD(x,y) x + y\n");
+    CHECK(str_field(ast, "name") == "ADD");
+    auto params = std::dynamic_pointer_cast<ArrayValue>(
+        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    REQUIRE(params);
+    REQUIRE(params->data().size() == 2);
+    CHECK(as_string(params->data()[0])->data() == "x");
+    CHECK(as_string(params->data()[1])->data() == "y");
+}
+
+TEST_CASE("sv_pp define: macro with no parameter list when `(` not adjacent") {
+    auto g = load_grammar();
+    // Per SV LRM: a space between FOO and `(` means no params — the
+    // `(...)` becomes part of the body.
+    auto ast = parse(g, "`define FOO (x) y\n");
+    CHECK(str_field(ast, "name") == "FOO");
+    // No `params` field expected (PARAMS optional was skipped).
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    CHECK(d->data().find("params") == d->data().end());
+    auto body = body_of(ast);
+    REQUIRE(body);
+    // Body has the `(x) y` content.
+    bool found_paren = false;
+    for (auto& seg : body->data()) {
+        if (auto sv = as_string(seg)) {
+            if (sv->data().find("(") != std::string::npos) {
+                found_paren = true; break;
+            }
+        }
+    }
+    CHECK(found_paren);
+}
+
+TEST_CASE("sv_pp define: macro with one parameter round-trips") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define ID(x) x\n");
+    CHECK(save(g, ast) == "`define ID(x) x\n");
+}
+
+TEST_CASE("sv_pp define: macro with multiple parameters round-trips") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define ADD(x,y) x + y\n");
+    CHECK(save(g, ast) == "`define ADD(x,y) x + y\n");
+}
