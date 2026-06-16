@@ -980,6 +980,90 @@ TEST_CASE("Preprocessor::process: parameterised macro `\\`FOO(a,b) expands with 
     CHECK(out.find("(p + q)") != std::string::npos);
 }
 
+// ─── Pass-through for unknown directives ─────────────────────────────
+//
+// SV files are full of directives we don't (and may never) interpret:
+// `\`timescale`, `\`celldefine`, `\`line`, `\`begin_keywords`, etc.
+// They surface as undefined MACRO_USE nodes with their trailing args
+// captured as text segments; on_undefined::Leave (the default) emits
+// the `\`NAME` verbatim and the text segments follow as-is, so the
+// whole directive line round-trips. No warning is emitted in Leave
+// mode, so real corpus files don't drown the warnings buffer.
+
+TEST_CASE("Preprocessor::process: `\\`timescale passes through verbatim") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`timescale 1ns/1ps\n"
+        "module top; endmodule\n"
+    );
+    CHECK(out.find("`timescale") != std::string::npos);
+    CHECK(out.find("1ns/1ps") != std::string::npos);
+    CHECK(out.find("module top") != std::string::npos);
+    CHECK(pp.warnings().empty());
+}
+
+TEST_CASE("Preprocessor::process: `\\`celldefine / `\\`endcelldefine (no args) pass through") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`celldefine\n"
+        "module cell; endmodule\n"
+        "`endcelldefine\n"
+    );
+    CHECK(out.find("`celldefine") != std::string::npos);
+    CHECK(out.find("`endcelldefine") != std::string::npos);
+    CHECK(out.find("module cell") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: `\\`default_nettype none passes through") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process("`default_nettype none\n");
+    CHECK(out.find("`default_nettype") != std::string::npos);
+    CHECK(out.find("none") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: `\\`begin_keywords \"1800-2017\" passes through") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`begin_keywords \"1800-2017\"\n"
+        "module top; endmodule\n"
+        "`end_keywords\n"
+    );
+    CHECK(out.find("`begin_keywords") != std::string::npos);
+    CHECK(out.find("\"1800-2017\"") != std::string::npos);
+    CHECK(out.find("`end_keywords") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: `\\`include with angle-bracket form falls through to pass-through") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    // INCLUDE rule only matches `"..."` form; `<...>` is a v1
+    // limitation. PEG ordered choice backtracks the failed INCLUDE
+    // attempt and TEXT_LINE picks up `\`include` as undefined
+    // MACRO_USE, so the line still round-trips verbatim.
+    auto out = pp.process("`include <foo.svh>\n");
+    CHECK(out.find("`include") != std::string::npos);
+    CHECK(out.find("<foo.svh>") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: unknown directive followed by real define still expands the macro") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`timescale 1ns/1ps\n"
+        "`define WIDTH 32\n"
+        "wire [`WIDTH-1:0] x;\n"
+    );
+    // Pass-through directive preserved AND real macro expansion still
+    // works after it — proves the unknown directive doesn't poison
+    // following state.
+    CHECK(out.find("`timescale") != std::string::npos);
+    CHECK(out.find("wire [32-1:0] x;") != std::string::npos);
+}
+
 TEST_CASE("Preprocessor::process: macro use after `\\`ifdef-taken branch") {
     auto g = load_grammar();
     Preprocessor pp(g);
