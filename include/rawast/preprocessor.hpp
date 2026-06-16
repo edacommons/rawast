@@ -162,6 +162,15 @@ struct PreprocessorState {
 // that includes preprocessor.hpp.
 class Grammar;
 
+// Result of a host-supplied include-source resolver. The
+// `canonical_id` uniquely identifies the source (used for source-map
+// provenance, `included_files()` dedup, and diagnostic labels) and
+// `content` is the raw bytes to parse + walk.
+struct PpIncludeSource {
+    std::string canonical_id;
+    std::string content;
+};
+
 // Construction options for Preprocessor. Top-level so the in-class
 // default initializers don't need to be visible at the Preprocessor
 // constructor's default-argument-deduction site (a nested struct
@@ -215,6 +224,38 @@ struct PpOptions {
     // the same way the preprocessor walker does, rather than
     // re-parsing the expression by hand.
     std::function<std::optional<bool>(const ValuePtr& cond)> expr_eval;
+
+    // Host-supplied source resolver for `\`include`. When set, called
+    // instead of (well, before — see fallback) the built-in
+    // `include_paths` filesystem walk. Returns the canonical id and
+    // text content of the included source, or nullopt to mean "not
+    // found, fall back to the built-in walk."
+    //
+    // The `including_file` argument is the canonical id of the file
+    // currently doing the `\`include` (empty for top-level / stdin),
+    // letting hosts implement "resolve relative to the including
+    // file" or any other context-sensitive policy.
+    //
+    // The `canonical_id` returned identifies the source for source-
+    // map provenance, the `included_files()` dedup query, and
+    // diagnostic file labels. Two `\`include` directives that
+    // legitimately reference the same logical source should produce
+    // the same canonical_id; the host decides the identity policy
+    // (absolute path, virtual URI, content hash, …).
+    //
+    // The `content` is the raw bytes to be parsed and walked. The
+    // host is free to read from disk, cache in memory, fetch over
+    // the network, or generate on the fly — the preprocessor doesn't
+    // care where the bytes come from.
+    //
+    // Multi-include with redefined macros works as expected: the
+    // callback fires once per `\`include` directive, each call
+    // processes the returned content with the macro table as it
+    // stood at the call site. Hosts that cache content do not skip
+    // processing — only the I/O.
+    std::function<std::optional<PpIncludeSource>(
+        const std::string& requested,
+        const std::string& including_file)> include_source;
 
     // Host-supplied fallback for undefined macro uses. Called when
     // a `\`NAME` site references a macro not in the active table.

@@ -413,3 +413,96 @@ TEST_CASE("PP_FILE: parse_file returns array of PP_ITEMs") {
     REQUIRE(arr);
     CHECK(arr->data().size() == 3);
 }
+
+// ─── `\`include` end-to-end ──────────────────────────────────────────
+
+TEST_CASE("sv_pp include: grammar parses `\\`include \"path\"`") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`include \"foo.svh\"\n");
+    CHECK(str_field(ast, "type") == "include");
+    CHECK(str_field(ast, "path") == "foo.svh");
+}
+
+TEST_CASE("Preprocessor::process: include_source callback supplies content") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.include_source = [](const std::string& requested,
+                              const std::string& /*including*/) -> std::optional<PpIncludeSource> {
+        if (requested == "macros.svh") {
+            return PpIncludeSource{
+                "mem:macros.svh",
+                "`define WIDTH 32\n"
+            };
+        }
+        return std::nullopt;
+    };
+    Preprocessor pp(g, opts);
+    pp.process("`include \"macros.svh\"\n");
+    REQUIRE(pp.is_defined("WIDTH"));
+    CHECK(pp.get_macro("WIDTH")->body == "32");
+    // included_files records the canonical id (host-supplied).
+    auto& files = pp.included_files();
+    REQUIRE(files.size() == 1);
+    CHECK(files[0] == "mem:macros.svh");
+}
+
+TEST_CASE("Preprocessor::process: multi-include with redefine reprocesses each time") {
+    // The motivating use case: same logical header included N times
+    // with different macro state before each. The header is a
+    // template that emits something depending on the current
+    // WIDTH macro. We verify the macro table reflects each include
+    // pass independently.
+    auto g = load_grammar();
+    PpOptions opts;
+    int call_count = 0;
+    opts.include_source = [&](const std::string& requested,
+                               const std::string& /*including*/) -> std::optional<PpIncludeSource> {
+        if (requested == "template.svh") {
+            ++call_count;
+            // Each include of template.svh defines RESULT with the
+            // current WIDTH; subsequent includes overwrite RESULT.
+            return PpIncludeSource{
+                "mem:template.svh",
+                "`define RESULT `WIDTH\n"
+            };
+        }
+        return std::nullopt;
+    };
+    Preprocessor pp(g, opts);
+    pp.process(
+        "`define WIDTH 8\n"
+        "`include \"template.svh\"\n"
+        "`define WIDTH 16\n"
+        "`include \"template.svh\"\n"
+        "`define WIDTH 32\n"
+        "`include \"template.svh\"\n"
+    );
+    // Callback fired three times — once per include directive.
+    CHECK(call_count == 3);
+    // included_files lists template.svh once (deduped) — the
+    // multi-include is for processing, not for the manifest.
+    auto& files = pp.included_files();
+    REQUIRE(files.size() == 1);
+    CHECK(files[0] == "mem:template.svh");
+    // WIDTH ended as 32 (last define on the outer stream); RESULT
+    // got redefined three times and its current body reflects the
+    // last include pass (`WIDTH at body parse time).
+    REQUIRE(pp.is_defined("WIDTH"));
+    CHECK(pp.get_macro("WIDTH")->body == "32");
+    REQUIRE(pp.is_defined("RESULT"));
+}
+
+TEST_CASE("Preprocessor::process: include callback nullopt → built-in fallback warning") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.include_source = [](const std::string&, const std::string&)
+        -> std::optional<PpIncludeSource> { return std::nullopt; };
+    Preprocessor pp(g, opts);
+    pp.process("`include \"does_not_exist.svh\"\n");
+    // Built-in fallback runs, finds nothing, warns. The macro
+    // table is unchanged.
+    CHECK_FALSE(pp.is_defined("WIDTH"));
+    auto& warnings = pp.warnings();
+    REQUIRE_FALSE(warnings.empty());
+    CHECK(warnings.back().message.find("file not found") != std::string::npos);
+}

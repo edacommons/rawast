@@ -968,56 +968,79 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
         return;
     }
 
-    // Resolve path. Try each include_paths entry in order, then the
-    // current_file's directory (so relative `\`include "foo.svh"`
-    // works when foo.svh is alongside the including file), then the
-    // path as given (covers absolute paths and CWD-relative).
-    namespace fs = std::filesystem;
-    fs::path resolved;
-    bool found = false;
-    fs::path requested = path;
-    auto try_candidate = [&](const fs::path& base) {
-        fs::path candidate = base.empty() ? requested : (base / requested);
-        std::error_code ec;
-        if (fs::exists(candidate, ec) && !ec) {
-            resolved = candidate;
-            found = true;
-            return true;
+    std::string canonical;
+    std::string include_text;
+
+    // Host-supplied include source takes priority. If the callback
+    // is set and returns a value, we use its (canonical_id, content)
+    // directly — no filesystem walk needed. nullopt means "I can't
+    // resolve this, try the built-in fallback."
+    if (opts_.include_source) {
+        auto host = opts_.include_source(path, state_.current_file);
+        if (host) {
+            canonical    = std::move(host->canonical_id);
+            include_text = std::move(host->content);
         }
-        return false;
-    };
-    for (const auto& dir : opts_.include_paths) {
-        if (try_candidate(dir)) break;
-    }
-    if (!found && !state_.current_file.empty()) {
-        fs::path parent = fs::path(state_.current_file).parent_path();
-        try_candidate(parent);
-    }
-    if (!found) try_candidate(fs::path{});
-    if (!found) {
-        state_.warnings.push_back(
-            {"`include: file not found: '" + path + "'",
-             state_.current_file, state_.current_line});
-        return;
     }
 
-    std::string canonical = resolved.lexically_normal().string();
+    // Built-in fallback: walk `include_paths`, then the including
+    // file's directory, then the path as given. Engaged when no
+    // callback was set, or when the callback returned nullopt.
+    if (canonical.empty() && include_text.empty()) {
+        namespace fs = std::filesystem;
+        fs::path resolved;
+        bool found = false;
+        fs::path requested = path;
+        auto try_candidate = [&](const fs::path& base) {
+            fs::path candidate = base.empty() ? requested : (base / requested);
+            std::error_code ec;
+            if (fs::exists(candidate, ec) && !ec) {
+                resolved = candidate;
+                found = true;
+                return true;
+            }
+            return false;
+        };
+        for (const auto& dir : opts_.include_paths) {
+            if (try_candidate(dir)) break;
+        }
+        if (!found && !state_.current_file.empty()) {
+            fs::path parent = fs::path(state_.current_file).parent_path();
+            try_candidate(parent);
+        }
+        if (!found) try_candidate(fs::path{});
+        if (!found) {
+            state_.warnings.push_back(
+                {"`include: file not found: '" + path + "'",
+                 state_.current_file, state_.current_line});
+            return;
+        }
+
+        canonical = resolved.lexically_normal().string();
+
+        std::ifstream f(resolved);
+        if (!f.is_open()) {
+            state_.warnings.push_back(
+                {"`include: failed to open '" + canonical + "'",
+                 state_.current_file, state_.current_line});
+            return;
+        }
+        std::ostringstream buf;
+        buf << f.rdbuf();
+        include_text = buf.str();
+    }
+
+    // `included_files` is a deduped manifest used by build systems
+    // for incremental-rebuild dependency tracking. Same logical
+    // source included multiple times (e.g. with redefines between
+    // them) lists once. This does NOT gate processing — every
+    // `\`include` is parsed + walked freshly with the current macro
+    // table; the dedup is purely about the query result.
     bool already_seen = false;
     for (const auto& p : state_.included_files) {
         if (p == canonical) { already_seen = true; break; }
     }
     if (!already_seen) state_.included_files.push_back(canonical);
-
-    std::ifstream f(resolved);
-    if (!f.is_open()) {
-        state_.warnings.push_back(
-            {"`include: failed to open '" + canonical + "'",
-             state_.current_file, state_.current_line});
-        return;
-    }
-    std::ostringstream buf;
-    buf << f.rdbuf();
-    std::string include_text = buf.str();
 
     // Parse the included file with the same preprocessor grammar.
     // (No depth-of-includes check yet — Phase 3 polish.)

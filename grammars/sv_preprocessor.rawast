@@ -40,7 +40,25 @@ PP_FILE: sequence array {
 
 PP_ITEM: choice {
   <DEFINE>,
+  <INCLUDE>,
   <TEXT_LINE>
+}
+
+// `\`include "path/to/file.svh"` — the host's `include_source`
+// callback (or the built-in `include_paths` walk if unset) resolves
+// the requested path to source content; handle_include parses and
+// walks the included AST recursively with the current macro table.
+//
+// Per SV LRM the path can also be `<path>` (angle-bracketed system
+// header form); for v1 we accept only the `"..."` form. The
+// `<...>` form is a follow-up — its capture rule needs std.string
+// equivalent for `<...>` delimited tokens.
+INCLUDE: sequence dict {
+  "`include":type="include",
+  linespace,
+  std.string:path=@,
+  linespace,
+  "\n"
 }
 
 // A single line of arbitrary text. `*` (Raw) captures bytes until
