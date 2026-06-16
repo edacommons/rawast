@@ -62,12 +62,12 @@ IFDEF: sequence dict {
   "`ifdef":type="ifdef",
   linespace,
   identifier:cond=@,
-  linespace,
+  ?linespace,
   "\n",
   <BODY>:body=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif",
-  linespace,
+  ?linespace,
   "\n"
 }
 
@@ -75,12 +75,12 @@ IFNDEF: sequence dict {
   "`ifndef":type="ifndef",
   linespace,
   identifier:cond=@,
-  linespace,
+  ?linespace,
   "\n",
   <BODY>:body=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif",
-  linespace,
+  ?linespace,
   "\n"
 }
 
@@ -90,7 +90,7 @@ BODY: sequence array {
 
 ELSE_BRANCH: sequence dict {
   "`else",
-  linespace,
+  ?linespace,
   "\n",
   <BODY>:body=@
 }
@@ -112,7 +112,7 @@ IF: sequence dict {
   repeat <ELSIF>:branches[]=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif":type="if",
-  linespace,
+  ?linespace,
   "\n"
 }
 
@@ -139,7 +139,7 @@ UNDEF: sequence dict {
   "`undef":type="undef",
   linespace,
   identifier:name=@,
-  linespace,
+  ?linespace,
   "\n"
 }
 
@@ -156,7 +156,7 @@ INCLUDE: sequence dict {
   "`include":type="include",
   linespace,
   std.string:path=@,
-  linespace,
+  ?linespace,
   "\n"
 }
 
@@ -190,7 +190,7 @@ DEFINE: sequence dict {
   linespace,
   identifier:name=@,
   ?<PARAMS>:params=@,
-  linespace,
+  ?linespace,
   scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
   "\n"
 }

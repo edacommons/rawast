@@ -95,13 +95,15 @@ DEFINE: sequence dict {
   "`define":type="define",
   identifier:name=@,
   ?<PARAMS>:params=@,
-  linespace,
+  ?linespace,
   scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
   "\n"
 }
 ```
 
 The scope's INNER set is the dispatch table. First-byte sets must be disjoint among INNERs (or PEG-ordered with predictive backoff).
+
+Note the `?linespace` — `linespace` itself is strict (requires 1+ whitespace). Bare `linespace` means "whitespace required here"; for an *optional* whitespace slot, prefix it with `?`. The strict default lets you put `linespace` inside a `choice` or `repeat` without a 0-consume infinite-loop hazard, and follows the "terminal succeeds iff it consumed something" invariant.
 
 ### 4. `#opchain` on precedence ladders — clean `{op, args}` from always-wrap
 

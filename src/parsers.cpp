@@ -331,13 +331,26 @@ WalkResult WhitespaceParser::walk(StreamReader& sr) {
 LinespaceParser::LinespaceParser() : Parser("linespace") {}
 
 WalkResult LinespaceParser::walk(StreamReader& sr) {
-    // 0+ horizontal whitespace; always succeeds. No mark needed —
-    // we only ever advance the cursor over space/tab; the rule
-    // can't fail or partially consume.
+    // 1+ horizontal whitespace; fails when nothing was consumed.
+    // The "terminal succeeds iff it consumed something" invariant
+    // lets the engine use linespace inside `choice`/`repeat` without
+    // a 0-consume infinite-loop hazard, and stops rule-level
+    // `ignore linespace` from leaking past a rule's first-item
+    // boundary. For an "optional whitespace here" site, write
+    // `?linespace` at the grammar level.
+    sr.mark();
+    const Position start = sr.position();
+    bool consumed = false;
     while (auto c = sr.peek()) {
         if (*c != ' ' && *c != '\t') break;
         sr.get();
+        consumed = true;
     }
+    if (!consumed) {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected whitespace"});
+    }
+    sr.accept();
     return {};
 }
 
