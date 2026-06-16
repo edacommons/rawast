@@ -26,7 +26,32 @@
 
 use: std
 
-start: <DEFINE>
+start: <PP_FILE>
+
+// Top-level: a sequence of PP_ITEMs. Each PP_ITEM is either a
+// preprocessor directive (currently just `\`define`; `\`undef`,
+// `\`ifdef`, `\`include`, etc. land as follow-ups) or a TEXT_LINE
+// (one line of non-directive text). PEG ordering tries DEFINE first
+// — its `\`define` literal Key fails fast for any non-`\`define` line
+// — then falls through to TEXT_LINE.
+PP_FILE: sequence array {
+  repeat <PP_ITEM>
+}
+
+PP_ITEM: choice {
+  <DEFINE>,
+  <TEXT_LINE>
+}
+
+// A single line of arbitrary text. `*` (Raw) captures bytes until
+// the next sibling `\n` matches. The text is stored as `{type:"text",
+// text:"…"}` so the existing Preprocessor::walk text handler picks
+// it up unchanged. Trailing newline emission across multi-line text
+// is a follow-up (see the walker's text emit logic in preprocessor.cpp).
+TEXT_LINE: sequence dict {
+  *:text=@,
+  "\n":type="text"
+}
 
 DEFINE: sequence dict {
   "`define":type="define",

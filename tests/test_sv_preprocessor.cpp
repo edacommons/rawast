@@ -26,7 +26,8 @@ Grammar load_grammar() {
     return g;
 }
 
-ValuePtr parse(Grammar& g, const std::string& src) {
+// Full PP_FILE parse result (an ArrayValue of PP_ITEMs).
+ValuePtr parse_file(Grammar& g, const std::string& src) {
     std::istringstream is{src};
     StreamReader sr{is};
     auto r = g.parse(sr);
@@ -35,7 +36,25 @@ ValuePtr parse(Grammar& g, const std::string& src) {
     return *r;
 }
 
+// Convenience: for tests that expect a single PP_ITEM, extract it
+// from the PP_FILE wrapper.
+ValuePtr parse(Grammar& g, const std::string& src) {
+    auto pp_file = parse_file(g, src);
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(pp_file);
+    REQUIRE(arr);
+    REQUIRE(arr->data().size() == 1);
+    return arr->data()[0];
+}
+
 std::string save(Grammar& g, ValuePtr v) {
+    // The grammar's top is PP_FILE (an ArrayValue). When tests pass
+    // a single PP_ITEM dict via the `parse()` shortcut, wrap it back
+    // up so save sees the PP_FILE shape it expects.
+    if (std::dynamic_pointer_cast<DictValue>(v)) {
+        auto wrapped = std::make_shared<ArrayValue>();
+        wrapped->data().push_back(std::move(v));
+        v = std::move(wrapped);
+    }
     std::ostringstream out;
     auto r = g.save(out, std::move(v));
     REQUIRE_MESSAGE(r, "save failed: " << (r ? "" : r.error().message));
@@ -351,4 +370,46 @@ TEST_CASE("Preprocessor::process: parameterised define registers params") {
     CHECK(m->params[1] == "y");
     CHECK(m->is_function_like);
     CHECK(m->body == "x + y");
+}
+
+// ─── Multi-directive input ─────────────────────────────────────────
+
+TEST_CASE("Preprocessor::process: two defines in sequence both register") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define FOO 1\n`define BAR 2\n");
+    REQUIRE(pp.is_defined("FOO"));
+    REQUIRE(pp.is_defined("BAR"));
+    CHECK(pp.get_macro("FOO")->body == "1");
+    CHECK(pp.get_macro("BAR")->body == "2");
+}
+
+TEST_CASE("Preprocessor::process: define + text + define interleaved") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define FOO 1\nhello world\n`define BAR 2\n");
+    REQUIRE(pp.is_defined("FOO"));
+    REQUIRE(pp.is_defined("BAR"));
+    // Both macros register regardless of intervening text.
+    CHECK(pp.get_macro("FOO")->body == "1");
+    CHECK(pp.get_macro("BAR")->body == "2");
+}
+
+TEST_CASE("Preprocessor::process: pure text input passes through") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process("just some text\n");
+    // No macros registered; the text segment lands as PP_ITEM[0].
+    CHECK_FALSE(pp.is_defined("just"));
+    // Walker emits the text from the source (newline lost — see grammar
+    // comment; multi-line text round-trip is a follow-up).
+    CHECK(out.find("just some text") != std::string::npos);
+}
+
+TEST_CASE("PP_FILE: parse_file returns array of PP_ITEMs") {
+    auto g = load_grammar();
+    auto pp_file = parse_file(g, "`define FOO 1\nhello\n`define BAR 2\n");
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(pp_file);
+    REQUIRE(arr);
+    CHECK(arr->data().size() == 3);
 }
