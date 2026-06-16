@@ -117,37 +117,25 @@ CHOICE_EXPR: sequence {
   "{", <ITEMS>:value=@, "}"
 }
 
-// `scope start="(" stop=")" { INNER... }` — string-aware bracket
-// scanner. Optional `start=` and `stop=` literal delimiters; INNERs
-// are atomic spans (embedded strings, comments, nested scopes can't
-// trigger a false stop). Returns body bytes between start and stop
-// (exclusive) as a StringValue by default; `scope array { ... }`
-// instead returns an ArrayValue of segments — each INNER match
-// becomes one entry (the INNER's own typed value), and raw text
-// gaps between INNERs become StringValue entries. See §4.5b of
-// docs/rawast-format.md.
+// `scope { INNER... }` — string-aware byte scanner. Scope has no
+// delimiters of its own; siblings in the surrounding sequence supply
+// the start and stop literals (same shape as `*`/Raw). INNERs are
+// atomic spans (embedded strings, comments, sub-rules can't trigger
+// a false stop). Returns body bytes between the previous sibling
+// and the next sibling Key (exclusive) as a StringValue by default;
+// `scope array { ... }` instead returns an ArrayValue of segments —
+// each INNER match becomes one entry (the INNER's own typed value),
+// and raw text gaps between INNERs become StringValue entries. See
+// §4.5b of docs/rawast-format.md.
 //
-// `start='X' stop='Y'` (single-quote form) requests word-bounded
-// matching for the literal — same semantic as the strict-Key form
-// `'X'` vs `"X"` for plain Keys.
+// Strict (word-bounded) delimiter matching comes from the sibling
+// Key's own strict flag — write `'begin'` instead of `"begin"` on
+// the surrounding sequence sibling, no scope-level attribute needed.
 SCOPE_EXPR: sequence {
   "scope":type="scope",
   ?<CONTAINER_KIND>:container=@,
-  repeat <SCOPE_ATTR>,
   "{", <ITEMS>:value=@, "}"
 }
-
-SCOPE_ATTR: choice {
-  <SCOPE_START_PLAIN>,
-  <SCOPE_START_STRICT>,
-  <SCOPE_STOP_PLAIN>,
-  <SCOPE_STOP_STRICT>
-}
-
-SCOPE_START_PLAIN:  sequence { "start", "=", string:start=@ }
-SCOPE_START_STRICT: sequence { "start", "=", single_quote_string:start=@:start_strict=true }
-SCOPE_STOP_PLAIN:   sequence { "stop",  "=", string:stop=@ }
-SCOPE_STOP_STRICT:  sequence { "stop",  "=", single_quote_string:stop=@:stop_strict=true }
 
 // `repeat` quantifier syntax:
 //   repeat <X>       → min=0 (zero-or-more, classic PEG `*`)

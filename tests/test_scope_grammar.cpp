@@ -1,9 +1,8 @@
-// `scope { OPEN, INNER..., CLOSE }` — string-aware bracket scanner.
-//
-// Walks the input from OPEN to the matching CLOSE, treating each INNER
-// as an atomic span (so embedded strings, comments, nested scopes
-// can't trigger a false CLOSE). Captured body bytes (between OPEN end
-// and CLOSE start, exclusive) emit as a StringValue.
+// `scope { INNERS }` — string-aware byte scanner. Scope has no
+// delimiters of its own; the surrounding sequence's siblings carry
+// the start and stop literals. Captured body bytes between the
+// previous sibling and the next sibling Key (exclusive) emit as a
+// StringValue (default) or ArrayValue of segments (`scope array`).
 
 #include <doctest/doctest.h>
 #include <rawast/grammar.hpp>
@@ -43,13 +42,13 @@ std::string save_value(Grammar& g, ValuePtr v) {
 
 } // namespace
 
-// ─── Naive scope (no INNERs): just OPEN + raw bytes + CLOSE ──────────────
+// ─── Bare scope (no INNERs): scope captures bytes between siblings ─────
 
 TEST_CASE("scope: bare paren scope captures body bytes") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope start="(" stop=")" { }
+        PAREN: sequence { "(", scope { }, ")" }
     )GRAM");
     auto v = parse_input(g, "(hello world)");
     auto sv = as_string(v);
@@ -62,7 +61,7 @@ TEST_CASE("scope: empty body round-trips") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope start="(" stop=")" { }
+        PAREN: sequence { "(", scope { }, ")" }
     )GRAM");
     auto v = parse_input(g, "()");
     auto sv = as_string(v);
@@ -77,7 +76,7 @@ TEST_CASE("scope: embedded string with ')' inside is captured atomically") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope start="(" stop=")" { std.string }
+        PAREN: sequence { "(", scope { std.string }, ")" }
     )GRAM");
     // Input: ( "wait)here" trailing )
     // Without the std.string INNER hint, the naive scanner would
@@ -89,13 +88,13 @@ TEST_CASE("scope: embedded string with ')' inside is captured atomically") {
     CHECK(save_value(g, v) == "(\"wait)here\" trailing)");
 }
 
-// ─── Recursive scope nesting via self-Ref INNER ─────────────────────────
+// ─── Recursive nesting via self-Ref INNER ──────────────────────────────
 
 TEST_CASE("scope: nested () via self-Ref INNER preserves both layers") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope start="(" stop=")" { <PAREN>, std.string }
+        PAREN: sequence { "(", scope { <PAREN>, std.string }, ")" }
     )GRAM");
     auto v = parse_input(g, "(outer (inner) tail)");
     auto sv = as_string(v);
@@ -108,7 +107,7 @@ TEST_CASE("scope: nested scope containing a string with ')'") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope start="(" stop=")" { <PAREN>, std.string }
+        PAREN: sequence { "(", scope { <PAREN>, std.string }, ")" }
     )GRAM");
     auto v = parse_input(g, "(outer (\"in)ner\") done)");
     auto sv = as_string(v);
@@ -123,7 +122,7 @@ TEST_CASE("scope: square brackets work the same as parens") {
     auto g = load(R"GRAM(
         use: std
         start: <SQ>
-        SQ: scope start="[" stop="]" { std.string }
+        SQ: sequence { "[", scope { std.string }, "]" }
     )GRAM");
     auto v = parse_input(g, "[a \"with]bracket\" b]");
     auto sv = as_string(v);
@@ -138,7 +137,7 @@ TEST_CASE("scope array: empty body emits empty array") {
     auto g = load(R"GRAM(
         use: std
         start: <DEMO>
-        DEMO: scope array start="(" stop=")" { std.int }
+        DEMO: sequence { "(", scope array { std.int }, ")" }
     )GRAM");
     auto v = parse_input(g, "()");
     auto arr = as_array(v);
@@ -151,7 +150,7 @@ TEST_CASE("scope array: pure text body becomes one StringValue segment") {
     auto g = load(R"GRAM(
         use: std
         start: <DEMO>
-        DEMO: scope array start="(" stop=")" { std.int }
+        DEMO: sequence { "(", scope array { std.int }, ")" }
     )GRAM");
     auto v = parse_input(g, "(hello world)");
     auto arr = as_array(v);
@@ -167,7 +166,7 @@ TEST_CASE("scope array: text + INNER + text → mixed segments in order") {
     auto g = load(R"GRAM(
         use: std
         start: <DEMO>
-        DEMO: scope array start="(" stop=")" { std.int }
+        DEMO: sequence { "(", scope array { std.int }, ")" }
     )GRAM");
     auto v = parse_input(g, "(a 42 b)");
     auto arr = as_array(v);
@@ -184,7 +183,7 @@ TEST_CASE("scope array: multiple INNER matches preserve order") {
     auto g = load(R"GRAM(
         use: std
         start: <DEMO>
-        DEMO: scope array start="(" stop=")" { std.int }
+        DEMO: sequence { "(", scope array { std.int }, ")" }
     )GRAM");
     auto v = parse_input(g, "(1 2 3)");
     auto arr = as_array(v);
@@ -199,13 +198,13 @@ TEST_CASE("scope array: multiple INNER matches preserve order") {
     CHECK(save_value(g, v) == "(1 2 3)");
 }
 
-// ─── Ref-to-rule INNERs (Phase 2) ──────────────────────────────────────
+// ─── Ref-to-rule INNERs ─────────────────────────────────────────────────
 
 TEST_CASE("scope array: Ref-to-rule INNER produces typed dict segment") {
     auto g = load(R"GRAM(
         use: std
         start: <DEMO>
-        DEMO: scope array start="(" stop=")" { <REF> }
+        DEMO: sequence { "(", scope array { <REF> }, ")" }
         REF: sequence dict { identifier:type="ref":value=@ }
     )GRAM");
     auto v = parse_input(g, "(FOO BAR)");

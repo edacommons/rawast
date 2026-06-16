@@ -1457,36 +1457,28 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     }
 
     case NodeKind::Scope: {
-        // Scope save: emit start literal + captured body + stop literal.
-        // Two body modes:
+        // Scope save: emit the captured body bytes between start and
+        // stop. Scope has no delimiters of its own — the surrounding
+        // sequence's siblings carry start and stop literals and emit
+        // them in their own do_consume cycles. Two body modes:
         //   - default (StringValue payload): body was captured verbatim
-        //     on the parse side; emit it as-is between start and stop.
-        //     With #subparse, the stored value is the structured
-        //     sub-tree — re-serialize through the subparse rule to
-        //     recover the body text first.
+        //     on the parse side; emit it as-is. With #subparse, the
+        //     stored value is the structured sub-tree — re-serialize
+        //     through the subparse rule to recover the body text first.
         //   - array container (ArrayValue payload): body is a list of
         //     segments; each StringValue segment emits verbatim, each
         //     typed segment dispatches to the first INNER whose
         //     can_consume_peek matches and save-emits through it.
-        const std::string& open_str  = n.scope_start;
-        const std::string& close_str = n.scope_stop;
-        if (close_str.empty()) {
-            return tl::unexpected(SaveError{
-                "scope save: empty stop= requires sibling-stop support "
-                "(not yet implemented)"});
-        }
-
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
         ValuePtr v = r->value ? r->value : null_value();
 
-        std::ostringstream body_buf;
         if (n.subparse_start.valid()) {
             // Subparse round-trip — independent of container mode.
             SaveState sub_s;
             sub_s.push_q({v, false, ""});
-            auto sub_r = do_consume(g, body_buf, n.subparse_start,
+            auto sub_r = do_consume(g, out, n.subparse_start,
                                     sub_s, 0, pretty);
             if (!sub_r) return tl::unexpected(sub_r.error());
         } else if (n.container == Container::Array) {
@@ -1500,7 +1492,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 if (!seg) continue;
                 // Raw text segments emit verbatim.
                 if (auto sv = as_string(seg)) {
-                    body_buf << sv->data();
+                    out << sv->data();
                     continue;
                 }
                 // Typed segment: dispatch to the first matching INNER.
@@ -1509,7 +1501,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                     if (!can_consume_peek(g, inner_id, seg, "", s)) continue;
                     SaveState seg_s;
                     seg_s.push_q({seg, false, ""});
-                    auto sr = do_consume(g, body_buf, inner_id,
+                    auto sr = do_consume(g, out, inner_id,
                                           seg_s, depth, pretty);
                     if (sr) { dispatched = true; break; }
                 }
@@ -1525,10 +1517,9 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 return tl::unexpected(SaveError{
                     "scope save expects a StringValue payload"});
             }
-            body_buf << sv->data();
+            out << sv->data();
         }
 
-        out << open_str << body_buf.str() << close_str;
         return {};
     }
 

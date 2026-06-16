@@ -256,16 +256,10 @@ FirstByteResult compute_node_first_bytes(
         result = any_byte_result();
         break;
     case NodeKind::Scope: {
-        // Scope's first byte is the first byte of its `scope_start`
-        // literal (when present). Empty start means any byte may
-        // open the scope. Never nullable: at minimum one byte is
-        // consumed before stop can match.
-        if (!n.scope_start.empty()) {
-            result.bytes.set(static_cast<unsigned char>(n.scope_start.front()));
-            result.known = true;
-        } else {
-            result = any_byte_result();
-        }
+        // Scope has no opening delimiter of its own (the surrounding
+        // sequence's previous sibling supplies any start literal);
+        // first byte is unconstrained, same as Raw.
+        result = any_byte_result();
         result.nullable = false;
         break;
     }
@@ -874,17 +868,20 @@ inline bool scope_is_word_char(char c) noexcept {
            (u >= 'a' && u <= 'z') || u == '_';
 }
 
-// Build a ScanConfig from a Scope node. Phase 1 — pure data-copy; the
-// configuration is fully described by the Node's existing fields.
+// Build a ScanConfig from a Scope node. Scope is structurally Raw +
+// INNERs + optional array container: no opening delimiter (siblings
+// in the surrounding sequence carry start/stop literals), stop
+// resolved at load time by `resolve_raw_stops` and stashed on
+// `n.value`, sibling consumes the stop (consume_stop=false).
 ScanConfig scan_config_from_scope(const Node& n) {
     ScanConfig cfg;
-    cfg.start          = n.scope_start;
-    cfg.stop           = n.scope_stop;
-    cfg.start_strict   = n.scope_start_strict;
-    cfg.stop_strict    = n.scope_stop_strict;
+    if (auto sv = std::dynamic_pointer_cast<StringValue>(n.value)) {
+        cfg.stop = sv->data();
+    }
     cfg.inners         = n.children;
     cfg.container      = n.container;
     cfg.subparse_start = n.subparse_start;
+    cfg.consume_stop   = false;
     return cfg;
 }
 
@@ -1030,27 +1027,6 @@ tl::expected<ValuePtr, ParseError> walk_scan(
                 }
                 // walk() rewound on failure (its own mark/reject);
                 // try next INNER.
-            } else if (inner.kind == NodeKind::Scope) {
-                // Recursive nested scope.
-                ScanConfig inner_cfg = scan_config_from_scope(inner);
-                auto sub = walk_scan(g, sr, pool, inner_cfg);
-                if (sub) {
-                    if (array_mode) {
-                        flush_text_run();
-                        segments->data().push_back(*sub);
-                    } else {
-                        // Render the inner scope's body back as text:
-                        // start + body + stop bytes lifted from the
-                        // inner scope's own delimiter fields.
-                        body.append(inner.scope_start);
-                        if (auto inner_sv = std::dynamic_pointer_cast<StringValue>(*sub)) {
-                            body.append(inner_sv->data());
-                        }
-                        body.append(inner.scope_stop);
-                    }
-                    inner_ok = true;
-                    break;
-                }
             } else {
                 // Any other rule shape (Sequence / Choice / Repeat / Ref
                 // chain that resolves to one) — re-enter the parse driver

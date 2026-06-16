@@ -158,22 +158,15 @@ public:
     // or `'token'` (single-quote literal) in `.rawast` DSL form.
     bool strict        = false;
 
-    // Scope-only: optional opening / closing literal delimiters and
-    // their strict-word-bounded flags. Empty `scope_start` means "no
-    // opening delimiter — scope begins at the cursor"; empty
-    // `scope_stop` means "no closing delimiter — scope ends when the
-    // next sibling in the surrounding sequence can match at the
-    // cursor" (Raw-style termination; reserved for a follow-up).
-    // The strict flags mirror `Node.strict` for Keys — when true,
-    // and the last byte of the delimiter is itself a word character,
-    // the byte immediately after the match must be a non-word
-    // character or EOF. Set by the .rawast surface forms:
-    //   scope start="X" stop="Y" { ... }   // non-strict
-    //   scope start='X' stop='Y' { ... }   // strict (word-bounded)
-    std::string scope_start;
-    std::string scope_stop;
-    bool        scope_start_strict = false;
-    bool        scope_stop_strict  = false;
+    // Scope's stop literal is sibling-driven: `resolve_raw_stops`
+    // (which also handles Scope nodes) copies the next sibling Key's
+    // literal onto Node.value at load time — the same field Raw uses
+    // for its sibling-stop. Scope has no opening delimiter of its
+    // own; the surrounding sequence's siblings carry the start and
+    // stop literals. Strict (word-bounded) matching is selected by
+    // the sibling Key's `strict` flag, not by any attribute on the
+    // scope itself. Net: scope is structurally "Raw with INNERs and
+    // optional array container."
 
     // Carried for Key, Parse, Value kinds.
     //   Key   - StringValue holding the literal token to match.

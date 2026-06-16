@@ -920,14 +920,13 @@ populate(Grammar& g, NodeId target, const Value& body) {
     }
 
     if (type == "scope") {
-        // `scope [array] start="X" stop="Y" { INNER... }`. Start/stop
-        // are optional literal delimiters carried on the Node itself
-        // (n.scope_start / n.scope_stop, with *_strict flags for
-        // word-bounded matching). Children are exactly the INNERs —
-        // no positional first/last interpretation. `container:"array"`
-        // selects segment-array output (each INNER match → its typed
-        // value, text gaps → StringValue entries); the default (no
-        // container) emits a single concatenated StringValue body.
+        // `scope [array] { INNER... }`. Children are exactly the INNERs.
+        // `container:"array"` selects segment-array output (each INNER
+        // match → its typed value, text gaps → StringValue entries);
+        // the default (no container) emits a single concatenated
+        // StringValue body. The stop literal is resolved later by
+        // `resolve_raw_stops` from the next sibling in the surrounding
+        // sequence — scope has no start/stop attributes of its own.
         n.kind = NodeKind::Scope;
         if (auto c = dict_string_opt(*dv, "container")) {
             if      (*c == "array") n.container = Container::Array;
@@ -935,10 +934,6 @@ populate(Grammar& g, NodeId target, const Value& body) {
             else return tl::unexpected(
                 "scope: container must be 'array' (got '" + *c + "')");
         }
-        if (auto s = dict_string_opt(*dv, "start")) n.scope_start = *s;
-        if (auto s = dict_string_opt(*dv, "stop"))  n.scope_stop  = *s;
-        n.scope_start_strict = dict_bool(*dv, "start_strict");
-        n.scope_stop_strict  = dict_bool(*dv, "stop_strict");
         auto items_val = dict_value(*dv, "value");
         if (!items_val) items_val = dict_value(*dv, "items");
         return append_items_array(g, target, items_val, type);
@@ -1168,11 +1163,20 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
     auto sub_r = g.resolve_subparse_refs();
     if (!sub_r) return tl::unexpected(sub_r.error());
 
-    // Resolve stop literals for every `Raw` node by walking every
-    // Sequence's children and copying the next sibling's Key literal
-    // onto the Raw node's `value`. Errors out if the next sibling
-    // isn't a Key (or doesn't exist) — the engine has no way to know
-    // when to stop scanning otherwise.
+    // Resolve stop literals for every Raw and Scope node by walking
+    // every Sequence's children and copying the next sibling's Key
+    // literal onto the byte-scan node's `value`. Errors out if the
+    // next sibling isn't a Key (or doesn't exist) — the byte-scan
+    // engine has no way to know when to stop scanning otherwise.
+    //
+    // Scope's stop is sibling-driven (same as Raw): the surrounding
+    // sequence describes the close delimiter as a Key sibling
+    // immediately after the scope item. This unifies scope and Raw
+    // structurally — scope is just Raw with INNERs and an optional
+    // array container.
+    auto kind_label = [](NodeKind k) {
+        return k == NodeKind::Raw ? "raw consume (`*`)" : "scope";
+    };
     for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
         NodeId nid{idx};
         Node& parent = g.node(nid);
@@ -1180,23 +1184,25 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
         const auto& kids = parent.children;
         for (std::size_t k = 0; k < kids.size(); ++k) {
             Node& child = g.node(g.resolve_ref(kids[k]));
-            if (child.kind != NodeKind::Raw) continue;
+            if (child.kind != NodeKind::Raw
+                && child.kind != NodeKind::Scope) continue;
+            const char* label = kind_label(child.kind);
             if (k + 1 >= kids.size()) {
                 return tl::unexpected(
-                    "raw consume (`*`) must be followed by a literal "
+                    std::string(label) + " must be followed by a literal "
                     "key in the same sequence; nothing follows here");
             }
             const Node& next = g.node(g.resolve_ref(kids[k + 1]));
             if (next.kind != NodeKind::Key) {
                 return tl::unexpected(
-                    "raw consume (`*`) must be followed by a literal "
+                    std::string(label) + " must be followed by a literal "
                     "key in the same sequence; next sibling is not a "
                     "Key node");
             }
             auto stop_sv = std::dynamic_pointer_cast<StringValue>(next.value);
             if (!stop_sv || stop_sv->data().empty()) {
                 return tl::unexpected(
-                    "raw consume (`*`) next-sibling Key has no literal "
+                    std::string(label) + " next-sibling Key has no literal "
                     "or empty literal");
             }
             child.value = stop_sv;
