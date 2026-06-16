@@ -313,3 +313,42 @@ TEST_CASE("sv_pp define: body MACRO_USE multi arg round-trips") {
     auto ast = parse(g, "`define A `OTHER(x,y,z)\n");
     CHECK(save(g, ast) == "`define A `OTHER(x,y,z)\n");
 }
+
+// ─── Preprocessor::process() integration ───────────────────────────────
+// Wire sv_preprocessor.rawast into the Preprocessor and verify the
+// AST shape (segmented body, params field) flows through handle_define
+// correctly: the macro lands in the table, and process() emits empty
+// output for a pure-define input.
+
+#include <rawast/preprocessor.hpp>
+
+TEST_CASE("Preprocessor::process: `\\`define FOO bar` registers macro") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process("`define FOO bar\n");
+    // define emits nothing; the directive is consumed.
+    CHECK(out == "");
+    REQUIRE(pp.is_defined("FOO"));
+    auto m = pp.get_macro("FOO");
+    REQUIRE(m);
+    CHECK(m->name == "FOO");
+    CHECK(m->params.empty());
+    CHECK_FALSE(m->is_function_like);
+    // Body rendered back to text.
+    CHECK(m->body == "bar");
+}
+
+TEST_CASE("Preprocessor::process: parameterised define registers params") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process("`define ADD(x,y) x + y\n");
+    CHECK(out == "");
+    REQUIRE(pp.is_defined("ADD"));
+    auto m = pp.get_macro("ADD");
+    REQUIRE(m);
+    REQUIRE(m->params.size() == 2);
+    CHECK(m->params[0] == "x");
+    CHECK(m->params[1] == "y");
+    CHECK(m->is_function_like);
+    CHECK(m->body == "x + y");
+}

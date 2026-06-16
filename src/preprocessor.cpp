@@ -631,10 +631,105 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
     return out;
 }
 
+// Render a segmented macro body (ArrayValue produced by
+// sv_preprocessor.rawast's scope-array INNERs) back to text.
+// Used by handle_define to convert the structured body shape into
+// the legacy string form macros expansion machinery already
+// consumes. Lossy in one direction (segment-type info is dropped on
+// store) but correct: the re-rendered text is what the original
+// `\`define` line said. A future expansion path that walks segments
+// directly — instead of re-tokenizing the stored string — would
+// preserve the structural advantage; for now this keeps the new
+// grammar wireable into the existing walker.
+namespace {
+
+std::string render_segment(const ValuePtr& seg);
+
+std::string render_macro_args(const ArrayValue& args) {
+    std::string out = "(";
+    for (std::size_t i = 0; i < args.data().size(); ++i) {
+        if (i > 0) out += ',';
+        if (auto s = as_string(args.data()[i])) out += s->data();
+    }
+    out += ')';
+    return out;
+}
+
+std::string render_segment(const ValuePtr& seg) {
+    if (!seg) return {};
+    if (auto sv = as_string(seg)) return sv->data();
+    auto d = as_dict(seg);
+    if (!d) return {};
+    auto it = d->data().find("type");
+    if (it == d->data().end()) return {};
+    auto type_sv = as_string(it->second);
+    if (!type_sv) return {};
+    const std::string& type = type_sv->data();
+    if (type == "ref") {
+        if (auto v = d->data().find("value"); v != d->data().end()) {
+            if (auto s = as_string(v->second)) return s->data();
+        }
+    } else if (type == "string") {
+        std::string out = "\"";
+        if (auto v = d->data().find("value"); v != d->data().end()) {
+            if (auto s = as_string(v->second)) out += s->data();
+        }
+        out += '"';
+        return out;
+    } else if (type == "macro_use") {
+        std::string out = "`";
+        if (auto n = d->data().find("name"); n != d->data().end()) {
+            if (auto s = as_string(n->second)) out += s->data();
+        }
+        if (auto a = d->data().find("args"); a != d->data().end()) {
+            if (auto arr = as_array(a->second)) out += render_macro_args(*arr);
+        }
+        return out;
+    }
+    return {};
+}
+
+std::string render_segments(const ArrayValue& body) {
+    std::string out;
+    for (const auto& seg : body.data()) out += render_segment(seg);
+    return out;
+}
+
+} // namespace
+
 void Preprocessor::handle_define(const DictValue& d) {
     MacroDef m;
     m.name = dict_string_or_empty(d, "name");
     if (m.name.empty()) return;
+
+    // New grammar (sv_preprocessor.rawast): `body` is an ArrayValue
+    // of segments and `params` is a separate field. Render segments
+    // back to text and pull params from the dict directly. The
+    // function-like distinction comes from the presence of `params`
+    // (the SV-LRM-correct adjacency check happened at parse time).
+    auto body_it = d.data().find("body");
+    if (body_it != d.data().end()) {
+        if (auto body_arr = as_array(body_it->second)) {
+            if (auto params_it = d.data().find("params");
+                params_it != d.data().end()) {
+                if (auto pa = as_array(params_it->second)) {
+                    for (const auto& p : pa->data()) {
+                        if (auto s = as_string(p)) {
+                            m.params.push_back(s->data());
+                        }
+                    }
+                    m.is_function_like = true;
+                }
+            }
+            m.body = render_segments(*body_arr);
+            state_.macros[m.name] = std::move(m);
+            return;
+        }
+    }
+
+    // Legacy grammars (mini_preprocessor, etc.): `body` is a string;
+    // params come from a `(...)` prefix on the body itself. Existing
+    // detection logic follows.
     auto raw_body = dict_string_or_empty(d, "body");
 
     // sv_line_text preserves `\<newline>` continuations literally so
