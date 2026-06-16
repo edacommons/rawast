@@ -121,13 +121,18 @@ CHOICE_EXPR: sequence {
 // scanner. Optional `start=` and `stop=` literal delimiters; INNERs
 // are atomic spans (embedded strings, comments, nested scopes can't
 // trigger a false stop). Returns body bytes between start and stop
-// (exclusive) as a StringValue. See §4.5b of docs/rawast-format.md.
+// (exclusive) as a StringValue by default; `scope array { ... }`
+// instead returns an ArrayValue of segments — each INNER match
+// becomes one entry (the INNER's own typed value), and raw text
+// gaps between INNERs become StringValue entries. See §4.5b of
+// docs/rawast-format.md.
 //
 // `start='X' stop='Y'` (single-quote form) requests word-bounded
 // matching for the literal — same semantic as the strict-Key form
 // `'X'` vs `"X"` for plain Keys.
 SCOPE_EXPR: sequence {
   "scope":type="scope",
+  ?<CONTAINER_KIND>:container=@,
   repeat <SCOPE_ATTR>,
   "{", <ITEMS>:value=@, "}"
 }

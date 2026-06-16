@@ -920,12 +920,21 @@ populate(Grammar& g, NodeId target, const Value& body) {
     }
 
     if (type == "scope") {
-        // `scope start="X" stop="Y" { INNER... }`. Start/stop are
-        // optional literal delimiters carried on the Node itself
+        // `scope [array] start="X" stop="Y" { INNER... }`. Start/stop
+        // are optional literal delimiters carried on the Node itself
         // (n.scope_start / n.scope_stop, with *_strict flags for
         // word-bounded matching). Children are exactly the INNERs —
-        // no positional first/last interpretation.
+        // no positional first/last interpretation. `container:"array"`
+        // selects segment-array output (each INNER match → its typed
+        // value, text gaps → StringValue entries); the default (no
+        // container) emits a single concatenated StringValue body.
         n.kind = NodeKind::Scope;
+        if (auto c = dict_string_opt(*dv, "container")) {
+            if      (*c == "array") n.container = Container::Array;
+            else if (*c == "none")  n.container = Container::None;
+            else return tl::unexpected(
+                "scope: container must be 'array' (got '" + *c + "')");
+        }
         if (auto s = dict_string_opt(*dv, "start")) n.scope_start = *s;
         if (auto s = dict_string_opt(*dv, "stop"))  n.scope_stop  = *s;
         n.scope_start_strict = dict_bool(*dv, "start_strict");

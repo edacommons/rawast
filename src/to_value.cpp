@@ -133,10 +133,12 @@ ValuePtr node_to_value(const Grammar& g, NodeId id) {
 
     case NodeKind::Scope: {
         // Mirror Sequence/Choice serialization: `{type: "scope",
-        // start: "...", stop: "...", value: [INNER...]}`. Children
-        // are exactly the INNERs; start/stop/_strict live on the
-        // node. Loader's `type == "scope"` branch reads them back.
+        // container: "array", start: "...", stop: "...",
+        // value: [INNER...]}`. Children are exactly the INNERs;
+        // start/stop/_strict and container live on the node.
+        // Loader's `type == "scope"` branch reads them back.
         put_str(*d, "type", "scope");
+        if (n.container == Container::Array) put_str(*d, "container", "array");
         if (!n.scope_start.empty()) put_str(*d, "start", n.scope_start);
         if (!n.scope_stop.empty())  put_str(*d, "stop",  n.scope_stop);
         if (n.scope_start_strict)   put_bool(*d, "start_strict", true);

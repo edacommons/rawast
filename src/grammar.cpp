@@ -880,10 +880,11 @@ inline bool scope_is_word_char(char c) noexcept {
            (u >= 'a' && u <= 'z') || u == '_';
 }
 
-tl::expected<std::string, ParseError> walk_scope_helper(
+tl::expected<ValuePtr, ParseError> walk_scope_helper(
     const Grammar& g, StreamReader& sr, NodeId scope_id) {
     const Node& sn = g.node(scope_id);
     const Position entry = sr.position();
+    const bool array_mode = (sn.container == Container::Array);
 
     const std::string& open_str  = sn.scope_start;
     const std::string& close_str = sn.scope_stop;
@@ -923,7 +924,20 @@ tl::expected<std::string, ParseError> walk_scope_helper(
     // All children are INNERs.
     const std::vector<NodeId>& inners = sn.children;
 
+    // Accumulators. String mode uses `body` (single concatenated payload).
+    // Array mode uses `segments` (ordered list of mixed StringValue text
+    // runs + INNER-typed values), with `text_run` buffering raw bytes
+    // until the next INNER match or stop flushes it.
     std::string body;
+    auto       segments = array_mode ? std::make_shared<ArrayValue>() : nullptr;
+    std::string text_run;
+
+    auto flush_text_run = [&]() {
+        if (text_run.empty()) return;
+        segments->data().push_back(make_string(std::move(text_run)));
+        text_run.clear();
+    };
+
     while (true) {
         auto pk = sr.peek();
         if (!pk) {
@@ -947,7 +961,11 @@ tl::expected<std::string, ParseError> walk_scope_helper(
             }
             if (ok) {
                 sr.accept();
-                return body;
+                if (array_mode) {
+                    flush_text_run();
+                    return ValuePtr(segments);
+                }
+                return ValuePtr(make_string(std::move(body)));
             }
             sr.reject();
         }
@@ -966,26 +984,40 @@ tl::expected<std::string, ParseError> walk_scope_helper(
                 const Position before = sr.position();
                 auto wr = p->walk(sr);
                 if (wr) {
-                    // Capture the FULL matched bytes (delimiters and
-                    // all) by reading the stream's retained window —
-                    // text_value() reports the parser's accumulator,
-                    // which strips delimiters (e.g. `"..."` outer
-                    // quotes) the body needs to round-trip verbatim.
-                    body.append(sr.bytes_from(before));
+                    if (array_mode) {
+                        flush_text_run();
+                        // INNER's typed value lands as one segment.
+                        segments->data().push_back(p->value());
+                    } else {
+                        // Capture the FULL matched bytes (delimiters and
+                        // all) by reading the stream's retained window
+                        // — text_value() reports the parser's accumulator,
+                        // which strips delimiters (e.g. `"..."` outer
+                        // quotes) the body needs to round-trip verbatim.
+                        body.append(sr.bytes_from(before));
+                    }
                     inner_ok = true;
                     break;
                 }
                 // walk() rewound on failure (its own mark/reject);
                 // try next INNER.
             } else if (inner.kind == NodeKind::Scope) {
-                // Recursive nested scope — capture start + sub_body +
-                // stop into the outer body. Delimiters come from the
-                // inner scope node's own fields.
+                // Recursive nested scope.
                 auto sub = walk_scope_helper(g, sr, g.resolve_ref(inner_id));
                 if (sub) {
-                    body.append(inner.scope_start);
-                    body.append(*sub);
-                    body.append(inner.scope_stop);
+                    if (array_mode) {
+                        flush_text_run();
+                        segments->data().push_back(*sub);
+                    } else {
+                        // Render the inner scope's body back as text:
+                        // start + body + stop bytes lifted from the
+                        // inner scope's own delimiter fields.
+                        body.append(inner.scope_start);
+                        if (auto inner_sv = std::dynamic_pointer_cast<StringValue>(*sub)) {
+                            body.append(inner_sv->data());
+                        }
+                        body.append(inner.scope_stop);
+                    }
                     inner_ok = true;
                     break;
                 }
@@ -996,9 +1028,10 @@ tl::expected<std::string, ParseError> walk_scope_helper(
         }
         if (inner_ok) continue;
 
-        // No INNER matched. Consume one raw byte into the body.
+        // No INNER matched. Consume one raw byte.
         auto cb = sr.get();
-        body.push_back(*cb);
+        if (array_mode) text_run.push_back(*cb);
+        else            body.push_back(*cb);
     }
 }
 
@@ -1735,7 +1768,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             sr.accept();
-            ValuePtr produced = make_string(std::move(*r));
+            // walk_scope_helper returns either StringValue (default
+            // string-body mode) or ArrayValue (array container mode);
+            // pass through verbatim. Subparse below is meaningful only
+            // for string-body mode.
+            ValuePtr produced = *r;
             // Subparse hook — same as Raw / Parse: if the scope node
             // carries a subparse_start, re-enter the engine on the
             // captured body with the named rule as entry.

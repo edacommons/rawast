@@ -338,6 +338,13 @@
           { "name": "type", "value": "scope" }
         ]
       },
+      {
+        "type": "CONTAINER_KIND",
+        "optional": true,
+        "bindings": [
+          { "name": "container", "value": "@" }
+        ]
+      },
       { "type": "repeat", "value": { "type": "SCOPE_ATTR" } },
       { "type": "key", "key": "{" },
       {

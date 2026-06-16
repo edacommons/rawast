@@ -131,3 +131,70 @@ TEST_CASE("scope: square brackets work the same as parens") {
     CHECK(sv->data() == "a \"with]bracket\" b");
     CHECK(save_value(g, v) == "[a \"with]bracket\" b]");
 }
+
+// ─── Array container — segment-list output ──────────────────────────────
+
+TEST_CASE("scope array: empty body emits empty array") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <DEMO>
+        DEMO: scope array start="(" stop=")" { std.int }
+    )GRAM");
+    auto v = parse_input(g, "()");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    CHECK(arr->data().empty());
+    CHECK(save_value(g, v) == "()");
+}
+
+TEST_CASE("scope array: pure text body becomes one StringValue segment") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <DEMO>
+        DEMO: scope array start="(" stop=")" { std.int }
+    )GRAM");
+    auto v = parse_input(g, "(hello world)");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    REQUIRE(arr->data().size() == 1);
+    auto sv = as_string(arr->data()[0]);
+    REQUIRE(sv);
+    CHECK(sv->data() == "hello world");
+    CHECK(save_value(g, v) == "(hello world)");
+}
+
+TEST_CASE("scope array: text + INNER + text → mixed segments in order") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <DEMO>
+        DEMO: scope array start="(" stop=")" { std.int }
+    )GRAM");
+    auto v = parse_input(g, "(a 42 b)");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    REQUIRE(arr->data().size() == 3);
+    auto s0 = as_string(arr->data()[0]); REQUIRE(s0); CHECK(s0->data() == "a ");
+    auto i1 = std::dynamic_pointer_cast<IntValue>(arr->data()[1]);
+    REQUIRE(i1); CHECK(i1->data() == 42);
+    auto s2 = as_string(arr->data()[2]); REQUIRE(s2); CHECK(s2->data() == " b");
+    CHECK(save_value(g, v) == "(a 42 b)");
+}
+
+TEST_CASE("scope array: multiple INNER matches preserve order") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <DEMO>
+        DEMO: scope array start="(" stop=")" { std.int }
+    )GRAM");
+    auto v = parse_input(g, "(1 2 3)");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    // Layout: 1, " ", 2, " ", 3 — five segments.
+    REQUIRE(arr->data().size() == 5);
+    CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[0])->data() == 1);
+    CHECK(as_string(arr->data()[1])->data() == " ");
+    CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[2])->data() == 2);
+    CHECK(as_string(arr->data()[3])->data() == " ");
+    CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[4])->data() == 3);
+    CHECK(save_value(g, v) == "(1 2 3)");
+}

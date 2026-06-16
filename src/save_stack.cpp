@@ -1269,11 +1269,14 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         return peek_value->type() == ValueType::String;
 
     case NodeKind::Scope:
-        // Scope at the top of an alt — same shape as Raw. Parse-side
-        // produced a StringValue holding the body bytes; with
-        // #subparse it's a structured sub-tree.
+        // Scope at the top of an alt. Parse-side produced either a
+        // StringValue (default body mode) or an ArrayValue (array
+        // container mode); with #subparse it's a structured sub-tree.
         if (!peek_value) return false;
         if (n.subparse_start.valid()) return true;
+        if (n.container == Container::Array) {
+            return peek_value->type() == ValueType::Array;
+        }
         return peek_value->type() == ValueType::String;
 
     case NodeKind::Ref:
@@ -1455,12 +1458,16 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
 
     case NodeKind::Scope: {
         // Scope save: emit start literal + captured body + stop literal.
-        // The body StringValue was produced verbatim on the parse side
-        // (bytes between start and stop, exclusive); INNERs were
-        // atomic spans whose text round-trips through the body. With
-        // #subparse, the stored value is the structured sub-tree —
-        // re-serialize through the subparse rule to recover the body
-        // text first.
+        // Two body modes:
+        //   - default (StringValue payload): body was captured verbatim
+        //     on the parse side; emit it as-is between start and stop.
+        //     With #subparse, the stored value is the structured
+        //     sub-tree — re-serialize through the subparse rule to
+        //     recover the body text first.
+        //   - array container (ArrayValue payload): body is a list of
+        //     segments; each StringValue segment emits verbatim, each
+        //     typed segment dispatches to the first INNER whose
+        //     can_consume_peek matches and save-emits through it.
         const std::string& open_str  = n.scope_start;
         const std::string& close_str = n.scope_stop;
         if (close_str.empty()) {
@@ -1474,25 +1481,54 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         if (!r) return tl::unexpected(r.error());
         ValuePtr v = r->value ? r->value : null_value();
 
-        std::string body_text;
+        std::ostringstream body_buf;
         if (n.subparse_start.valid()) {
-            std::ostringstream sub_out;
+            // Subparse round-trip — independent of container mode.
             SaveState sub_s;
             sub_s.push_q({v, false, ""});
-            auto sub_r = do_consume(g, sub_out, n.subparse_start,
+            auto sub_r = do_consume(g, body_buf, n.subparse_start,
                                     sub_s, 0, pretty);
             if (!sub_r) return tl::unexpected(sub_r.error());
-            body_text = sub_out.str();
+        } else if (n.container == Container::Array) {
+            // Array mode: iterate segments, dispatch each.
+            auto arr = as_array(v);
+            if (!arr) {
+                return tl::unexpected(SaveError{
+                    "scope array save expects an ArrayValue payload"});
+            }
+            for (const auto& seg : arr->data()) {
+                if (!seg) continue;
+                // Raw text segments emit verbatim.
+                if (auto sv = as_string(seg)) {
+                    body_buf << sv->data();
+                    continue;
+                }
+                // Typed segment: dispatch to the first matching INNER.
+                bool dispatched = false;
+                for (NodeId inner_id : n.children) {
+                    if (!can_consume_peek(g, inner_id, seg, "", s)) continue;
+                    SaveState seg_s;
+                    seg_s.push_q({seg, false, ""});
+                    auto sr = do_consume(g, body_buf, inner_id,
+                                          seg_s, depth, pretty);
+                    if (sr) { dispatched = true; break; }
+                }
+                if (!dispatched) {
+                    return tl::unexpected(SaveError{
+                        "scope array save: no INNER matches a segment"});
+                }
+            }
         } else {
+            // Default string mode.
             auto sv = as_string(v);
             if (!sv) {
                 return tl::unexpected(SaveError{
                     "scope save expects a StringValue payload"});
             }
-            body_text = sv->data();
+            body_buf << sv->data();
         }
 
-        out << open_str << body_text << close_str;
+        out << open_str << body_buf.str() << close_str;
         return {};
     }
 

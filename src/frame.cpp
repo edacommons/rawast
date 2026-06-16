@@ -10,7 +10,15 @@ namespace rawast {
 Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     const Node& n   = g.node(node_id);
     kind_           = n.kind;
-    container_      = n.container;
+    // Scope is a terminal in the Frame model — walk_scope_helper builds
+    // the entire produced value (StringValue for default mode, or
+    // ArrayValue of segments for `scope array`) and the Frame just
+    // passes it through. Reusing n.container=Array to *also* trigger
+    // the Frame-level array-of-children wrap would double-wrap the
+    // segment array. Force None for Scope frames.
+    container_      = (n.kind == NodeKind::Scope)
+                      ? Container::None
+                      : n.container;
     is_optional_    = n.is_optional;
     is_negative_    = n.is_negative;
     is_name_        = n.is_name;
