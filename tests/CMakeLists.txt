@@ -32,6 +32,7 @@ add_executable(rawast_tests
     test_scope_grammar.cpp
     test_opchain.cpp
     test_sv_pp_expr.cpp
+    test_sv_preprocessor.cpp
 )
 
 set_target_properties(rawast_tests PROPERTIES

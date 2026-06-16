@@ -13,6 +13,38 @@ namespace rawast {
 
 namespace {
 
+// Unescape standard C-style backslash sequences in a Key literal.
+// The meta-grammar's string parser delivers `"\n"` as the two-byte
+// sequence `\` `n`; for Key literals we want it to mean a real
+// newline byte so users can write `"\n"` as the literal-newline
+// terminator after a `*` or scope. Standard escapes: \n \t \r \\ \"
+// \' \0. Unrecognised escapes pass through (literal backslash + char)
+// so any grammar that intentionally stored e.g. `\X` as two bytes
+// keeps working.
+std::string unescape_key_literal(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        char c = in[i];
+        if (c != '\\' || i + 1 >= in.size()) {
+            out.push_back(c);
+            continue;
+        }
+        char nx = in[i + 1];
+        switch (nx) {
+        case 'n':  out.push_back('\n'); ++i; break;
+        case 't':  out.push_back('\t'); ++i; break;
+        case 'r':  out.push_back('\r'); ++i; break;
+        case '\\': out.push_back('\\'); ++i; break;
+        case '"':  out.push_back('"');  ++i; break;
+        case '\'': out.push_back('\''); ++i; break;
+        case '0':  out.push_back('\0'); ++i; break;
+        default:   out.push_back(c);    break;  // pass through verbatim
+        }
+    }
+    return out;
+}
+
 // Helpers --------------------------------------------------------------
 
 tl::expected<std::string, std::string>
@@ -978,7 +1010,8 @@ populate(Grammar& g, NodeId target, const Value& body) {
         n.kind = NodeKind::Key;
         auto key_r = dict_string(*dv, "key");
         if (!key_r) return tl::unexpected(key_r.error());
-        n.value = make_string(*key_r);
+        const std::string literal = unescape_key_literal(*key_r);
+        n.value = make_string(literal);
         // Word-boundary strict matching. The DSL surface forms `"X"` and
         // `'X'` arrive at the loader as `type: "key"` vs `type: "strict_key"`
         // respectively — both produce a Key node, with the strict_key
@@ -990,7 +1023,7 @@ populate(Grammar& g, NodeId target, const Value& body) {
         // text as the emitted value." Equivalent at runtime to
         // `{key: "X", value: "X"}`.
         if (dict_bool(*dv, "emit")) {
-            NodeId val_child = g.new_value(make_string(*key_r));
+            NodeId val_child = g.new_value(make_string(literal));
             g.node(target).children.push_back(val_child);
         } else if (auto val = dict_value(*dv, "value")) {
             NodeId val_child = g.new_value(val);

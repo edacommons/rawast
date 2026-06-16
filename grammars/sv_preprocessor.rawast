@@ -1,0 +1,40 @@
+// SystemVerilog preprocessor grammar.
+//
+// First cut: `\`define NAME BODY` with the body parsed as a segment
+// array via scope. Each body segment is one of:
+//
+//   {type:"macro_use", name:"OTHER"}      // ``OTHER` — nested macro invocation
+//   {type:"string",    value:"..."}       // "..." literal
+//   {type:"ref",       value:"FOO"}       // bare identifier (potential
+//                                          // parameter reference; resolution
+//                                          // happens at expansion time)
+//   StringValue                            // raw text run between segments
+//
+// The body terminates at the next newline. Whitespace between the
+// `\`define`, name, and body is stripped by the `ignore linespace`
+// rule attribute; whitespace INSIDE the body is preserved (scope
+// bypasses ignore-set skipping).
+
+use: std
+
+start: <DEFINE>
+
+DEFINE ignore linespace: sequence dict {
+  "`define":type="define" space,
+  identifier:name=@ space,
+  scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
+  "\n"
+}
+
+MACRO_USE: sequence dict {
+  "`":type="macro_use",
+  identifier:name=@
+}
+
+STRING: sequence dict {
+  std.string:type="string":value=@
+}
+
+PARAM_REF: sequence dict {
+  identifier:type="ref":value=@
+}
