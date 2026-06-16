@@ -469,10 +469,18 @@ private:
     // so they have direct access to state_ and opts_.
     void handle_define(const class DictValue& d);
     void handle_undef(const class DictValue& d);
+    // `consume_line=true` (default) is the line-based form used by
+    // mini_preprocessor where a `\`MACRO` call owns the whole line —
+    // src_cursor advances past the trailing newline and the
+    // expansion appends a `\n` to preserve line structure. With
+    // `consume_line=false` (text_line iterator) only the `\`NAME`
+    // (+ optional `(args)`) is consumed, so the macro use can sit
+    // mid-line surrounded by other text.
     void handle_macro_use(const class DictValue& d, std::string& out,
                           std::size_t& src_cursor,
                           const std::string& source,
-                          std::uint32_t parent_span_id);
+                          std::uint32_t parent_span_id,
+                          bool consume_line = true);
     void handle_ifdef(const class DictValue& d, std::string& out,
                       std::size_t& src_cursor,
                       const std::string& source,

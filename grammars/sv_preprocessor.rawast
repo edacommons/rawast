@@ -160,17 +160,29 @@ INCLUDE: sequence dict {
   "\n"
 }
 
-// A single line of arbitrary text. `*` (Raw) captures bytes until
-// the next sibling `\n` matches. The text is stored as `{type:"text",
-// text:"…"}` so the existing Preprocessor::walk text handler picks
-// it up unchanged. Trailing newline emission across multi-line text
-// is a follow-up (see the walker's text emit logic in preprocessor.cpp).
+// A single line of arbitrary text. The line's content is captured
+// as a `scope array { <MACRO_USE> }` so embedded `\`NAME` (and
+// `\`NAME(a, b)`) calls surface as MACRO_USE dicts inside the
+// segments array; everything else stays as bare StringValue runs
+// in between. The walker's "text_line" handler iterates segments
+// in order: bare strings emit verbatim, macro_use dicts go through
+// handle_macro_use which expands them through the macro table.
+//
+// The leading negative-lookaheads still keep TEXT_LINE from claiming
+// lines that start with the structural close tokens of `\`ifdef` /
+// `\`if` (`\`else`, `\`elsif`, `\`endif`) — those need to be left
+// for the surrounding rule to match.
+//
+// MACRO_USE's `?<MACRO_ARGS>` (identifier-only args, no space before
+// `(`) covers the parameterised invocation form. Argument expressions
+// beyond bare identifiers will land once MACRO_ARGS itself grows up
+// (see the comment on MACRO_ARGS below).
 TEXT_LINE: sequence dict {
   !"`endif",
   !"`else",
   !"`elsif",
-  *:text=@,
-  "\n":type="text"
+  scope array { <MACRO_USE> }:segments=@,
+  "\n":type="text_line"
 }
 
 DEFINE: sequence dict {

@@ -320,6 +320,50 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
             }
             return;
         }
+        if (type == "text_line") {
+            // sv_preprocessor.rawast TEXT_LINE produces
+            //   { type:"text_line", segments:[ ...mixed... ] }
+            // where each segment is either a bare StringValue (a
+            // run of literal text) or a DictValue for an embedded
+            // `\`NAME[(args)]` invocation. Iterate in order: text
+            // runs are appended verbatim, macro_use dicts go
+            // through handle_macro_use in mid-line mode (no line
+            // grab, no trailing newline). After the segments come
+            // the line's terminating `\n`, which we emit explicitly
+            // since the grammar's "\n" Key isn't preserved in the
+            // dict the way `segments` is.
+            auto segments_val = dict_value_or_null(*dict, "segments");
+            auto segments = std::dynamic_pointer_cast<ArrayValue>(segments_val);
+            if (segments) {
+                for (const auto& seg : segments->data()) {
+                    if (auto s = std::dynamic_pointer_cast<StringValue>(seg)) {
+                        if (s->data().empty()) continue;
+                        std::size_t origin =
+                            locate_item(source, src_cursor, s->data());
+                        record_span(parent_span_id, origin,
+                                    s->data().size(), out.size(),
+                                    "text");
+                        out.append(s->data());
+                        src_cursor = origin + s->data().size();
+                    } else if (auto sd = std::dynamic_pointer_cast<DictValue>(seg)) {
+                        auto seg_type = dict_string_or_empty(*sd, "type");
+                        if (seg_type == "macro_use") {
+                            handle_macro_use(*sd, out, src_cursor,
+                                             source, parent_span_id,
+                                             /*consume_line=*/false);
+                        }
+                    }
+                }
+            }
+            // Emit the trailing "\n" the grammar's sibling Key
+            // consumed. Source cursor lands at the next line.
+            std::size_t nl = source.find('\n', src_cursor);
+            if (nl != std::string::npos) {
+                out += '\n';
+                src_cursor = nl + 1;
+            }
+            return;
+        }
         if (type == "define") {
             // Position the cursor at the start of the directive
             // before consuming the line — leading whitespace
@@ -808,7 +852,8 @@ void Preprocessor::handle_undef(const DictValue& d) {
 void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
                                     std::size_t& src_cursor,
                                     const std::string& source,
-                                    std::uint32_t parent_span_id) {
+                                    std::uint32_t parent_span_id,
+                                    bool consume_line) {
     auto name = dict_string_or_empty(d, "name");
     if (name.empty()) return;
 
@@ -853,9 +898,18 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
         }
         after_name = p;
     }
-    std::size_t use_src_end = scan_past_directive_line(source, after_name);
+    // Line-based callers (mini_preprocessor, top-level PP_FILE) want
+    // `\`MACRO` to own the trailing newline so handle_macro_use leaves
+    // the cursor on the next line. For mid-text use surfaced by the
+    // sv_preprocessor.rawast text_line iterator, the macro call sits
+    // inside surrounding bytes — consuming the newline would lose any
+    // text after the macro on the same line.
+    std::size_t use_src_end = consume_line
+        ? scan_past_directive_line(source, after_name)
+        : after_name;
     std::size_t use_src_len = use_src_end - use_src_start;
-    bool consumed_newline = use_src_end > use_src_start
+    bool consumed_newline = consume_line
+        && use_src_end > use_src_start
         && (source[use_src_end - 1] == '\n' || source[use_src_end - 1] == '\r');
 
     auto emit_expansion = [&](const std::string& body, const std::string& span_name) {

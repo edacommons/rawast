@@ -920,3 +920,75 @@ TEST_CASE("use_default_expr_eval(grammar): unparseable cond warns + skips") {
     CHECK_FALSE(pp.is_defined("TAKEN"));
     CHECK_FALSE(pp.warnings().empty());
 }
+
+// ─── Top-level macro expansion ──────────────────────────────────────
+//
+// TEXT_LINE is now a scope-array of MACRO_USE inside a sequence-dict,
+// so `\`FOO` and `\`FOO(a, b)` at top level (or mid-line) surface as
+// macro_use dicts that the walker expands through the macro table.
+
+TEST_CASE("Preprocessor::process: whole-line `\\`MACRO expands to body") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define FOO bar\n"
+        "`FOO\n"
+    );
+    CHECK(out.find("bar") != std::string::npos);
+    CHECK(out.find("`FOO") == std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: mid-line `\\`MACRO embedded in surrounding text") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define WIDTH 32\n"
+        "wire [`WIDTH-1:0] x;\n"
+    );
+    // Macro substituted in place; surrounding text preserved.
+    CHECK(out.find("wire [32-1:0] x;") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: two macros on one line both expand") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define A alpha\n"
+        "`define B beta\n"
+        "x = `A + `B;\n"
+    );
+    CHECK(out.find("x = alpha + beta;") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: text-only line passes through unchanged") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process("module top; endmodule\n");
+    CHECK(out.find("module top; endmodule") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: parameterised macro `\\`FOO(a,b) expands with substitution") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    // PARAMS / MACRO_ARGS currently require no whitespace around the
+    // `,` separator — a known v1 limitation. Test uses the canonical
+    // tight form.
+    auto out = pp.process(
+        "`define ADD(x,y) (x + y)\n"
+        "`ADD(p,q)\n"
+    );
+    CHECK(out.find("(p + q)") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::process: macro use after `\\`ifdef-taken branch") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define FLAG 1\n"
+        "`define VAL 42\n"
+        "`ifdef FLAG\n"
+        "x = `VAL;\n"
+        "`endif\n"
+    );
+    CHECK(out.find("x = 42;") != std::string::npos);
+}
