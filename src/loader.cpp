@@ -920,12 +920,16 @@ populate(Grammar& g, NodeId target, const Value& body) {
     }
 
     if (type == "scope") {
-        // `scope { OPEN, INNER..., CLOSE }`. Children are appended like a
-        // sequence; the parse/save engines treat children[0] as OPEN,
-        // children.back() as CLOSE, and the rest as INNERs. Structural
-        // validation (need at least two children; first and last must be
-        // Key) is deferred to a post-load pass once items are built.
+        // `scope start="X" stop="Y" { INNER... }`. Start/stop are
+        // optional literal delimiters carried on the Node itself
+        // (n.scope_start / n.scope_stop, with *_strict flags for
+        // word-bounded matching). Children are exactly the INNERs —
+        // no positional first/last interpretation.
         n.kind = NodeKind::Scope;
+        if (auto s = dict_string_opt(*dv, "start")) n.scope_start = *s;
+        if (auto s = dict_string_opt(*dv, "stop"))  n.scope_stop  = *s;
+        n.scope_start_strict = dict_bool(*dv, "start_strict");
+        n.scope_stop_strict  = dict_bool(*dv, "stop_strict");
         auto items_val = dict_value(*dv, "value");
         if (!items_val) items_val = dict_value(*dv, "items");
         return append_items_array(g, target, items_val, type);

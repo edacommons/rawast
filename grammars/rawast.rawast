@@ -117,16 +117,32 @@ CHOICE_EXPR: sequence {
   "{", <ITEMS>:value=@, "}"
 }
 
-// `scope { OPEN, INNER..., CLOSE }` — string-aware bracket scanner.
-// Walks from OPEN to the matching CLOSE, treating each INNER as an
-// atomic span (so embedded strings, comments, nested scopes can't
-// trigger a false CLOSE). Returns the body bytes between OPEN and
-// CLOSE (exclusive) as a single StringValue. See §4.5b of
-// docs/rawast-format.md.
+// `scope start="(" stop=")" { INNER... }` — string-aware bracket
+// scanner. Optional `start=` and `stop=` literal delimiters; INNERs
+// are atomic spans (embedded strings, comments, nested scopes can't
+// trigger a false stop). Returns body bytes between start and stop
+// (exclusive) as a StringValue. See §4.5b of docs/rawast-format.md.
+//
+// `start='X' stop='Y'` (single-quote form) requests word-bounded
+// matching for the literal — same semantic as the strict-Key form
+// `'X'` vs `"X"` for plain Keys.
 SCOPE_EXPR: sequence {
   "scope":type="scope",
+  repeat <SCOPE_ATTR>,
   "{", <ITEMS>:value=@, "}"
 }
+
+SCOPE_ATTR: choice {
+  <SCOPE_START_PLAIN>,
+  <SCOPE_START_STRICT>,
+  <SCOPE_STOP_PLAIN>,
+  <SCOPE_STOP_STRICT>
+}
+
+SCOPE_START_PLAIN:  sequence { "start", "=", string:start=@ }
+SCOPE_START_STRICT: sequence { "start", "=", single_quote_string:start=@:start_strict=true }
+SCOPE_STOP_PLAIN:   sequence { "stop",  "=", string:stop=@ }
+SCOPE_STOP_STRICT:  sequence { "stop",  "=", single_quote_string:stop=@:stop_strict=true }
 
 // `repeat` quantifier syntax:
 //   repeat <X>       → min=0 (zero-or-more, classic PEG `*`)

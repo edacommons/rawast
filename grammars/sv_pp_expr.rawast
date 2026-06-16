@@ -171,5 +171,5 @@ INT: sequence dict {
 // shapes the engine's dispatcher struggles with when the body is
 // consumed inline via `<PP_EXPR>:value=@`.
 PAREN_EXPR: sequence dict {
-    scope { "(", <PAREN_EXPR>, std.string, ")" }:type="paren":value=@:#subparse="PP_EXPR"
+    scope start="(" stop=")" { <PAREN_EXPR>, std.string }:type="paren":value=@:#subparse="PP_EXPR"
 }

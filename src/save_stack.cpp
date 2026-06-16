@@ -1454,28 +1454,19 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
     }
 
     case NodeKind::Scope: {
-        // Scope save: emit OPEN literal + captured body + CLOSE literal.
+        // Scope save: emit start literal + captured body + stop literal.
         // The body StringValue was produced verbatim on the parse side
-        // (bytes between OPEN and CLOSE, exclusive); INNERs were
+        // (bytes between start and stop, exclusive); INNERs were
         // atomic spans whose text round-trips through the body. With
         // #subparse, the stored value is the structured sub-tree —
         // re-serialize through the subparse rule to recover the body
         // text first.
-        if (n.children.size() < 2) {
+        const std::string& open_str  = n.scope_start;
+        const std::string& close_str = n.scope_stop;
+        if (close_str.empty()) {
             return tl::unexpected(SaveError{
-                "scope save: node needs OPEN and CLOSE children"});
-        }
-        auto literal_of = [&](NodeId id) -> std::string {
-            const Node& cn = g.node(g.resolve_ref(id));
-            if (cn.kind != NodeKind::Key) return {};
-            auto sv = as_string(cn.value);
-            return sv ? sv->data() : std::string{};
-        };
-        const std::string open_str  = literal_of(n.children.front());
-        const std::string close_str = literal_of(n.children.back());
-        if (open_str.empty() || close_str.empty()) {
-            return tl::unexpected(SaveError{
-                "scope save: OPEN/CLOSE must be non-empty Key literals"});
+                "scope save: empty stop= requires sibling-stop support "
+                "(not yet implemented)"});
         }
 
         const bool is_optional = n.is_optional;

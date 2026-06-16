@@ -120,12 +120,15 @@ FirstSet first_of(const Grammar& g, NodeId id, std::set<std::size_t>& visited) {
         break;
     }
     case NodeKind::Scope: {
-        // Scope's first byte is the OPEN Key (children[0]). Defer to
-        // first_of on that child for the contribution; Scope itself
-        // is never nullable (OPEN must match to enter).
-        if (!n.children.empty()) {
-            FirstSet open_first = first_of(g, n.children[0], visited);
-            for (const auto& t : open_first.tokens) result.tokens.insert(t);
+        // Scope's contribution is its `scope_start` literal as a Key
+        // token (when set). Empty start means any byte may begin the
+        // scope — fall back to a wildcard marker. Scope itself is
+        // never nullable (at least one byte is consumed before stop
+        // can match).
+        if (!n.scope_start.empty()) {
+            result.tokens.insert("K:" + n.scope_start);
+        } else {
+            result.tokens.insert("S:*");
         }
         break;
     }

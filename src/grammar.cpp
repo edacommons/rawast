@@ -255,15 +255,17 @@ FirstByteResult compute_node_first_bytes(
         result = any_byte_result();
         break;
     case NodeKind::Scope: {
-        // Scope's first byte is the first byte of its OPEN Key
-        // (children[0]). Defer to that child. Never nullable: OPEN
-        // must consume at least one byte to enter.
-        if (n.children.empty()) {
-            result = any_byte_result();
+        // Scope's first byte is the first byte of its `scope_start`
+        // literal (when present). Empty start means any byte may
+        // open the scope. Never nullable: at minimum one byte is
+        // consumed before stop can match.
+        if (!n.scope_start.empty()) {
+            result.bytes.set(static_cast<unsigned char>(n.scope_start.front()));
+            result.known = true;
         } else {
-            result = compute_node_first_bytes(g, n.children[0], state, cache);
-            result.nullable = false;
+            result = any_byte_result();
         }
+        result.nullable = false;
         break;
     }
     case NodeKind::Choice: {
@@ -851,80 +853,97 @@ ValuePtr compact_opchain(const ValuePtr& v) {
 // `scope { OPEN, INNER..., CLOSE }` — string-aware bracket scanner.
 // Match the OPEN Key, then loop scanning bytes: try CLOSE first, then
 // each INNER (terminal parser walk() or recursive Scope), else consume
-// one raw byte. Captures the body bytes between OPEN and CLOSE
-// (exclusive) and returns them as a string.
+// one raw byte. Captures the body bytes between the start and stop
+// delimiters (exclusive) and returns them as a string.
+//
+// Start/stop delimiters live on the Node itself (n.scope_start /
+// n.scope_stop) with optional word-boundary flags (n.scope_start_strict
+// / n.scope_stop_strict). The previous positional convention of
+// "first child = OPEN, last child = CLOSE" is retired; children are
+// exactly the INNERs.
 //
 // INNERs are atomic: when an INNER succeeds, the matched bytes are
-// appended to the body verbatim and CLOSE-matching skips over them.
+// appended to the body verbatim and stop-matching skips over them.
 // This is what makes embedded `std.string`, `std.line_comment`, etc.
 // transparent to the scope — a `")"` inside a string doesn't end the
 // scope because the string parser swallowed it.
 //
 // Mark discipline: the caller MUST hold a live mark at scope entry;
-// the helper does its own internal marks for OPEN, CLOSE, and INNER
+// the helper does its own internal marks for start, stop, and INNER
 // trials and balances them. On failure return, the stream is left
 // wherever the failure happened — the caller's outer mark provides
 // the rewind.
+inline bool scope_is_word_char(char c) noexcept {
+    auto u = static_cast<unsigned char>(c);
+    return (u >= '0' && u <= '9') ||
+           (u >= 'A' && u <= 'Z') ||
+           (u >= 'a' && u <= 'z') || u == '_';
+}
+
 tl::expected<std::string, ParseError> walk_scope_helper(
     const Grammar& g, StreamReader& sr, NodeId scope_id) {
     const Node& sn = g.node(scope_id);
-    if (sn.children.size() < 2) {
-        return tl::unexpected(ParseError{
-            sr.position(), "scope: needs OPEN and CLOSE children"});
-    }
     const Position entry = sr.position();
 
-    // Extract OPEN / CLOSE literal strings (children[0] and back() must
-    // be Key nodes — enforced at load time, but defend here too).
-    auto literal_of = [&](NodeId id) -> std::optional<std::string> {
-        const Node& n = g.node(g.resolve_ref(id));
-        if (n.kind != NodeKind::Key) return std::nullopt;
-        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
-        if (!sv) return std::nullopt;
-        return sv->data();
-    };
-    auto open_opt  = literal_of(sn.children.front());
-    auto close_opt = literal_of(sn.children.back());
-    if (!open_opt || !close_opt || open_opt->empty() || close_opt->empty()) {
+    const std::string& open_str  = sn.scope_start;
+    const std::string& close_str = sn.scope_stop;
+    if (close_str.empty()) {
+        // Sibling-driven termination (empty stop_literal) lands as a
+        // follow-up. For now require an explicit stop.
         return tl::unexpected(ParseError{
-            entry, "scope: OPEN and CLOSE must be non-empty Key literals"});
+            entry, "scope: empty `stop=` requires sibling-stop support "
+                   "(not yet implemented); use `stop=\"...\"`"});
     }
-    const std::string& open_str  = *open_opt;
-    const std::string& close_str = *close_opt;
 
-    // Match OPEN. No ignore-set skipping inside scope; embedded
-    // whitespace is part of the body.
-    sr.mark();
-    for (char c : open_str) {
-        auto g_ = sr.get();
-        if (!g_ || *g_ != c) {
-            sr.reject();
-            return tl::unexpected(ParseError{
-                entry, "scope: expected OPEN literal '" + open_str + "'"});
+    // Match start (if present). No ignore-set skipping inside scope;
+    // embedded whitespace is part of the body.
+    if (!open_str.empty()) {
+        sr.mark();
+        for (char c : open_str) {
+            auto g_ = sr.get();
+            if (!g_ || *g_ != c) {
+                sr.reject();
+                return tl::unexpected(ParseError{
+                    entry, "scope: expected start literal '" + open_str + "'"});
+            }
         }
+        if (sn.scope_start_strict && !open_str.empty()
+            && scope_is_word_char(open_str.back())) {
+            auto next = sr.peek();
+            if (next && scope_is_word_char(*next)) {
+                sr.reject();
+                return tl::unexpected(ParseError{
+                    entry, "scope: strict start '" + open_str +
+                            "' requires word boundary"});
+            }
+        }
+        sr.accept();
     }
-    sr.accept();
 
-    // Inner children (between OPEN and CLOSE).
-    std::vector<NodeId> inners(sn.children.begin() + 1,
-                               sn.children.end()   - 1);
+    // All children are INNERs.
+    const std::vector<NodeId>& inners = sn.children;
 
     std::string body;
     while (true) {
         auto pk = sr.peek();
         if (!pk) {
             return tl::unexpected(ParseError{
-                entry, "scope: unterminated, no CLOSE '" + close_str +
+                entry, "scope: unterminated, no stop '" + close_str +
                         "' before EOF"});
         }
 
-        // Try CLOSE first (most common stop condition).
+        // Try stop first (most common stop condition).
         if (*pk == close_str[0]) {
             sr.mark();
             bool ok = true;
             for (char e : close_str) {
                 auto gc = sr.get();
                 if (!gc || *gc != e) { ok = false; break; }
+            }
+            if (ok && sn.scope_stop_strict
+                && scope_is_word_char(close_str.back())) {
+                auto next = sr.peek();
+                if (next && scope_is_word_char(*next)) ok = false;
             }
             if (ok) {
                 sr.accept();
@@ -959,17 +978,14 @@ tl::expected<std::string, ParseError> walk_scope_helper(
                 // walk() rewound on failure (its own mark/reject);
                 // try next INNER.
             } else if (inner.kind == NodeKind::Scope) {
-                // Recursive nested scope — capture OPEN + sub_body +
-                // CLOSE into the outer body. Inner OPEN/CLOSE come
-                // from the inner scope node itself.
-                auto inner_open  = literal_of(inner.children.front());
-                auto inner_close = literal_of(inner.children.back());
-                if (!inner_open || !inner_close) continue;
+                // Recursive nested scope — capture start + sub_body +
+                // stop into the outer body. Delimiters come from the
+                // inner scope node's own fields.
                 auto sub = walk_scope_helper(g, sr, g.resolve_ref(inner_id));
                 if (sub) {
-                    body.append(*inner_open);
+                    body.append(inner.scope_start);
                     body.append(*sub);
-                    body.append(*inner_close);
+                    body.append(inner.scope_stop);
                     inner_ok = true;
                     break;
                 }

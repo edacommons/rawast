@@ -335,28 +335,76 @@
         "type": "key",
         "key": "scope",
         "bindings": [
-          {
-            "name": "type",
-            "value": "scope"
-          }
+          { "name": "type", "value": "scope" }
         ]
       },
-      {
-        "type": "key",
-        "key": "{"
-      },
+      { "type": "repeat", "value": { "type": "SCOPE_ATTR" } },
+      { "type": "key", "key": "{" },
       {
         "type": "ITEMS",
         "bindings": [
-          {
-            "name": "value",
-            "value": "@"
-          }
+          { "name": "value", "value": "@" }
         ]
       },
+      { "type": "key", "key": "}" }
+    ]
+  },
+  "SCOPE_ATTR": {
+    "type": "choice",
+    "value": [
+      { "type": "SCOPE_START_PLAIN" },
+      { "type": "SCOPE_START_STRICT" },
+      { "type": "SCOPE_STOP_PLAIN" },
+      { "type": "SCOPE_STOP_STRICT" }
+    ]
+  },
+  "SCOPE_START_PLAIN": {
+    "type": "sequence",
+    "value": [
+      { "type": "key", "key": "start" },
+      { "type": "key", "key": "=" },
       {
-        "type": "key",
-        "key": "}"
+        "type": "string",
+        "bindings": [{ "name": "start", "value": "@" }]
+      }
+    ]
+  },
+  "SCOPE_START_STRICT": {
+    "type": "sequence",
+    "value": [
+      { "type": "key", "key": "start" },
+      { "type": "key", "key": "=" },
+      {
+        "type": "single_quote_string",
+        "bindings": [
+          { "name": "start",        "value": "@" },
+          { "name": "start_strict", "value": true }
+        ]
+      }
+    ]
+  },
+  "SCOPE_STOP_PLAIN": {
+    "type": "sequence",
+    "value": [
+      { "type": "key", "key": "stop" },
+      { "type": "key", "key": "=" },
+      {
+        "type": "string",
+        "bindings": [{ "name": "stop", "value": "@" }]
+      }
+    ]
+  },
+  "SCOPE_STOP_STRICT": {
+    "type": "sequence",
+    "value": [
+      { "type": "key", "key": "stop" },
+      { "type": "key", "key": "=" },
+      {
+        "type": "single_quote_string",
+        "bindings": [
+          { "name": "stop",        "value": "@" },
+          { "name": "stop_strict", "value": true }
+        ]
       }
     ]
   },

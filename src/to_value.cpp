@@ -133,9 +133,14 @@ ValuePtr node_to_value(const Grammar& g, NodeId id) {
 
     case NodeKind::Scope: {
         // Mirror Sequence/Choice serialization: `{type: "scope",
-        // value: [OPEN, INNER..., CLOSE]}`. Loader's `type == "scope"`
-        // branch reads `value` back into children.
+        // start: "...", stop: "...", value: [INNER...]}`. Children
+        // are exactly the INNERs; start/stop/_strict live on the
+        // node. Loader's `type == "scope"` branch reads them back.
         put_str(*d, "type", "scope");
+        if (!n.scope_start.empty()) put_str(*d, "start", n.scope_start);
+        if (!n.scope_stop.empty())  put_str(*d, "stop",  n.scope_stop);
+        if (n.scope_start_strict)   put_bool(*d, "start_strict", true);
+        if (n.scope_stop_strict)    put_bool(*d, "stop_strict",  true);
         auto items = std::make_shared<ArrayValue>();
         for (NodeId child : n.children) {
             items->data().push_back(node_to_value(g, child));

@@ -49,7 +49,7 @@ TEST_CASE("scope: bare paren scope captures body bytes") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope { "(", ")" }
+        PAREN: scope start="(" stop=")" { }
     )GRAM");
     auto v = parse_input(g, "(hello world)");
     auto sv = as_string(v);
@@ -62,7 +62,7 @@ TEST_CASE("scope: empty body round-trips") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope { "(", ")" }
+        PAREN: scope start="(" stop=")" { }
     )GRAM");
     auto v = parse_input(g, "()");
     auto sv = as_string(v);
@@ -77,7 +77,7 @@ TEST_CASE("scope: embedded string with ')' inside is captured atomically") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope { "(", std.string, ")" }
+        PAREN: scope start="(" stop=")" { std.string }
     )GRAM");
     // Input: ( "wait)here" trailing )
     // Without the std.string INNER hint, the naive scanner would
@@ -95,7 +95,7 @@ TEST_CASE("scope: nested () via self-Ref INNER preserves both layers") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope { "(", <PAREN>, std.string, ")" }
+        PAREN: scope start="(" stop=")" { <PAREN>, std.string }
     )GRAM");
     auto v = parse_input(g, "(outer (inner) tail)");
     auto sv = as_string(v);
@@ -108,7 +108,7 @@ TEST_CASE("scope: nested scope containing a string with ')'") {
     auto g = load(R"GRAM(
         use: std
         start: <PAREN>
-        PAREN: scope { "(", <PAREN>, std.string, ")" }
+        PAREN: scope start="(" stop=")" { <PAREN>, std.string }
     )GRAM");
     auto v = parse_input(g, "(outer (\"in)ner\") done)");
     auto sv = as_string(v);
@@ -123,7 +123,7 @@ TEST_CASE("scope: square brackets work the same as parens") {
     auto g = load(R"GRAM(
         use: std
         start: <SQ>
-        SQ: scope { "[", std.string, "]" }
+        SQ: scope start="[" stop="]" { std.string }
     )GRAM");
     auto v = parse_input(g, "[a \"with]bracket\" b]");
     auto sv = as_string(v);

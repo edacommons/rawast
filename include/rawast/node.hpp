@@ -158,6 +158,23 @@ public:
     // or `'token'` (single-quote literal) in `.rawast` DSL form.
     bool strict        = false;
 
+    // Scope-only: optional opening / closing literal delimiters and
+    // their strict-word-bounded flags. Empty `scope_start` means "no
+    // opening delimiter — scope begins at the cursor"; empty
+    // `scope_stop` means "no closing delimiter — scope ends when the
+    // next sibling in the surrounding sequence can match at the
+    // cursor" (Raw-style termination; reserved for a follow-up).
+    // The strict flags mirror `Node.strict` for Keys — when true,
+    // and the last byte of the delimiter is itself a word character,
+    // the byte immediately after the match must be a non-word
+    // character or EOF. Set by the .rawast surface forms:
+    //   scope start="X" stop="Y" { ... }   // non-strict
+    //   scope start='X' stop='Y' { ... }   // strict (word-bounded)
+    std::string scope_start;
+    std::string scope_stop;
+    bool        scope_start_strict = false;
+    bool        scope_stop_strict  = false;
+
     // Carried for Key, Parse, Value kinds.
     //   Key   - StringValue holding the literal token to match.
     //   Parse - StringValue holding the name of the terminal parser to invoke.

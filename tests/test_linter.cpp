@@ -384,6 +384,8 @@ TEST_CASE("Linter: the bundled .rawast grammar has only intentional informationa
     // (the grammar uses intentional shared-prefix Choices here).
     const std::set<std::string> allowed_informational = {
         "REPEAT_PLUS_FORM",
+        "SCOPE_ATTR",   // start=/stop= forms share their prefix Key —
+                        // same idiom as KEY_EXPR vs KEY_STRICT_EXPR
     };
 
     auto issues = lint_grammar(g);
