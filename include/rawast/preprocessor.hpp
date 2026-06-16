@@ -430,6 +430,28 @@ public:
     // shapes it doesn't handle.
     void use_default_expr_eval();
 
+    // Same as use_default_expr_eval() but for preprocessor grammars
+    // that capture `\`if` conditions as raw text (the
+    // sv_preprocessor.rawast shape). When the walker hands cond in as
+    // a StringValue, the callback parses it with `expr_grammar` first
+    // (typically loaded from grammars/sv_pp_expr.rawast), then feeds
+    // the resulting AST through default_pp_expr_eval.
+    //
+    //   Grammar pp = load("grammars/sv_preprocessor.rawast");
+    //   Grammar ex = load("grammars/sv_pp_expr.rawast");
+    //   Preprocessor p(pp);
+    //   p.use_default_expr_eval(ex);
+    //
+    // Cond values that are already structured (DictValue/ArrayValue)
+    // bypass the parse step and go straight to default_pp_expr_eval —
+    // so the same Preprocessor handles both grammar-captured text and
+    // process_ast-supplied synthesized ASTs.
+    //
+    // `expr_grammar` is captured by reference and must outlive the
+    // Preprocessor. A parse failure is recorded as a warning and the
+    // branch is treated as false (std::nullopt return).
+    void use_default_expr_eval(const Grammar& expr_grammar);
+
 private:
     // Walk the value tree produced by parsing through pp_grammar_,
     // dispatching on the `type` field that role-bearing rules emit.

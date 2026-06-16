@@ -5,12 +5,15 @@
 // PpOptions::expr_eval to a binding of default_pp_expr_eval(...).
 
 #include <rawast/preprocessor.hpp>
+#include <rawast/grammar.hpp>
+#include <rawast/stream.hpp>
 
 #include <charconv>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
 
@@ -267,6 +270,35 @@ void Preprocessor::use_default_expr_eval() {
                 if (auto m = get_macro(name)) return m->body;
                 return std::nullopt;
             });
+    };
+}
+
+void Preprocessor::use_default_expr_eval(const Grammar& expr_grammar) {
+    opts_.expr_eval = [this, &expr_grammar](const ValuePtr& cond)
+        -> std::optional<bool> {
+        auto resolver =
+            [this](const std::string& name) -> std::optional<std::string> {
+                if (auto m = get_macro(name)) return m->body;
+                return std::nullopt;
+            };
+        // Synthesized AST cond (process_ast path or other grammar
+        // shapes) goes straight to the evaluator — no parse needed.
+        if (!as_string(cond)) {
+            return default_pp_expr_eval(cond, resolver);
+        }
+        // Raw-text cond from sv_preprocessor.rawast's IF rule: parse
+        // it with the supplied expression grammar.
+        std::istringstream is{as_string(cond)->data()};
+        StreamReader sr{is};
+        auto r = expr_grammar.parse(sr);
+        if (!r) {
+            state_.warnings.push_back(
+                {"failed to parse `if condition '" +
+                     as_string(cond)->data() + "': " + r.error().message,
+                 state_.current_file, state_.current_line});
+            return std::nullopt;
+        }
+        return default_pp_expr_eval(*r, resolver);
     };
 }
 

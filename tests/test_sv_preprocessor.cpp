@@ -782,3 +782,141 @@ TEST_CASE("Preprocessor::process: `if without expr_eval callback warns + skips")
     CHECK_FALSE(pp.is_defined("A"));
     CHECK_FALSE(pp.warnings().empty());
 }
+
+// ─── expr_eval composition helper ────────────────────────────────────
+//
+// use_default_expr_eval(expr_grammar) wires the cond-text → AST →
+// bool pipeline. Exercises the full SV stack: sv_preprocessor.rawast
+// captures cond as raw text, the helper parses it through
+// sv_pp_expr.rawast, then default_pp_expr_eval evaluates against the
+// Preprocessor's macro table.
+
+namespace {
+
+Grammar load_expr_grammar() {
+    register_std_parser_group();
+    Grammar g;
+    auto r = load_rawast_grammar_from_file(g, "grammars/sv_pp_expr.rawast");
+    REQUIRE_MESSAGE(r, "loading sv_pp_expr.rawast failed: "
+                       << (r ? "" : r.error()));
+    return g;
+}
+
+} // namespace
+
+TEST_CASE("use_default_expr_eval(grammar): defined(FOO) — true when defined") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`define FOO 1\n"
+        "`if defined(FOO)\n"
+        "`define TAKEN 1\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("TAKEN"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): defined(FOO) — false when undefined") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`if defined(MISSING)\n"
+        "`define TAKEN 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("TAKEN"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): !defined(LEGACY) gates a branch") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`if !defined(LEGACY)\n"
+        "`define MODERN 1\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("MODERN"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): defined(A) && defined(B) — both required") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`define A 1\n"
+        "`define B 1\n"
+        "`if defined(A) && defined(B)\n"
+        "`define BOTH 1\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("BOTH"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): defined(A) && defined(B) — false when B missing") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`define A 1\n"
+        "`if defined(A) && defined(B)\n"
+        "`define BOTH 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("BOTH"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): elsif chain — only first true branch wins") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`define B 1\n"
+        "`if defined(A)\n"
+        "`define A_BRANCH 1\n"
+        "`elsif defined(B)\n"
+        "`define B_BRANCH 1\n"
+        "`elsif defined(C)\n"
+        "`define C_BRANCH 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("A_BRANCH"));
+    CHECK(pp.is_defined("B_BRANCH"));
+    CHECK_FALSE(pp.is_defined("C_BRANCH"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): bare ref FOO — true when macro defined") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`define FOO 1\n"
+        "`if FOO\n"
+        "`define TAKEN 1\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("TAKEN"));
+}
+
+TEST_CASE("use_default_expr_eval(grammar): unparseable cond warns + skips") {
+    auto pp_g = load_grammar();
+    auto ex_g = load_expr_grammar();
+    Preprocessor pp(pp_g);
+    pp.use_default_expr_eval(ex_g);
+    pp.process(
+        "`if ===\n"     // syntactically invalid
+        "`define TAKEN 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("TAKEN"));
+    CHECK_FALSE(pp.warnings().empty());
+}
