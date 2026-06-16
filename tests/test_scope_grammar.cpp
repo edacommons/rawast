@@ -198,3 +198,31 @@ TEST_CASE("scope array: multiple INNER matches preserve order") {
     CHECK(std::dynamic_pointer_cast<IntValue>(arr->data()[4])->data() == 3);
     CHECK(save_value(g, v) == "(1 2 3)");
 }
+
+// ─── Ref-to-rule INNERs (Phase 2) ──────────────────────────────────────
+
+TEST_CASE("scope array: Ref-to-rule INNER produces typed dict segment") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <DEMO>
+        DEMO: scope array start="(" stop=")" { <REF> }
+        REF: sequence dict { identifier:type="ref":value=@ }
+    )GRAM");
+    auto v = parse_input(g, "(FOO BAR)");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    // Layout: {ref:FOO}, " ", {ref:BAR}
+    REQUIRE(arr->data().size() == 3);
+    auto seg0 = std::dynamic_pointer_cast<DictValue>(arr->data()[0]);
+    REQUIRE(seg0);
+    auto type0 = std::dynamic_pointer_cast<StringValue>(seg0->data()["type"]);
+    auto value0 = std::dynamic_pointer_cast<StringValue>(seg0->data()["value"]);
+    REQUIRE(type0); CHECK(type0->data() == "ref");
+    REQUIRE(value0); CHECK(value0->data() == "FOO");
+    CHECK(as_string(arr->data()[1])->data() == " ");
+    auto seg2 = std::dynamic_pointer_cast<DictValue>(arr->data()[2]);
+    REQUIRE(seg2);
+    auto value2 = std::dynamic_pointer_cast<StringValue>(seg2->data()["value"]);
+    REQUIRE(value2); CHECK(value2->data() == "BAR");
+    CHECK(save_value(g, v) == "(FOO BAR)");
+}

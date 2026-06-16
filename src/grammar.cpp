@@ -904,7 +904,8 @@ ScanConfig scan_config_from_raw(const Node& n) {
 }
 
 tl::expected<ValuePtr, ParseError> walk_scan(
-    const Grammar& g, StreamReader& sr, const ScanConfig& cfg) {
+    const Grammar& g, StreamReader& sr, ValuePool& pool,
+    const ScanConfig& cfg) {
     const Position entry = sr.position();
     const bool array_mode = (cfg.container == Container::Array);
 
@@ -1032,7 +1033,7 @@ tl::expected<ValuePtr, ParseError> walk_scan(
             } else if (inner.kind == NodeKind::Scope) {
                 // Recursive nested scope.
                 ScanConfig inner_cfg = scan_config_from_scope(inner);
-                auto sub = walk_scan(g, sr, inner_cfg);
+                auto sub = walk_scan(g, sr, pool, inner_cfg);
                 if (sub) {
                     if (array_mode) {
                         flush_text_run();
@@ -1050,10 +1051,33 @@ tl::expected<ValuePtr, ParseError> walk_scan(
                     inner_ok = true;
                     break;
                 }
+            } else {
+                // Any other rule shape (Sequence / Choice / Repeat / Ref
+                // chain that resolves to one) — re-enter the parse driver
+                // via parse_from. The resolved Node id is the rule's
+                // entry; on success we get its typed value back.
+                //
+                // Mark/reject isolates the trial: parse_from may consume
+                // bytes before failing, so we wrap with our own mark.
+                // Zero-byte matches are rejected — silently accepting
+                // them would loop forever on a nullable rule.
+                sr.mark();
+                const Position before = sr.position();
+                auto sub_r = g.parse_from(sr, pool, g.resolve_ref(inner_id),
+                                          /*require_full_consume=*/false);
+                if (sub_r && sr.position().bytes > before.bytes) {
+                    sr.accept();
+                    if (array_mode) {
+                        flush_text_run();
+                        segments->data().push_back(*sub_r);
+                    } else {
+                        body.append(sr.bytes_from(before));
+                    }
+                    inner_ok = true;
+                    break;
+                }
+                sr.reject();
             }
-            // Other inner kinds (Ref-to-non-scope, etc.) are unsupported
-            // in V1. Silently skip; the raw-byte fallback below still
-            // makes progress.
         }
         if (inner_ok) continue;
 
@@ -1093,7 +1117,8 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, ValuePool& pool, NodeId start) const {
+        StreamReader& sr, ValuePool& pool, NodeId start,
+        bool require_full_consume) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
     ValuePtr result_value;
@@ -1648,7 +1673,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             sr.mark();
             ScanConfig raw_cfg = scan_config_from_raw(n);
-            auto r = walk_scan(*this, sr, raw_cfg);
+            auto r = walk_scan(*this, sr, pool, raw_cfg);
             // Negative-lookahead inversion for Raw. Same shape as the
             // Key and Parse arms: a Raw frame marked `!*` inverts its
             // outcome before any value processing. The neg-inversion
@@ -1748,7 +1773,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (trace_enabled) trace("  scope");
             sr.mark();
             ScanConfig scope_cfg = scan_config_from_scope(n);
-            auto r = walk_scan(*this, sr, scope_cfg);
+            auto r = walk_scan(*this, sr, pool, scope_cfg);
             // Negative-lookahead inversion — same shape as Key / Raw.
             if (top.is_negative()) {
                 if (r) sr.accept(); else sr.reject();
@@ -2150,13 +2175,16 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     }
 
     if (parse_finished) {
-        // Start rule produced a complete value; require the rest of
-        // the stream (modulo trailing ignored terminals) to be empty.
-        // Without this check a grammar that matches a prefix would
-        // silently succeed, hiding coverage gaps when the file has
-        // unmodeled content after the matched portion.
+        // Start rule produced a complete value. For top-level / subparse
+        // callers we require the rest of the stream (modulo trailing
+        // ignored terminals) to be empty — without this check a grammar
+        // that matches a prefix would silently succeed, hiding coverage
+        // gaps when the file has unmodeled content after the matched
+        // portion. Sub-invocations from byte-scan INNER trials disable
+        // the check via `require_full_consume=false`; they legitimately
+        // stop at the boundary the rule chose.
         run_ignore(sr, current_ignore());
-        if (!sr.eof()) {
+        if (require_full_consume && !sr.eof()) {
             return tl::unexpected(ParseError{
                 sr.position(),
                 "unexpected content after start rule completed"

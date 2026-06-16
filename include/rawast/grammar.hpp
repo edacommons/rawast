@@ -233,8 +233,15 @@ public:
     // re-enter the engine on an item's captured string with a different
     // entry rule. The same grammar is reused; only the starting point
     // changes.
+    //
+    // `require_full_consume` (default true) enforces that the stream is
+    // exhausted after the start rule completes — the standard contract
+    // for a top-level parse or subparse. Set false for sub-invocations
+    // that may legitimately consume only a prefix (the byte-scan INNER
+    // trial path in walk_scan, for example).
     tl::expected<ValuePtr, ParseError> parse_from(
-            StreamReader& sr, ValuePool& pool, NodeId start) const;
+            StreamReader& sr, ValuePool& pool, NodeId start,
+            bool require_full_consume = true) const;
 
     // Convenience: parse from a rule name. Looks up the named rule's
     // body NodeId via the registry; fails if the rule doesn't exist.
