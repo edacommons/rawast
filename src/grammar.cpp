@@ -1,6 +1,7 @@
 #include <rawast/grammar.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_registry.hpp>
+#include <rawast/scan_context.hpp>
 
 #include "save_stack.hpp"
 
@@ -850,26 +851,19 @@ ValuePtr compact_opchain(const ValuePtr& v) {
     return out;
 }
 
-// `scope { OPEN, INNER..., CLOSE }` — string-aware bracket scanner.
-// Match the OPEN Key, then loop scanning bytes: try CLOSE first, then
-// each INNER (terminal parser walk() or recursive Scope), else consume
-// one raw byte. Captures the body bytes between the start and stop
-// delimiters (exclusive) and returns them as a string.
-//
-// Start/stop delimiters live on the Node itself (n.scope_start /
-// n.scope_stop) with optional word-boundary flags (n.scope_start_strict
-// / n.scope_stop_strict). The previous positional convention of
-// "first child = OPEN, last child = CLOSE" is retired; children are
-// exactly the INNERs.
+// Unified byte-scan routine. Both Raw (`*`) and Scope (`scope { … }`)
+// dispatch through this — they materialise ScanConfig values that
+// describe the same operation (scan from cursor with optional start
+// delimiter, stop literal, atomic-span INNERs, string-or-array output).
 //
 // INNERs are atomic: when an INNER succeeds, the matched bytes are
-// appended to the body verbatim and stop-matching skips over them.
+// folded into the captured payload and stop-matching skips over them.
 // This is what makes embedded `std.string`, `std.line_comment`, etc.
 // transparent to the scope — a `")"` inside a string doesn't end the
 // scope because the string parser swallowed it.
 //
 // Mark discipline: the caller MUST hold a live mark at scope entry;
-// the helper does its own internal marks for start, stop, and INNER
+// the routine does its own internal marks for start, stop, and INNER
 // trials and balances them. On failure return, the stream is left
 // wherever the failure happened — the caller's outer mark provides
 // the rewind.
@@ -880,24 +874,56 @@ inline bool scope_is_word_char(char c) noexcept {
            (u >= 'a' && u <= 'z') || u == '_';
 }
 
-tl::expected<ValuePtr, ParseError> walk_scope_helper(
-    const Grammar& g, StreamReader& sr, NodeId scope_id) {
-    const Node& sn = g.node(scope_id);
-    const Position entry = sr.position();
-    const bool array_mode = (sn.container == Container::Array);
+// Build a ScanConfig from a Scope node. Phase 1 — pure data-copy; the
+// configuration is fully described by the Node's existing fields.
+ScanConfig scan_config_from_scope(const Node& n) {
+    ScanConfig cfg;
+    cfg.start          = n.scope_start;
+    cfg.stop           = n.scope_stop;
+    cfg.start_strict   = n.scope_start_strict;
+    cfg.stop_strict    = n.scope_stop_strict;
+    cfg.inners         = n.children;
+    cfg.container      = n.container;
+    cfg.subparse_start = n.subparse_start;
+    return cfg;
+}
 
-    const std::string& open_str  = sn.scope_start;
-    const std::string& close_str = sn.scope_stop;
+// Build a ScanConfig from a Raw node. Raw's pre-resolved sibling-stop
+// literal is stashed on `n.value` by `resolve_raw_stops` at load time;
+// it surfaces here as the stop. Raw has no INNERs, is always
+// string-output, and leaves the stop literal unconsumed for the next
+// sibling Key to match.
+ScanConfig scan_config_from_raw(const Node& n) {
+    ScanConfig cfg;
+    if (auto sv = std::dynamic_pointer_cast<StringValue>(n.value)) {
+        cfg.stop = sv->data();
+    }
+    cfg.subparse_start = n.subparse_start;
+    cfg.consume_stop   = false;
+    return cfg;
+}
+
+tl::expected<ValuePtr, ParseError> walk_scan(
+    const Grammar& g, StreamReader& sr, const ScanConfig& cfg) {
+    const Position entry = sr.position();
+    const bool array_mode = (cfg.container == Container::Array);
+
+    const std::string& open_str  = cfg.start;
+    const std::string& close_str = cfg.stop;
     if (close_str.empty()) {
-        // Sibling-driven termination (empty stop_literal) lands as a
-        // follow-up. For now require an explicit stop.
+        // Sibling-driven termination (empty stop) is a Phase 3
+        // capability. Until then, the caller must produce a config
+        // with a populated stop — Raw nodes get theirs from
+        // `resolve_raw_stops`; Scope nodes get theirs from
+        // `n.scope_stop` (with the explicit "not yet implemented"
+        // error for empty `stop=` enforced at the surface).
         return tl::unexpected(ParseError{
-            entry, "scope: empty `stop=` requires sibling-stop support "
-                   "(not yet implemented); use `stop=\"...\"`"});
+            entry, "scan: empty stop requires sibling-stop support "
+                   "(Phase 3); use an explicit stop literal"});
     }
 
-    // Match start (if present). No ignore-set skipping inside scope;
-    // embedded whitespace is part of the body.
+    // Match start (if present). No ignore-set skipping inside the
+    // scan; embedded whitespace is part of the body.
     if (!open_str.empty()) {
         sr.mark();
         for (char c : open_str) {
@@ -905,24 +931,21 @@ tl::expected<ValuePtr, ParseError> walk_scope_helper(
             if (!g_ || *g_ != c) {
                 sr.reject();
                 return tl::unexpected(ParseError{
-                    entry, "scope: expected start literal '" + open_str + "'"});
+                    entry, "scan: expected start literal '" + open_str + "'"});
             }
         }
-        if (sn.scope_start_strict && !open_str.empty()
+        if (cfg.start_strict && !open_str.empty()
             && scope_is_word_char(open_str.back())) {
             auto next = sr.peek();
             if (next && scope_is_word_char(*next)) {
                 sr.reject();
                 return tl::unexpected(ParseError{
-                    entry, "scope: strict start '" + open_str +
+                    entry, "scan: strict start '" + open_str +
                             "' requires word boundary"});
             }
         }
         sr.accept();
     }
-
-    // All children are INNERs.
-    const std::vector<NodeId>& inners = sn.children;
 
     // Accumulators. String mode uses `body` (single concatenated payload).
     // Array mode uses `segments` (ordered list of mixed StringValue text
@@ -942,7 +965,7 @@ tl::expected<ValuePtr, ParseError> walk_scope_helper(
         auto pk = sr.peek();
         if (!pk) {
             return tl::unexpected(ParseError{
-                entry, "scope: unterminated, no stop '" + close_str +
+                entry, "scan: unterminated, no stop '" + close_str +
                         "' before EOF"});
         }
 
@@ -954,13 +977,18 @@ tl::expected<ValuePtr, ParseError> walk_scope_helper(
                 auto gc = sr.get();
                 if (!gc || *gc != e) { ok = false; break; }
             }
-            if (ok && sn.scope_stop_strict
+            if (ok && cfg.stop_strict
                 && scope_is_word_char(close_str.back())) {
                 auto next = sr.peek();
                 if (next && scope_is_word_char(*next)) ok = false;
             }
             if (ok) {
-                sr.accept();
+                // consume_stop=true (Scope) accepts the mark so the
+                // stop literal stays consumed; consume_stop=false (Raw)
+                // rejects to leave the stop for the next sibling to
+                // match. The byte-scan is over either way.
+                if (cfg.consume_stop) sr.accept();
+                else                  sr.reject();
                 if (array_mode) {
                     flush_text_run();
                     return ValuePtr(segments);
@@ -972,7 +1000,7 @@ tl::expected<ValuePtr, ParseError> walk_scope_helper(
 
         // Try each INNER in order.
         bool inner_ok = false;
-        for (NodeId inner_id : inners) {
+        for (NodeId inner_id : cfg.inners) {
             const Node& inner = g.node(g.resolve_ref(inner_id));
 
             if (inner.kind == NodeKind::Parse) {
@@ -1003,7 +1031,8 @@ tl::expected<ValuePtr, ParseError> walk_scope_helper(
                 // try next INNER.
             } else if (inner.kind == NodeKind::Scope) {
                 // Recursive nested scope.
-                auto sub = walk_scope_helper(g, sr, g.resolve_ref(inner_id));
+                ScanConfig inner_cfg = scan_config_from_scope(inner);
+                auto sub = walk_scan(g, sr, inner_cfg);
                 if (sub) {
                     if (array_mode) {
                         flush_text_run();
@@ -1607,35 +1636,19 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         case NodeKind::Raw: {
             // Raw consume: bypass the ignore-set (embedded whitespace
             // and newlines are part of the captured payload), then
-            // peek-and-skip until the stop literal matches at the
-            // cursor. The literal is NOT consumed — it's left for the
-            // next sibling (a Key node) to match in its own iteration.
+            // dispatch to the unified walk_scan routine. Raw's config
+            // has consume_stop=false so the stop literal is left for
+            // the next sibling (a Key node) to match in its own
+            // iteration.
             const Node& n = nodes_[top.node_id().value()];
-            auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
-            assert(sv);
-            const std::string& stop = sv->data();
-            if (trace_enabled) trace("  raw until \"" + stop + "\"");
-            sr.mark();
-            const Position start = sr.position();
-            std::string captured;
-            bool found = false;
-            while (true) {
-                auto c = sr.peek();
-                if (!c) break;
-                if (*c == stop[0]) {
-                    sr.mark();
-                    std::string lookahead;
-                    for (std::size_t i = 0; i < stop.size(); ++i) {
-                        auto k = sr.get();
-                        if (!k) break;
-                        lookahead.push_back(*k);
-                    }
-                    sr.reject();
-                    if (lookahead == stop) { found = true; break; }
-                }
-                captured.push_back(*c);
-                sr.get();
+            if (trace_enabled) {
+                auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+                trace(std::string("  raw until \"")
+                      + (sv ? sv->data() : std::string()) + "\"");
             }
+            sr.mark();
+            ScanConfig raw_cfg = scan_config_from_raw(n);
+            auto r = walk_scan(*this, sr, raw_cfg);
             // Negative-lookahead inversion for Raw. Same shape as the
             // Key and Parse arms: a Raw frame marked `!*` inverts its
             // outcome before any value processing. The neg-inversion
@@ -1643,16 +1656,14 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // captured string is discarded entirely on the
             // success-to-failure path (we wanted the inner to fail).
             if (top.is_negative()) {
-                // Whichever way the inner went, rewind the byte mark
-                // taken at entry and pop the frame.
-                if (found) sr.accept(); else sr.reject();
+                if (r) sr.accept(); else sr.reject();
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
                     on_mark_reject();
                     popped.set_has_neg_mark(false);
                 }
-                if (found) {
+                if (r) {
                     if (trace_enabled) {
                         trace("  negative-lookahead matched (failing)");
                     }
@@ -1666,15 +1677,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 break;
             }
-            if (!found) {
+            if (!r) {
                 sr.reject();
-                handle_failure(ParseError{
-                    start, "raw consume: stop literal '"
-                            + stop + "' not found before EOF"});
+                handle_failure(r.error());
                 break;
             }
             sr.accept();
-            ValuePtr produced = make_string(std::move(captured));
+            ValuePtr produced = *r;
             // Subparse hook: same as the Parse node branch — if this
             // Raw node carries a subparse_start, re-enter the engine
             // on the captured string with the named rule as entry.
@@ -1730,15 +1739,16 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         case NodeKind::Scope: {
             // Bracketed-region terminal. Apply the surrounding ignore
             // set once at entry (so leading whitespace before the
-            // OPEN is tolerated), then hand off to walk_scope_helper
-            // which scans OPEN/INNER/CLOSE atomically. Inside the
-            // body, ignore-set skipping is bypassed — embedded
-            // whitespace / comments are part of the captured string.
+            // start is tolerated), then dispatch to the unified
+            // walk_scan routine. Inside the body, ignore-set skipping
+            // is bypassed — embedded whitespace / comments are part
+            // of the captured payload.
             run_ignore(sr, current_ignore());
             const Node& n = nodes_[top.node_id().value()];
             if (trace_enabled) trace("  scope");
             sr.mark();
-            auto r = walk_scope_helper(*this, sr, top.node_id());
+            ScanConfig scope_cfg = scan_config_from_scope(n);
+            auto r = walk_scan(*this, sr, scope_cfg);
             // Negative-lookahead inversion — same shape as Key / Raw.
             if (top.is_negative()) {
                 if (r) sr.accept(); else sr.reject();
@@ -1768,10 +1778,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             sr.accept();
-            // walk_scope_helper returns either StringValue (default
-            // string-body mode) or ArrayValue (array container mode);
-            // pass through verbatim. Subparse below is meaningful only
-            // for string-body mode.
+            // walk_scan returns either StringValue (default string-body
+            // mode) or ArrayValue (array container mode); pass through
+            // verbatim. Subparse below is meaningful only for
+            // string-body mode.
             ValuePtr produced = *r;
             // Subparse hook — same as Raw / Parse: if the scope node
             // carries a subparse_start, re-enter the engine on the
@@ -1797,11 +1807,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             produced = pool.intern(produced);
             top.add_value(produced, top.is_name());
-            // Scope is a terminal in the Frame model — its OPEN /
-            // INNER / CLOSE children were consumed atomically by
-            // walk_scope_helper, never as Frame-iteration children.
-            // Always pop here (do NOT call push_or_skip_optional on
-            // a child cursor — there is no leftover child to dispatch).
+            // Scope is a terminal in the Frame model — its start /
+            // INNER / stop are consumed atomically by walk_scan,
+            // never as Frame-iteration children. Always pop here
+            // (do NOT call push_or_skip_optional on a child cursor —
+            // there is no leftover child to dispatch).
             {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
