@@ -698,6 +698,12 @@ std::string render_segments(const ArrayValue& body) {
 } // namespace
 
 void Preprocessor::handle_define(const DictValue& d) {
+    // Suppressed when walking a not-taken `\`ifdef` branch — the
+    // grammar/walker still see the directive (so src_cursor advances
+    // and source-map machinery stays consistent), but the macro table
+    // is not mutated.
+    if (suppress_side_effects_) return;
+
     MacroDef m;
     m.name = dict_string_or_empty(d, "name");
     if (m.name.empty()) return;
@@ -794,6 +800,7 @@ void Preprocessor::handle_define(const DictValue& d) {
 }
 
 void Preprocessor::handle_undef(const DictValue& d) {
+    if (suppress_side_effects_) return;
     auto name = dict_string_or_empty(d, "name");
     if (!name.empty()) state_.macros.erase(name);
 }
@@ -968,6 +975,12 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
         return;
     }
 
+    // Suppressed inside a not-taken `\`ifdef` branch: the directive
+    // line was already skipped via src_cursor advance above; we just
+    // need to NOT actually open / parse / walk the included file
+    // (which would mutate the macro table and included_files).
+    if (suppress_side_effects_) return;
+
     std::string canonical;
     std::string include_text;
 
@@ -1116,7 +1129,16 @@ void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
         } else {
             std::string discard;
             std::size_t saved = state_.spans.size();
+            // Suppress state mutations (macro register/erase,
+            // included_files push) for the not-taken branch — SV LRM
+            // says directives inside an untaken `\`ifdef` don't
+            // execute. Save and restore on top of any outer suppress
+            // already in effect (nested ifdef inside a skipped block
+            // must stay suppressed regardless of inner take/skip).
+            bool saved_suppress = suppress_side_effects_;
+            suppress_side_effects_ = true;
             walk(branch, discard, src_cursor, source, parent_span_id);
+            suppress_side_effects_ = saved_suppress;
             // Discarded branch's spans aren't in the output stream.
             state_.spans.resize(saved);
         }

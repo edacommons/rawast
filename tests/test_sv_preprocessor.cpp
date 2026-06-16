@@ -546,3 +546,94 @@ TEST_CASE("Preprocessor::process: define/undef/define cycle ends defined") {
     REQUIRE(pp.is_defined("X"));
     CHECK(pp.get_macro("X")->body == "2");
 }
+
+// ─── `\`ifdef` / `\`ifndef` / `\`endif` ──────────────────────────────
+
+TEST_CASE("sv_pp ifdef: grammar parses `\\`ifdef NAME ... \\`endif`") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`ifdef FOO\n`endif\n");
+    CHECK(str_field(ast, "type") == "ifdef");
+    CHECK(str_field(ast, "cond") == "FOO");
+}
+
+TEST_CASE("Preprocessor::process: ifdef taken when macro defined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`define FLAG 1\n"
+        "`ifdef FLAG\n"
+        "`define INSIDE 1\n"
+        "`endif\n"
+    );
+    REQUIRE(pp.is_defined("FLAG"));
+    CHECK(pp.is_defined("INSIDE"));
+}
+
+TEST_CASE("Preprocessor::process: ifdef skipped when macro undefined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`ifdef NEVER\n"
+        "`define INSIDE 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("NEVER"));
+    CHECK_FALSE(pp.is_defined("INSIDE"));
+}
+
+TEST_CASE("Preprocessor::process: ifndef inverts ifdef") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`ifndef NEVER\n"
+        "`define DEFAULT 1\n"
+        "`endif\n"
+    );
+    // ifndef takes its body when the macro is NOT defined.
+    CHECK(pp.is_defined("DEFAULT"));
+}
+
+TEST_CASE("Preprocessor::process: ifdef else-branch taken when condition false") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`ifdef NEVER\n"
+        "`define TAKEN 1\n"
+        "`else\n"
+        "`define ALT 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("TAKEN"));
+    CHECK(pp.is_defined("ALT"));
+}
+
+TEST_CASE("Preprocessor::process: nested ifdef inside taken body") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`define OUTER 1\n"
+        "`define INNER 1\n"
+        "`ifdef OUTER\n"
+        "`ifdef INNER\n"
+        "`define BOTH 1\n"
+        "`endif\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("BOTH"));
+}
+
+TEST_CASE("Preprocessor::process: nested ifdef inside skipped body is skipped") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`define INNER 1\n"
+        "`ifdef NEVER_OUTER\n"
+        "`ifdef INNER\n"
+        "`define BOTH 1\n"
+        "`endif\n"
+        "`endif\n"
+    );
+    // Outer skipped means inner's body doesn't execute even though
+    // INNER is defined.
+    CHECK_FALSE(pp.is_defined("BOTH"));
+}

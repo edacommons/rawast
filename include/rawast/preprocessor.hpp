@@ -492,6 +492,17 @@ private:
     const Grammar&    pp_grammar_;
     PpOptions         opts_;
     PreprocessorState state_;
+
+    // Scoped guard set by `\`ifdef`/`\`ifndef`/`\`if` handlers when
+    // walking a NOT-TAKEN branch. The walker still traverses the
+    // branch (so src_cursor advances over the source bytes and
+    // nested directives' shapes are visited), but per-directive
+    // handlers check this flag and skip state mutations: handle_define
+    // doesn't register the macro, handle_undef doesn't erase, etc.
+    // Source-map spans and output bytes are also discarded by
+    // walk_or_discard, but those are already routed through a
+    // disposable buffer; this flag closes the macro-table gap.
+    bool suppress_side_effects_ = false;
 };
 
 } // namespace rawast

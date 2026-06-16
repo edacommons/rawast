@@ -42,7 +42,56 @@ PP_ITEM: choice {
   <DEFINE>,
   <UNDEF>,
   <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
   <TEXT_LINE>
+}
+
+// `\`ifdef NAME` / `\`ifndef NAME` — conditional compilation. The body
+// captures repeat <PP_ITEM> up to the matching `\`else` (optional) and
+// `\`endif`. PP_ITEM's TEXT_LINE alternative has negative-lookaheads
+// on the structural close tokens, so the body's repeat terminates at
+// `\`else` / `\`endif` instead of consuming those lines as text.
+//
+// Both shapes hit the same walker handler (handle_ifdef) with an
+// `invert` flag — `ifndef` is just `ifdef` with the take/skip
+// decision flipped. Both emit `{type, cond, body, [else_branch]}`
+// that the walker dispatches on.
+IFDEF: sequence dict {
+  "`ifdef":type="ifdef",
+  linespace,
+  identifier:cond=@,
+  linespace,
+  "\n",
+  <BODY>:body=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif",
+  linespace,
+  "\n"
+}
+
+IFNDEF: sequence dict {
+  "`ifndef":type="ifndef",
+  linespace,
+  identifier:cond=@,
+  linespace,
+  "\n",
+  <BODY>:body=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif",
+  linespace,
+  "\n"
+}
+
+BODY: sequence array {
+  repeat <PP_ITEM>
+}
+
+ELSE_BRANCH: sequence dict {
+  "`else",
+  linespace,
+  "\n",
+  <BODY>:body=@
 }
 
 // `\`undef NAME` — remove `NAME` from the active macro table. No-op
@@ -79,6 +128,9 @@ INCLUDE: sequence dict {
 // it up unchanged. Trailing newline emission across multi-line text
 // is a follow-up (see the walker's text emit logic in preprocessor.cpp).
 TEXT_LINE: sequence dict {
+  !"`endif",
+  !"`else",
+  !"`elsif",
   *:text=@,
   "\n":type="text"
 }
