@@ -250,3 +250,66 @@ TEST_CASE("sv_pp define: macro with multiple parameters round-trips") {
     auto ast = parse(g, "`define ADD(x,y) x + y\n");
     CHECK(save(g, ast) == "`define ADD(x,y) x + y\n");
 }
+
+// ─── MACRO_USE arguments inside body ──────────────────────────────
+
+TEST_CASE("sv_pp define: body MACRO_USE with one argument") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(x)\n");
+    auto body = body_of(ast);
+    REQUIRE(body);
+    REQUIRE(body->data().size() == 1);
+    auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
+    REQUIRE(seg);
+    CHECK(str_field(seg, "type") == "macro_use");
+    CHECK(str_field(seg, "name") == "OTHER");
+    auto args = std::dynamic_pointer_cast<ArrayValue>(seg->data()["args"]);
+    REQUIRE(args);
+    REQUIRE(args->data().size() == 1);
+    CHECK(as_string(args->data()[0])->data() == "x");
+}
+
+TEST_CASE("sv_pp define: body MACRO_USE with multiple arguments") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(x,y,z)\n");
+    auto body = body_of(ast);
+    REQUIRE(body);
+    REQUIRE(body->data().size() == 1);
+    auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
+    REQUIRE(seg);
+    auto args = std::dynamic_pointer_cast<ArrayValue>(seg->data()["args"]);
+    REQUIRE(args);
+    REQUIRE(args->data().size() == 3);
+    CHECK(as_string(args->data()[0])->data() == "x");
+    CHECK(as_string(args->data()[1])->data() == "y");
+    CHECK(as_string(args->data()[2])->data() == "z");
+}
+
+TEST_CASE("sv_pp define: body MACRO_USE with no args when `(` not adjacent") {
+    auto g = load_grammar();
+    // Space between backtick-ident and `(` means no args — the
+    // `(...)` is text in the surrounding body.
+    auto ast = parse(g, "`define A `OTHER (x)\n");
+    auto body = body_of(ast);
+    REQUIRE(body);
+    // First segment is macro_use without args
+    auto seg0 = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
+    REQUIRE(seg0);
+    CHECK(str_field(seg0, "type") == "macro_use");
+    CHECK(str_field(seg0, "name") == "OTHER");
+    CHECK(seg0->data().find("args") == seg0->data().end());
+    // Subsequent segments include the literal ` (x)` text + refs.
+    REQUIRE(body->data().size() >= 2);
+}
+
+TEST_CASE("sv_pp define: body MACRO_USE single arg round-trips") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(x)\n");
+    CHECK(save(g, ast) == "`define A `OTHER(x)\n");
+}
+
+TEST_CASE("sv_pp define: body MACRO_USE multi arg round-trips") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(x,y,z)\n");
+    CHECK(save(g, ast) == "`define A `OTHER(x,y,z)\n");
+}

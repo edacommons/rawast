@@ -46,7 +46,23 @@ PARAMS: sequence array {
 
 MACRO_USE: sequence dict {
   "`":type="macro_use",
-  identifier:name=@
+  identifier:name=@,
+  ?<MACRO_ARGS>:args=@
+}
+
+// `\`OTHER(x, y)` — call-site argument list. Same SV-LRM adjacency
+// rule as DEFINE's parameter list: the `(` must immediately follow
+// the macro name (no whitespace) to be argument capture; with a
+// space it stays as part of the surrounding body.
+//
+// v1: identifier-only args. Full expression arguments with nested
+// parens, strings, and embedded macro calls land as a follow-up
+// once the engine grows a multi-stop primitive (the comma-or-paren
+// boundary isn't expressible with single-sibling scope today).
+MACRO_ARGS: sequence array {
+  "(",
+  repeat identifier separator ",",
+  ")"
 }
 
 STRING: sequence dict {
