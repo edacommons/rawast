@@ -44,6 +44,7 @@ PP_ITEM: choice {
   <INCLUDE>,
   <IFDEF>,
   <IFNDEF>,
+  <IF>,
   <TEXT_LINE>
 }
 
@@ -90,6 +91,43 @@ BODY: sequence array {
 ELSE_BRANCH: sequence dict {
   "`else",
   linespace,
+  "\n",
+  <BODY>:body=@
+}
+
+// `\`if EXPR` / `\`elsif EXPR` — the expression form of conditional
+// compilation. Each `\`if`/`\`elsif` is one entry in the `branches`
+// list (first entry is the `\`if`, rest are `\`elsif`s); the walker
+// evaluates each entry's `cond` via `PpOptions::expr_eval` and walks
+// the first true branch's body. EXPR is captured as raw text — the
+// host's expr_eval callback owns parsing it (composing sv_pp_expr +
+// default_pp_expr_eval, or its own evaluator).
+//
+// Per SV LRM, `\`else` and `\`endif` close the chain; the optional
+// ELSE_BRANCH is reused from `\`ifdef`. TEXT_LINE's negative
+// lookahead on `\`elsif` keeps the BODY's repeat from swallowing
+// the elsif keyword as text.
+IF: sequence dict {
+  <IF_HEAD>:branches[]=@,
+  repeat <ELSIF>:branches[]=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif":type="if",
+  linespace,
+  "\n"
+}
+
+IF_HEAD: sequence dict {
+  "`if",
+  linespace,
+  *:cond=@,
+  "\n",
+  <BODY>:body=@
+}
+
+ELSIF: sequence dict {
+  "`elsif",
+  linespace,
+  *:cond=@,
   "\n",
   <BODY>:body=@
 }

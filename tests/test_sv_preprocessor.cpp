@@ -637,3 +637,148 @@ TEST_CASE("Preprocessor::process: nested ifdef inside skipped body is skipped") 
     // INNER is defined.
     CHECK_FALSE(pp.is_defined("BOTH"));
 }
+
+// ─── `\`if` / `\`elsif` / `\`else` / `\`endif` ───────────────────────
+//
+// Cond is captured as raw text (StringValue). The host's
+// PpOptions::expr_eval callback is responsible for parsing the cond
+// text into an AST and evaluating it — typically by composing
+// sv_pp_expr.rawast with default_pp_expr_eval. The tests below stub
+// expr_eval with a trivial truthiness check ("TRUE"/"FALSE") so
+// they exercise the walker's branch-selection logic in isolation.
+
+TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`endif`") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`if FOO\n`endif\n");
+    CHECK(str_field(ast, "type") == "if");
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    REQUIRE(d);
+    auto br_it = d->data().find("branches");
+    REQUIRE(br_it != d->data().end());
+    auto branches = std::dynamic_pointer_cast<ArrayValue>(br_it->second);
+    REQUIRE(branches);
+    REQUIRE(branches->data().size() == 1);
+    CHECK(str_field(branches->data()[0], "cond") == "FOO");
+}
+
+TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`elsif EXPR ... \\`endif`") {
+    auto g = load_grammar();
+    auto ast = parse(g,
+        "`if FOO\n"
+        "`elsif BAR\n"
+        "`elsif BAZ\n"
+        "`endif\n");
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    REQUIRE(d);
+    auto branches = std::dynamic_pointer_cast<ArrayValue>(
+        d->data().find("branches")->second);
+    REQUIRE(branches);
+    REQUIRE(branches->data().size() == 3);
+    CHECK(str_field(branches->data()[0], "cond") == "FOO");
+    CHECK(str_field(branches->data()[1], "cond") == "BAR");
+    CHECK(str_field(branches->data()[2], "cond") == "BAZ");
+}
+
+namespace {
+
+// Stub expr_eval: cond text equals "TRUE" → true, else false.
+// Real callers will compose sv_pp_expr parsing + default_pp_expr_eval.
+auto stub_truthy_eval() {
+    return [](const ValuePtr& cond) -> std::optional<bool> {
+        auto s = as_string(cond);
+        if (!s) return std::nullopt;
+        return s->data() == "TRUE";
+    };
+}
+
+} // namespace
+
+TEST_CASE("Preprocessor::process: `if takes first branch when expr is true") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.expr_eval = stub_truthy_eval();
+    Preprocessor pp(g, opts);
+    pp.process(
+        "`if TRUE\n"
+        "`define A 1\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("A"));
+}
+
+TEST_CASE("Preprocessor::process: `if skips body when expr is false") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.expr_eval = stub_truthy_eval();
+    Preprocessor pp(g, opts);
+    pp.process(
+        "`if FALSE\n"
+        "`define A 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("A"));
+}
+
+TEST_CASE("Preprocessor::process: `elsif taken when `if false") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.expr_eval = stub_truthy_eval();
+    Preprocessor pp(g, opts);
+    pp.process(
+        "`if FALSE\n"
+        "`define A 1\n"
+        "`elsif TRUE\n"
+        "`define B 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("A"));
+    CHECK(pp.is_defined("B"));
+}
+
+TEST_CASE("Preprocessor::process: first matching branch wins, rest skipped") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.expr_eval = stub_truthy_eval();
+    Preprocessor pp(g, opts);
+    pp.process(
+        "`if TRUE\n"
+        "`define A 1\n"
+        "`elsif TRUE\n"
+        "`define B 1\n"
+        "`endif\n"
+    );
+    CHECK(pp.is_defined("A"));
+    CHECK_FALSE(pp.is_defined("B"));
+}
+
+TEST_CASE("Preprocessor::process: `else taken when all branches false") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.expr_eval = stub_truthy_eval();
+    Preprocessor pp(g, opts);
+    pp.process(
+        "`if FALSE\n"
+        "`define A 1\n"
+        "`elsif FALSE\n"
+        "`define B 1\n"
+        "`else\n"
+        "`define C 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("A"));
+    CHECK_FALSE(pp.is_defined("B"));
+    CHECK(pp.is_defined("C"));
+}
+
+TEST_CASE("Preprocessor::process: `if without expr_eval callback warns + skips") {
+    auto g = load_grammar();
+    // No expr_eval set; walker emits a warning and treats branch as false.
+    Preprocessor pp(g);
+    pp.process(
+        "`if FOO\n"
+        "`define A 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("A"));
+    CHECK_FALSE(pp.warnings().empty());
+}

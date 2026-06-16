@@ -1181,7 +1181,12 @@ void Preprocessor::handle_if(const DictValue& d, std::string& out,
         } else {
             std::string discard;
             std::size_t saved = state_.spans.size();
+            // Same side-effect suppression as handle_ifdef — not-taken
+            // branches must not register/erase macros or push includes.
+            bool saved_suppress = suppress_side_effects_;
+            suppress_side_effects_ = true;
             walk(branch, discard, src_cursor, source, parent_span_id);
+            suppress_side_effects_ = saved_suppress;
             state_.spans.resize(saved);
         }
     };
