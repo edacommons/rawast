@@ -243,6 +243,45 @@ struct PpOptions {
     bool trace = false;
 };
 
+// Generic AST evaluator for preprocessor `\`if` conditions. Walks
+// the documented expression-AST shape (see grammars/sv_pp_expr.rawast)
+// and returns a tri-state result:
+//
+//   true   — condition holds
+//   false  — condition does not hold
+//   nullopt — undecidable (unknown call name, non-int operand of an
+//            arithmetic op, ref without a resolver) — the walker
+//            records a warning and treats it as false; hosts can
+//            elevate via their own policy.
+//
+// The AST shape (uniform across any grammar emitting it):
+//
+//   {type:"int",    value: <int>}
+//   {type:"ref",    value: <name>}
+//   {type:"paren",  value: <expr>}
+//   {type:"call",   name: <fn>, args: [<expr>, ...]}
+//                               // built-in: name == "defined" with
+//                               // a single ref arg returns the macro's
+//                               // is_defined state. Any other name is
+//                               // nullopt (host extension point).
+//   {op: "&&"/"||"/"!"/"=="/"!="/"<"/">"/"<="/">="/"+"/"-"/"*"/"/"/"%",
+//    args: [<expr>, ...]}        // operators evaluated as documented
+//                               // in grammars/sv_pp_expr.rawast
+//
+// `ref_resolver`: callback that returns the macro body for a name,
+// or nullopt if not defined. Decouples the evaluator from any specific
+// Preprocessor — testable in isolation, reusable by any host. For an
+// integer-valued macro (`\`define WIDTH 32`), the resolver returns the
+// body verbatim; the evaluator parses it as an integer when used in
+// arithmetic context, otherwise the truthiness of "defined" alone
+// drives boolean context (`\`if FOO` is true iff FOO is defined and
+// resolves to a non-zero integer or to a string that doesn't parse as
+// an integer — defined-and-non-empty is truthy).
+std::optional<bool> default_pp_expr_eval(
+    const ValuePtr& cond,
+    const std::function<std::optional<std::string>(
+        const std::string& name)>& ref_resolver);
+
 // The user-facing entry point for preprocessing. Owns the active
 // PreprocessorState; orchestrates parse + walk for the configured
 // preprocessor grammar (e.g. `sv_preprocessor`).
@@ -331,6 +370,24 @@ public:
     PreprocessorState snapshot() const { return state_; }
     void restore(PreprocessorState state) { state_ = std::move(state); }
     void reset() { state_ = {}; }
+
+    // ─── Convenience wiring ────────────────────────────────────────
+
+    // Bind opts_.expr_eval to the generic AST evaluator above,
+    // resolving refs through this Preprocessor's macro table. Use
+    // when the preprocessor grammar produces the documented
+    // expression-AST shape and you don't need custom evaluation
+    // semantics on top of it.
+    //
+    //   Preprocessor pp(grammar);
+    //   pp.use_default_expr_eval();
+    //   auto out = pp.process(text);
+    //
+    // Overwrites any previously-set expr_eval callback. To extend
+    // the default (e.g. add custom `call` handlers), wire your own
+    // expr_eval that delegates to default_pp_expr_eval for the
+    // shapes it doesn't handle.
+    void use_default_expr_eval();
 
 private:
     // Walk the value tree produced by parsing through pp_grammar_,

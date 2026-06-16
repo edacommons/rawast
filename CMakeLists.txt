@@ -61,6 +61,7 @@ add_library(rawast STATIC
     src/parsers_tcl.cpp
     src/parsers_registry.cpp
     src/preprocessor.cpp
+    src/preprocessor_eval.cpp
 )
 add_library(rawast::rawast ALIAS rawast)
 
