@@ -40,8 +40,20 @@ PP_FILE: sequence array {
 
 PP_ITEM: choice {
   <DEFINE>,
+  <UNDEF>,
   <INCLUDE>,
   <TEXT_LINE>
+}
+
+// `\`undef NAME` — remove `NAME` from the active macro table. No-op
+// (silently) if `NAME` wasn't defined. handle_undef in the walker
+// just calls `state_.macros.erase(name)`.
+UNDEF: sequence dict {
+  "`undef":type="undef",
+  linespace,
+  identifier:name=@,
+  linespace,
+  "\n"
 }
 
 // `\`include "path/to/file.svh"` — the host's `include_source`

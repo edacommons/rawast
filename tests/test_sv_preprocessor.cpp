@@ -506,3 +506,43 @@ TEST_CASE("Preprocessor::process: include callback nullopt → built-in fallback
     REQUIRE_FALSE(warnings.empty());
     CHECK(warnings.back().message.find("file not found") != std::string::npos);
 }
+
+// ─── `\`undef` ────────────────────────────────────────────────────────
+
+TEST_CASE("sv_pp undef: grammar parses `\\`undef NAME`") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`undef FOO\n");
+    CHECK(str_field(ast, "type") == "undef");
+    CHECK(str_field(ast, "name") == "FOO");
+}
+
+TEST_CASE("Preprocessor::process: define then undef leaves macro undefined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define FOO 1\n");
+    REQUIRE(pp.is_defined("FOO"));
+    pp.process("`undef FOO\n");
+    CHECK_FALSE(pp.is_defined("FOO"));
+}
+
+TEST_CASE("Preprocessor::process: undef of non-existent macro is silent") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`undef NEVER_DEFINED\n");
+    CHECK_FALSE(pp.is_defined("NEVER_DEFINED"));
+    // No warning — undef of an undefined macro is a no-op per LRM.
+    auto& warnings = pp.warnings();
+    CHECK(warnings.empty());
+}
+
+TEST_CASE("Preprocessor::process: define/undef/define cycle ends defined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`define X 1\n"
+        "`undef X\n"
+        "`define X 2\n"
+    );
+    REQUIRE(pp.is_defined("X"));
+    CHECK(pp.get_macro("X")->body == "2");
+}
