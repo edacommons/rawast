@@ -170,13 +170,37 @@ MACRO_USE: sequence dict {
   ?<MACRO_ARGS>:args=@
 }
 
-// Args at the use site. Overrides with its own `ignore linespace`
-// for internal whitespace.
+// Args at the use site. LRM §22.5.1: each arg is a balanced-paren
+// token run terminating at the top-level `,` or `)`. The scope
+// captures each arg's raw bytes (StringValue), with nested PAREN /
+// BRACKET / BRACE / std.string as atomic INNERs so embedded commas
+// and closing parens inside nested structures don't end the arg.
+//
+// Multi-stop on the scope (load-time resolver): stops at `,` (the
+// repeat separator) for non-final args and `)` (the post-repeat
+// sibling) for the final arg.
+//
+// Result shape: ArrayValue<StringValue>. Each StringValue holds the
+// raw bytes of one arg — the same flat-text shape the substitution
+// pipeline already consumes; the structural improvement is purely
+// in which call sites the grammar accepts.
+//
+// `ignore linespace` applies between structural items (around `,`,
+// before `)`); whitespace INSIDE an arg span (e.g. `a + 1`) is part
+// of the captured bytes — scope's byte-scan bypasses the ignore set.
 MACRO_ARGS ignore linespace: sequence array {
   "(",
-  repeat identifier separator ",",
+  repeat scope { <PAREN>, <BRACKET>, <BRACE>, std.string } separator ",",
   ")"
 }
+
+// Balanced-paren INNER for MACRO_ARGS. Self-referential via INNERs
+// so arbitrary nesting like `((a, b), c)` captures atomically. The
+// scope's body bytes are folded into the surrounding arg span
+// verbatim — these rules exist for atomicity, not for AST shape.
+PAREN:   sequence { "(", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, ")" }
+BRACKET: sequence { "[", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, "]" }
+BRACE:   sequence { "{", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, "}" }
 
 STRING: sequence dict {
   std.string:type="string":value=@

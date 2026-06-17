@@ -9,6 +9,7 @@
 #include <rawast/grammar.hpp>
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
+#include <rawast/preprocessor.hpp>
 #include <rawast/value.hpp>
 
 #include <sstream>
@@ -431,6 +432,97 @@ TEST_CASE("sv_pp define: body MACRO_USE multi arg round-trips") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(x,y,z)\n");
     CHECK(save(g, ast) == "`define A `OTHER(x,y,z)\n");
+}
+
+// ─── Richer MACRO_ARGS — LRM §22.5.1 balanced-token args ───────────────
+//
+// MACRO_ARGS captures each arg as a balanced-paren token run terminating
+// at the top-level `,` or `)`. The grammar uses nested PAREN / BRACKET /
+// BRACE / std.string INNERs so embedded commas and closing parens inside
+// nested structures don't end the arg. AST shape is preserved
+// (ArrayValue<StringValue>) — each StringValue holds the arg's raw bytes.
+
+// Helper: pull the args array out of a body whose first segment is a
+// macro_use dict.
+namespace {
+std::shared_ptr<ArrayValue> macro_use_args(const ValuePtr& ast) {
+    auto body = body_of(ast);
+    REQUIRE(body);
+    REQUIRE(!body->data().empty());
+    auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
+    REQUIRE(seg);
+    REQUIRE(str_field(seg, "type") == "macro_use");
+    auto it = seg->data().find("args");
+    REQUIRE(it != seg->data().end());
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
+    REQUIRE(arr);
+    return arr;
+}
+} // namespace
+
+TEST_CASE("sv_pp MACRO_ARGS: numeric literal args") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(5, 10)\n");
+    auto args = macro_use_args(ast);
+    REQUIRE(args->data().size() == 2);
+    CHECK(as_string(args->data()[0])->data() == "5");
+    CHECK(as_string(args->data()[1])->data() == "10");
+}
+
+TEST_CASE("sv_pp MACRO_ARGS: string literal arg") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(\"hello, world\")\n");
+    auto args = macro_use_args(ast);
+    REQUIRE(args->data().size() == 1);
+    // The arg span captures the string literal verbatim; the embedded
+    // `,` inside the quotes does NOT split the args list (std.string
+    // INNER consumes the whole `"…"` atomically).
+    CHECK(as_string(args->data()[0])->data() == "\"hello, world\"");
+}
+
+TEST_CASE("sv_pp MACRO_ARGS: expression arg with operators") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(a + 1, b * 2)\n");
+    auto args = macro_use_args(ast);
+    REQUIRE(args->data().size() == 2);
+    CHECK(as_string(args->data()[0])->data() == "a + 1");
+    CHECK(as_string(args->data()[1])->data() == "b * 2");
+}
+
+TEST_CASE("sv_pp MACRO_ARGS: nested parens — `,` inside `()` doesn't split") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER((a, b), c)\n");
+    auto args = macro_use_args(ast);
+    REQUIRE(args->data().size() == 2);
+    CHECK(as_string(args->data()[0])->data() == "(a, b)");
+    CHECK(as_string(args->data()[1])->data() == "c");
+}
+
+TEST_CASE("sv_pp MACRO_ARGS: nested function call arg") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define A `OTHER(foo(1, 2), 3)\n");
+    auto args = macro_use_args(ast);
+    REQUIRE(args->data().size() == 2);
+    CHECK(as_string(args->data()[0])->data() == "foo(1, 2)");
+    CHECK(as_string(args->data()[1])->data() == "3");
+}
+
+// End-to-end: the canonical case from earlier debugging — `\`DOUBLE(5)`
+// with a numeric literal arg that the previous identifier-only grammar
+// dropped to text. Combines: rich MACRO_ARGS (numeric arg captured),
+// nested macro_use arg substitution (LRM §22.5.1 — Y substituted in
+// `\`INC(Y)`), and use-site whitespace (no longer required to be
+// adjacency-tight).
+TEST_CASE("Preprocessor::process: nested macro with numeric outer arg") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define INC(X) X + 1\n"
+        "`define DOUBLE(Y) `INC(Y) + `INC(Y)\n"
+        "`DOUBLE(5)\n"
+    );
+    CHECK(out.find("5 + 1") != std::string::npos);
+    CHECK(out.find("Y + 1") == std::string::npos);
 }
 
 // ─── Preprocessor::process() integration ───────────────────────────────
