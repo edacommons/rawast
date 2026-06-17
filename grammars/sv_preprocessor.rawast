@@ -1,40 +1,35 @@
 // SystemVerilog preprocessor grammar.
 //
-// First cut: `\`define NAME [(p1, p2, …)] BODY` with the body parsed
-// as a segment array via scope. Each body segment is one of:
+// Whitespace model:
 //
-//   {type:"macro_use", name:"OTHER"}      // ``OTHER` — nested macro invocation
-//   {type:"string",    value:"..."}       // "..." literal
-//   {type:"ref",       value:"FOO"}       // bare identifier (potential
-//                                          // parameter reference; resolution
-//                                          // happens at expansion time)
-//   StringValue                            // raw text run between segments
+//   - `ignore linespace` declared ONCE at PP_FILE. Every rule reached
+//     from PP_FILE inherits this policy unless it declares its own.
+//     `RULE ignore:` (empty list) OVERRIDES the inherited policy for
+//     that rule's scope.
 //
-// Macro parameter list — when present — is `(p1, p2, …)` IMMEDIATELY
-// after the macro name (no whitespace). Per SV LRM:
+//   - The engine runs the OUTER (caller's) `run_ignore` at every
+//     rule-frame boundary BEFORE pushing the rule's own override. So
+//     whitespace between two tokens gets eaten by the caller's policy
+//     even when the next token is inside a sub-rule with empty ignore.
 //
-//   `define FOO(x) body     // parameterized: params=["x"], body=body
-//   `define FOO (x) body    // no params, body=`(x) body`
+//   - Postfix `space` / `newline` attributes drive save-side
+//     canonicalisation (each item emits its content followed by the
+//     attribute's whitespace). Parse ignores them.
 //
-// The boundary is preserved by NOT applying `ignore linespace` at
-// rule level — explicit `linespace` items appear at positions where
-// whitespace is allowed; between the macro name and `(`, whitespace
-// fails the PARAMS optional and the bytes become part of the body.
+// Rules that OVERRIDE the inherited ignore:
 //
-// The body terminates at the next newline; scope bypasses ignore-set
-// skipping so whitespace inside the body round-trips verbatim.
+//   DECL                — `ignore:` (empty). Preserves LRM adjacency
+//                         between `identifier` and `(`:
+//                         `\`define FOO(x)` vs `\`define FOO (x)`
+//                         parse as parameterised vs object-like.
+//   MACRO_USE           — same adjacency story for `\`NAME(args)`.
+//   TEXT_LINE           — line content captured verbatim by scope.
 
 use: std
 
 start: <PP_FILE>
 
-// Top-level: a sequence of PP_ITEMs. Each PP_ITEM is either a
-// preprocessor directive (currently just `\`define`; `\`undef`,
-// `\`ifdef`, `\`include`, etc. land as follow-ups) or a TEXT_LINE
-// (one line of non-directive text). PEG ordering tries DEFINE first
-// — its `\`define` literal Key fails fast for any non-`\`define` line
-// — then falls through to TEXT_LINE.
-PP_FILE: sequence array {
+PP_FILE ignore linespace: sequence array {
   repeat <PP_ITEM>
 }
 
@@ -48,39 +43,23 @@ PP_ITEM: choice {
   <TEXT_LINE>
 }
 
-// `\`ifdef NAME` / `\`ifndef NAME` — conditional compilation. The body
-// captures repeat <PP_ITEM> up to the matching `\`else` (optional) and
-// `\`endif`. PP_ITEM's TEXT_LINE alternative has negative-lookaheads
-// on the structural close tokens, so the body's repeat terminates at
-// `\`else` / `\`endif` instead of consuming those lines as text.
-//
-// Both shapes hit the same walker handler (handle_ifdef) with an
-// `invert` flag — `ifndef` is just `ifdef` with the take/skip
-// decision flipped. Both emit `{type, cond, body, [else_branch]}`
-// that the walker dispatches on.
 IFDEF: sequence dict {
-  "`ifdef":type="ifdef",
-  linespace,
+  "`ifdef":type="ifdef" space,
   identifier:cond=@,
-  ?linespace,
   "\n",
   <BODY>:body=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif",
-  ?linespace,
   "\n"
 }
 
 IFNDEF: sequence dict {
-  "`ifndef":type="ifndef",
-  linespace,
+  "`ifndef":type="ifndef" space,
   identifier:cond=@,
-  ?linespace,
   "\n",
   <BODY>:body=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif",
-  ?linespace,
   "\n"
 }
 
@@ -90,94 +69,57 @@ BODY: sequence array {
 
 ELSE_BRANCH: sequence dict {
   "`else",
-  ?linespace,
   "\n",
   <BODY>:body=@
 }
 
-// `\`if EXPR` / `\`elsif EXPR` — the expression form of conditional
-// compilation. Each `\`if`/`\`elsif` is one entry in the `branches`
-// list (first entry is the `\`if`, rest are `\`elsif`s); the walker
-// evaluates each entry's `cond` via `PpOptions::expr_eval` and walks
-// the first true branch's body. EXPR is captured as raw text — the
-// host's expr_eval callback owns parsing it (composing sv_pp_expr +
-// default_pp_expr_eval, or its own evaluator).
-//
-// Per SV LRM, `\`else` and `\`endif` close the chain; the optional
-// ELSE_BRANCH is reused from `\`ifdef`. TEXT_LINE's negative
-// lookahead on `\`elsif` keeps the BODY's repeat from swallowing
-// the elsif keyword as text.
 IF: sequence dict {
   <IF_HEAD>:branches[]=@,
   repeat <ELSIF>:branches[]=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif":type="if",
-  ?linespace,
   "\n"
 }
 
+// IF_HEAD/ELSIF capture cond as Raw. The inherited `ignore linespace`
+// eats whitespace before each Key/Parse but Raw bypasses ignore, so
+// the leading space after the keyword would land in the captured cond.
+// The walker trims it before passing to expr_eval.
 IF_HEAD: sequence dict {
-  "`if",
-  linespace,
+  "`if" space,
   *:cond=@,
   "\n",
   <BODY>:body=@
 }
 
 ELSIF: sequence dict {
-  "`elsif",
-  linespace,
+  "`elsif" space,
   *:cond=@,
   "\n",
   <BODY>:body=@
 }
 
-// `\`undef NAME` — remove `NAME` from the active macro table. No-op
-// (silently) if `NAME` wasn't defined. handle_undef in the walker
-// just calls `state_.macros.erase(name)`.
 UNDEF: sequence dict {
-  "`undef":type="undef",
-  linespace,
+  "`undef":type="undef" space,
   identifier:name=@,
-  ?linespace,
   "\n"
 }
 
-// `\`include "path/to/file.svh"` — the host's `include_source`
-// callback (or the built-in `include_paths` walk if unset) resolves
-// the requested path to source content; handle_include parses and
-// walks the included AST recursively with the current macro table.
-//
-// Per SV LRM the path can also be `<path>` (angle-bracketed system
-// header form); for v1 we accept only the `"..."` form. The
-// `<...>` form is a follow-up — its capture rule needs std.string
-// equivalent for `<...>` delimited tokens.
 INCLUDE: sequence dict {
-  "`include":type="include",
-  linespace,
+  "`include":type="include" space,
   std.string:path=@,
-  ?linespace,
   "\n"
 }
 
-// A single line of arbitrary text. The line's content is captured
-// as a `scope array { <MACRO_USE> }` so embedded `\`NAME` (and
-// `\`NAME(a, b)`) calls surface as MACRO_USE dicts inside the
-// segments array; everything else stays as bare StringValue runs
-// in between. The walker's "text_line" handler iterates segments
-// in order: bare strings emit verbatim, macro_use dicts go through
-// handle_macro_use which expands them through the macro table.
+// A single line of arbitrary text. Line content captured as
+// `scope array { <MACRO_USE> }` so embedded `\`NAME` calls surface
+// as macro_use dicts in segments; everything else stays as bare
+// StringValue text runs. The walker iterates segments.
 //
-// The leading negative-lookaheads still keep TEXT_LINE from claiming
-// lines that start with the structural close tokens of `\`ifdef` /
-// `\`if` (`\`else`, `\`elsif`, `\`endif`) — those need to be left
-// for the surrounding rule to match.
-//
-// MACRO_USE's `?<MACRO_ARGS>` (identifier-only args, no space before
-// `(`) covers the parameterised invocation form. Argument expressions
-// beyond bare identifiers will land once MACRO_ARGS itself grows up
-// (see the comment on MACRO_ARGS below).
-TEXT_LINE: sequence dict {
+// `ignore:` overrides the inherited policy — line whitespace is
+// content. Leading negative-lookaheads keep TEXT_LINE from claiming
+// structural close tokens.
+TEXT_LINE ignore: sequence dict {
   !"`endif",
   !"`else",
   !"`elsif",
@@ -185,67 +127,49 @@ TEXT_LINE: sequence dict {
   "\n":type="text_line"
 }
 
+// `\`define NAME [(p1, …)] body`. The name + optional params sits
+// inside DECL with empty ignore so the LRM adjacency rule survives:
+//
+//   `\`define FOO(x) bar`    → parameterised: params=["x"], body=[bar]
+//   `\`define FOO (x) bar`   → object-like:   no params,   body=[(x) bar]
 DEFINE: sequence dict {
-  "`define":type="define",
-  linespace,
-  identifier:name=@,
-  ?<PARAMS>:params=@,
-  ?linespace,
+  "`define":type="define" space,
+  <DECL>:decl=@ space,
   scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
   "\n"
 }
 
-// PARAMS keeps the strict adjacency at its boundary — its first item
-// is `(` with no preceding `linespace` (so `\`define FOO (x)` does NOT
-// take the optional PARAMS path). Internal whitespace splits two ways:
-//   - After `(` and before `)`, `?linespace` siblings absorb optional
-//     spacing (predictive first-byte check would otherwise reject
-//     PARAM_LIST on a leading space).
-//   - Around the comma inside the list, PARAM_LIST's `ignore linespace`
-//     rule-local policy makes it transparent.
-// PARAMS is a bare `sequence` whose @ value is propagated from
-// PARAM_LIST via `:=@` — DEFINE then binds PARAMS's @ array to the
-// `params` field as before.
-PARAMS: sequence {
+// `ignore:` empty — the engine runs the OUTER PP_FILE's `ignore
+// linespace` at DECL's boundary (eats the space after `\`define`),
+// then DECL's empty policy takes effect for its internal items.
+// `?<PARAMS>` predictive uses DECL's empty: peek raw cursor — `(`
+// takes PARAMS, space skips it.
+DECL ignore: sequence dict {
+  identifier:name=@,
+  ?<PARAMS>:params=@
+}
+
+// PARAMS overrides with its own `ignore linespace` so internal
+// whitespace works — DECL above has empty ignore which would
+// otherwise propagate into PARAMS via inheritance.
+PARAMS ignore linespace: sequence array {
   "(",
-  ?<PARAM_LIST>:=@,
+  repeat identifier separator ",",
   ")"
 }
 
-// `ignore linespace` makes whitespace transparent at every Key/Parse
-// boundary INSIDE the rule, so the spaced canonical form `(x, y)`
-// parses cleanly and saves canonically as `(x,y)`. Known gap:
-// whitespace immediately after `(` or before `)` (`( x, y )`) is
-// not absorbed — adding `?linespace` siblings in PARAMS would fix
-// the parse side but breaks save (emits a phantom space because
-// `?linespace.unparse()` always emits " " without value-tracking
-// for the matched-empty case). Documented; not yet fixed.
-PARAM_LIST ignore linespace: sequence array {
-  repeat identifier separator ","
-}
-
-MACRO_USE: sequence dict {
+// `\`NAME[(args)]` use site. `ignore:` empty for adjacency.
+MACRO_USE ignore: sequence dict {
   "`":type="macro_use",
   identifier:name=@,
   ?<MACRO_ARGS>:args=@
 }
 
-// `\`OTHER(x, y)` — call-site argument list. Same SV-LRM adjacency
-// rule as DEFINE's parameter list: the `(` must immediately follow
-// the macro name (no whitespace) to be argument capture; with a
-// space it stays as part of the surrounding body.
-//
-// v1: identifier-only args. Full expression arguments with nested
-// parens, strings, and embedded macro calls land as a follow-up
-// once the engine grows a multi-stop primitive (the comma-or-paren
-// boundary isn't expressible with single-sibling scope today).
-// Same wrap-inner shape as PARAMS — strict adjacency at the boundary
-// (no leading `linespace` before `(` so `\`FOO (x)` does NOT capture
-// args), loose comma spacing inside via PARAM_LIST's ignore policy
-// plus PARAMS-style `?linespace` for after-`(` and before-`)` ws.
-MACRO_ARGS: sequence {
+// Args at the use site. Overrides with its own `ignore linespace`
+// for internal whitespace.
+MACRO_ARGS ignore linespace: sequence array {
   "(",
-  ?<PARAM_LIST>:=@,
+  repeat identifier separator ",",
   ")"
 }
 

@@ -749,19 +749,26 @@ void Preprocessor::handle_define(const DictValue& d) {
     if (suppress_side_effects_) return;
 
     MacroDef m;
-    m.name = dict_string_or_empty(d, "name");
+
+    // sv_preprocessor.rawast nests name + params under a `decl` field
+    // (DECL sub-rule with `ignore:` empty enforces LRM adjacency).
+    // Older grammars use flat top-level `name`/`params` — pick whichever
+    // shape is present.
+    const DictValue* decl = &d;
+    if (auto it = d.data().find("decl"); it != d.data().end()) {
+        if (auto dd = std::dynamic_pointer_cast<DictValue>(it->second)) {
+            decl = dd.get();
+        }
+    }
+
+    m.name = dict_string_or_empty(*decl, "name");
     if (m.name.empty()) return;
 
-    // New grammar (sv_preprocessor.rawast): `body` is an ArrayValue
-    // of segments and `params` is a separate field. Render segments
-    // back to text and pull params from the dict directly. The
-    // function-like distinction comes from the presence of `params`
-    // (the SV-LRM-correct adjacency check happened at parse time).
     auto body_it = d.data().find("body");
     if (body_it != d.data().end()) {
         if (auto body_arr = as_array(body_it->second)) {
-            if (auto params_it = d.data().find("params");
-                params_it != d.data().end()) {
+            if (auto params_it = decl->data().find("params");
+                params_it != decl->data().end()) {
                 if (auto pa = as_array(params_it->second)) {
                     for (const auto& p : pa->data()) {
                         if (auto s = as_string(p)) {
@@ -1253,6 +1260,20 @@ void Preprocessor::handle_if(const DictValue& d, std::string& out,
                 auto bd = std::dynamic_pointer_cast<DictValue>(b);
                 if (!bd) continue;
                 auto cond = dict_value_or_null(*bd, "cond");
+                // sv_preprocessor.rawast captures cond with `*:cond=@`
+                // (Raw). Raw bypasses the ignore-set, so the leading
+                // space between the keyword and the expression lands
+                // inside cond. Trim before handing to expr_eval.
+                if (auto sv = std::dynamic_pointer_cast<StringValue>(cond)) {
+                    const auto& s = sv->data();
+                    std::size_t i = 0;
+                    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+                    std::size_t j = s.size();
+                    while (j > i && (s[j-1] == ' ' || s[j-1] == '\t')) --j;
+                    if (i > 0 || j < s.size()) {
+                        cond = make_string(s.substr(i, j - i));
+                    }
+                }
                 bool take = false;
                 if (!opts_.expr_eval) {
                     state_.warnings.push_back(

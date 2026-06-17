@@ -70,6 +70,58 @@ std::string str_field(const ValuePtr& v, const std::string& key) {
     return s ? s->data() : std::string{};
 }
 
+// sv_preprocessor.rawast nests name + params under a `decl` sub-dict.
+// These helpers transparently follow the indirection.
+std::string name_of(const ValuePtr& ast) {
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    if (!d) return {};
+    if (auto it = d->data().find("decl"); it != d->data().end()) {
+        return str_field(it->second, "name");
+    }
+    return str_field(ast, "name");
+}
+
+std::shared_ptr<ArrayValue> params_of(const ValuePtr& ast) {
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    if (!d) return {};
+    if (auto it = d->data().find("decl"); it != d->data().end()) {
+        if (auto dd = std::dynamic_pointer_cast<DictValue>(it->second)) {
+            auto p = dd->data().find("params");
+            if (p != dd->data().end()) {
+                return std::dynamic_pointer_cast<ArrayValue>(p->second);
+            }
+        }
+        return nullptr;
+    }
+    auto p = d->data().find("params");
+    if (p == d->data().end()) return nullptr;
+    return std::dynamic_pointer_cast<ArrayValue>(p->second);
+}
+
+bool has_params(const ValuePtr& ast) {
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    if (!d) return false;
+    if (auto it = d->data().find("decl"); it != d->data().end()) {
+        if (auto dd = std::dynamic_pointer_cast<DictValue>(it->second)) {
+            return dd->data().find("params") != dd->data().end();
+        }
+        return false;
+    }
+    return d->data().find("params") != d->data().end();
+}
+
+// Trim leading/trailing horizontal whitespace. `*:cond=@` (Raw) in
+// the grammar bypasses the ignore-set, so cond strings include the
+// space the keyword separator left behind. The walker trims before
+// expr_eval; shape tests use this helper.
+std::string trim_ws(std::string s) {
+    std::size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+    std::size_t j = s.size();
+    while (j > i && (s[j-1] == ' ' || s[j-1] == '\t')) --j;
+    return s.substr(i, j - i);
+}
+
 std::shared_ptr<ArrayValue> body_of(const ValuePtr& ast) {
     auto d = std::dynamic_pointer_cast<DictValue>(ast);
     REQUIRE(d);
@@ -86,7 +138,7 @@ TEST_CASE("sv_pp define: empty body → {type:'define', name, body:[]}") {
     auto g = load_grammar();
     auto ast = parse(g, "`define FOO\n");
     CHECK(str_field(ast, "type") == "define");
-    CHECK(str_field(ast, "name") == "FOO");
+    CHECK(name_of(ast) == "FOO");
     auto body = body_of(ast);
     REQUIRE(body);
     CHECK(body->data().empty());
@@ -95,7 +147,7 @@ TEST_CASE("sv_pp define: empty body → {type:'define', name, body:[]}") {
 TEST_CASE("sv_pp define: simple text body → one StringValue segment") {
     auto g = load_grammar();
     auto ast = parse(g, "`define FOO bar\n");
-    CHECK(str_field(ast, "name") == "FOO");
+    CHECK(name_of(ast) == "FOO");
     auto body = body_of(ast);
     REQUIRE(body);
     // PARAM_REF picks up the identifier `bar` as a typed segment.
@@ -207,9 +259,8 @@ TEST_CASE("sv_pp define: mixed body round-trips") {
 TEST_CASE("sv_pp define: macro with one parameter") {
     auto g = load_grammar();
     auto ast = parse(g, "`define ID(x) x\n");
-    CHECK(str_field(ast, "name") == "ID");
-    auto params = std::dynamic_pointer_cast<ArrayValue>(
-        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    CHECK(name_of(ast) == "ID");
+    auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 1);
     auto p0 = as_string(params->data()[0]);
@@ -226,9 +277,8 @@ TEST_CASE("sv_pp define: macro with one parameter") {
 TEST_CASE("sv_pp define: macro with multiple parameters") {
     auto g = load_grammar();
     auto ast = parse(g, "`define ADD(x,y) x + y\n");
-    CHECK(str_field(ast, "name") == "ADD");
-    auto params = std::dynamic_pointer_cast<ArrayValue>(
-        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    CHECK(name_of(ast) == "ADD");
+    auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 2);
     CHECK(as_string(params->data()[0])->data() == "x");
@@ -240,9 +290,8 @@ TEST_CASE("sv_pp define: macro params accept canonical SV spacing `(x, y)`") {
     // The wrap-inner PARAMS rule keeps boundary-adjacency strict but
     // makes whitespace around `,` inside the parens transparent.
     auto ast = parse(g, "`define ADD(x, y) x + y\n");
-    CHECK(str_field(ast, "name") == "ADD");
-    auto params = std::dynamic_pointer_cast<ArrayValue>(
-        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    CHECK(name_of(ast) == "ADD");
+    auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 2);
     CHECK(as_string(params->data()[0])->data() == "x");
@@ -260,8 +309,7 @@ TEST_CASE("sv_pp define: macro params accept spacing around `,`") {
     // emit nothing when the parse skipped); inlining `?linespace`
     // round-trips as `(x )` instead of `(x)`.
     auto ast = parse(g, "`define F(a ,\tb,c) body\n");
-    auto params = std::dynamic_pointer_cast<ArrayValue>(
-        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 3);
     CHECK(as_string(params->data()[0])->data() == "a");
@@ -274,10 +322,9 @@ TEST_CASE("sv_pp define: macro with no parameter list when `(` not adjacent") {
     // Per SV LRM: a space between FOO and `(` means no params — the
     // `(...)` becomes part of the body.
     auto ast = parse(g, "`define FOO (x) y\n");
-    CHECK(str_field(ast, "name") == "FOO");
+    CHECK(name_of(ast) == "FOO");
     // No `params` field expected (PARAMS optional was skipped).
-    auto d = std::dynamic_pointer_cast<DictValue>(ast);
-    CHECK(d->data().find("params") == d->data().end());
+    CHECK_FALSE(has_params(ast));
     auto body = body_of(ast);
     REQUIRE(body);
     // Body has the `(x) y` content.
@@ -558,7 +605,7 @@ TEST_CASE("sv_pp undef: grammar parses `\\`undef NAME`") {
     auto g = load_grammar();
     auto ast = parse(g, "`undef FOO\n");
     CHECK(str_field(ast, "type") == "undef");
-    CHECK(str_field(ast, "name") == "FOO");
+    CHECK(name_of(ast) == "FOO");
 }
 
 TEST_CASE("Preprocessor::process: define then undef leaves macro undefined") {
@@ -703,7 +750,7 @@ TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`endif`") {
     auto branches = std::dynamic_pointer_cast<ArrayValue>(br_it->second);
     REQUIRE(branches);
     REQUIRE(branches->data().size() == 1);
-    CHECK(str_field(branches->data()[0], "cond") == "FOO");
+    CHECK(trim_ws(str_field(branches->data()[0], "cond")) == "FOO");
 }
 
 TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`elsif EXPR ... \\`endif`") {
@@ -719,9 +766,9 @@ TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`elsif EXPR ... \\`endif`"
         d->data().find("branches")->second);
     REQUIRE(branches);
     REQUIRE(branches->data().size() == 3);
-    CHECK(str_field(branches->data()[0], "cond") == "FOO");
-    CHECK(str_field(branches->data()[1], "cond") == "BAR");
-    CHECK(str_field(branches->data()[2], "cond") == "BAZ");
+    CHECK(trim_ws(str_field(branches->data()[0], "cond")) == "FOO");
+    CHECK(trim_ws(str_field(branches->data()[1], "cond")) == "BAR");
+    CHECK(trim_ws(str_field(branches->data()[2], "cond")) == "BAZ");
 }
 
 namespace {
