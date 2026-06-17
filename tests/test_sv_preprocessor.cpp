@@ -317,6 +317,18 @@ TEST_CASE("sv_pp define: macro params accept spacing around `,`") {
     CHECK(as_string(params->data()[2])->data() == "c");
 }
 
+TEST_CASE("sv_pp define: macro params accept arbitrary internal spacing `( a , b , c )`") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define F( a , b , c ) body\n");
+    CHECK(name_of(ast) == "F");
+    auto params = params_of(ast);
+    REQUIRE(params);
+    REQUIRE(params->data().size() == 3);
+    CHECK(as_string(params->data()[0])->data() == "a");
+    CHECK(as_string(params->data()[1])->data() == "b");
+    CHECK(as_string(params->data()[2])->data() == "c");
+}
+
 TEST_CASE("sv_pp define: macro with no parameter list when `(` not adjacent") {
     auto g = load_grammar();
     // Per SV LRM: a space between FOO and `(` means no params — the
