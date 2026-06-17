@@ -216,12 +216,10 @@ PARAMS: sequence {
 // boundary INSIDE the rule, so the spaced canonical form `(x, y)`
 // parses cleanly and saves canonically as `(x,y)`. Known gap:
 // whitespace immediately after `(` or before `)` (`( x, y )`) is
-// not absorbed — the engine's first-byte predictive check at
-// PARAM_LIST entry doesn't expand its first-byte set with the
-// ignore-policy parsers, so a leading space byte routes around
-// PARAM_LIST instead of into it. The fix needs an engine-side
-// change (predictive set should fold in the rule-local ignore
-// parsers) or a separator-Ref form the engine accepts cleanly.
+// not absorbed — adding `?linespace` siblings in PARAMS would fix
+// the parse side but breaks save (emits a phantom space because
+// `?linespace.unparse()` always emits " " without value-tracking
+// for the matched-empty case). Documented; not yet fixed.
 PARAM_LIST ignore linespace: sequence array {
   repeat identifier separator ","
 }

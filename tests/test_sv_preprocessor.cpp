@@ -255,9 +255,10 @@ TEST_CASE("sv_pp define: macro params accept spacing around `,`") {
     // `ignore linespace` makes both transparent.
     //
     // Note: whitespace immediately after `(` or before `)` is NOT
-    // currently absorbed (engine-level predictive-set / ignore-set
-    // interaction); a leading-space-after-`(` form `( a ,b)` would
-    // route around the optional PARAM_LIST and emit no params.
+    // currently absorbed. The fix needs a save-side change to
+    // `?linespace` (track "matched-empty vs skipped" so save can
+    // emit nothing when the parse skipped); inlining `?linespace`
+    // round-trips as `(x )` instead of `(x)`.
     auto ast = parse(g, "`define F(a ,\tb,c) body\n");
     auto params = std::dynamic_pointer_cast<ArrayValue>(
         std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);

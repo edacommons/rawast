@@ -324,6 +324,36 @@ FirstByteResult compute_node_first_bytes(
         break;
     }
 
+    // Fold in the resolved rule's rule-local ignore parsers'
+    // first-byte sets. The parse driver runs `run_ignore` BEFORE
+    // matching the rule's first item, so the predictive peek check
+    // at `?<RULE>` entry must accept any byte the ignore parsers
+    // would consume — otherwise a leading space (with
+    // `ignore linespace`) routes around the optional even though
+    // the rule would have happily eaten it. Hardcoded for the std
+    // ignore-parser group; unknown ignore parsers degrade to
+    // "any byte" (over-accept rather than over-reject; the rule
+    // attempt still fails cleanly inside the body).
+    if (auto* igns = g.rule_ignore(resolved); igns && !igns->empty() && result.known) {
+        for (Parser* ip : *igns) {
+            const std::string& pname = ip->name();
+            if (pname == "linespace") {
+                result.bytes.set(' ');
+                result.bytes.set('\t');
+            } else if (pname == "whitespace") {
+                result.bytes.set(' ');
+                result.bytes.set('\t');
+                result.bytes.set('\n');
+                result.bytes.set('\r');
+            } else if (pname == "line_comment" || pname == "block_comment") {
+                result.bytes.set('/');
+            } else {
+                result = any_byte_result();
+                break;
+            }
+        }
+    }
+
     // An optional original node is nullable — its first-byte set
     // is the union with "anything that comes after." The Sequence
     // walker that called us uses `nullable` to decide whether to
