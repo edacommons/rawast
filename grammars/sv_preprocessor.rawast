@@ -195,10 +195,35 @@ DEFINE: sequence dict {
   "\n"
 }
 
-PARAMS: sequence array {
+// PARAMS keeps the strict adjacency at its boundary — its first item
+// is `(` with no preceding `linespace` (so `\`define FOO (x)` does NOT
+// take the optional PARAMS path). Internal whitespace splits two ways:
+//   - After `(` and before `)`, `?linespace` siblings absorb optional
+//     spacing (predictive first-byte check would otherwise reject
+//     PARAM_LIST on a leading space).
+//   - Around the comma inside the list, PARAM_LIST's `ignore linespace`
+//     rule-local policy makes it transparent.
+// PARAMS is a bare `sequence` whose @ value is propagated from
+// PARAM_LIST via `:=@` — DEFINE then binds PARAMS's @ array to the
+// `params` field as before.
+PARAMS: sequence {
   "(",
-  repeat identifier separator ",",
+  ?<PARAM_LIST>:=@,
   ")"
+}
+
+// `ignore linespace` makes whitespace transparent at every Key/Parse
+// boundary INSIDE the rule, so the spaced canonical form `(x, y)`
+// parses cleanly and saves canonically as `(x,y)`. Known gap:
+// whitespace immediately after `(` or before `)` (`( x, y )`) is
+// not absorbed — the engine's first-byte predictive check at
+// PARAM_LIST entry doesn't expand its first-byte set with the
+// ignore-policy parsers, so a leading space byte routes around
+// PARAM_LIST instead of into it. The fix needs an engine-side
+// change (predictive set should fold in the rule-local ignore
+// parsers) or a separator-Ref form the engine accepts cleanly.
+PARAM_LIST ignore linespace: sequence array {
+  repeat identifier separator ","
 }
 
 MACRO_USE: sequence dict {
@@ -216,9 +241,13 @@ MACRO_USE: sequence dict {
 // parens, strings, and embedded macro calls land as a follow-up
 // once the engine grows a multi-stop primitive (the comma-or-paren
 // boundary isn't expressible with single-sibling scope today).
-MACRO_ARGS: sequence array {
+// Same wrap-inner shape as PARAMS — strict adjacency at the boundary
+// (no leading `linespace` before `(` so `\`FOO (x)` does NOT capture
+// args), loose comma spacing inside via PARAM_LIST's ignore policy
+// plus PARAMS-style `?linespace` for after-`(` and before-`)` ws.
+MACRO_ARGS: sequence {
   "(",
-  repeat identifier separator ",",
+  ?<PARAM_LIST>:=@,
   ")"
 }
 

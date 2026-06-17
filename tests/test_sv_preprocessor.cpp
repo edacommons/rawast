@@ -235,6 +235,39 @@ TEST_CASE("sv_pp define: macro with multiple parameters") {
     CHECK(as_string(params->data()[1])->data() == "y");
 }
 
+TEST_CASE("sv_pp define: macro params accept canonical SV spacing `(x, y)`") {
+    auto g = load_grammar();
+    // The wrap-inner PARAMS rule keeps boundary-adjacency strict but
+    // makes whitespace around `,` inside the parens transparent.
+    auto ast = parse(g, "`define ADD(x, y) x + y\n");
+    CHECK(str_field(ast, "name") == "ADD");
+    auto params = std::dynamic_pointer_cast<ArrayValue>(
+        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    REQUIRE(params);
+    REQUIRE(params->data().size() == 2);
+    CHECK(as_string(params->data()[0])->data() == "x");
+    CHECK(as_string(params->data()[1])->data() == "y");
+}
+
+TEST_CASE("sv_pp define: macro params accept spacing around `,`") {
+    auto g = load_grammar();
+    // Tab + multi-space around the comma — PARAM_LIST's rule-local
+    // `ignore linespace` makes both transparent.
+    //
+    // Note: whitespace immediately after `(` or before `)` is NOT
+    // currently absorbed (engine-level predictive-set / ignore-set
+    // interaction); a leading-space-after-`(` form `( a ,b)` would
+    // route around the optional PARAM_LIST and emit no params.
+    auto ast = parse(g, "`define F(a ,\tb,c) body\n");
+    auto params = std::dynamic_pointer_cast<ArrayValue>(
+        std::dynamic_pointer_cast<DictValue>(ast)->data()["params"]);
+    REQUIRE(params);
+    REQUIRE(params->data().size() == 3);
+    CHECK(as_string(params->data()[0])->data() == "a");
+    CHECK(as_string(params->data()[1])->data() == "b");
+    CHECK(as_string(params->data()[2])->data() == "c");
+}
+
 TEST_CASE("sv_pp define: macro with no parameter list when `(` not adjacent") {
     auto g = load_grammar();
     // Per SV LRM: a space between FOO and `(` means no params — the
@@ -355,6 +388,17 @@ TEST_CASE("Preprocessor::process: `\\`define FOO bar` registers macro") {
     CHECK_FALSE(m->is_function_like);
     // Body rendered back to text.
     CHECK(m->body == "bar");
+}
+
+TEST_CASE("Preprocessor::process: spaced-param macro expansion end-to-end") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    // The whole chain: spaced PARAMS, spaced MACRO_ARGS, expansion.
+    auto out = pp.process(
+        "`define ADD(x, y) (x + y)\n"
+        "`ADD(p, q)\n"
+    );
+    CHECK(out.find("(p + q)") != std::string::npos);
 }
 
 TEST_CASE("Preprocessor::process: parameterised define registers params") {
