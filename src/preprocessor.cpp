@@ -581,6 +581,130 @@ std::size_t scan_args(const std::string& text, std::size_t cursor,
     return cursor;
 }
 
+std::string render_segment(const ValuePtr& seg);   // forward decl
+
+// AST-level body substitution. Walks `body_segments` and produces a
+// new ArrayValue with parameter references replaced by arg ASTs.
+// Substitution rule:
+//
+//   ref segment in body finds its arg by NAME (the parameter name
+//   that the body author wrote in `\`define FOO(x) … x …`), and
+//   the arg's POSITION is the index of that name in the params list.
+//
+// Per segment:
+//
+//   - DictValue {type:"ref", value:"NAME"} where NAME is a
+//     parameter → insert args[idx] verbatim (no string conversion).
+//     args[idx] is a ValuePtr — typically StringValue (the current
+//     MACRO_ARGS grammar captures identifier args), but can be any
+//     AST node a richer args grammar produces. ArrayValue args are
+//     spliced flat so multi-token args land as siblings in the
+//     body, not as a nested array.
+//   - DictValue {type:"ref", value:"…"} where the name isn't a
+//     parameter → keep verbatim. It's a non-param identifier
+//     reference whose name appears in the expansion as-is.
+//   - StringValue (text run, or legacy whole-string body) → run
+//     substitute_params text-level: handles `\`"…\`"` stringify
+//     and `\`\`` token-paste markers, plus identifier-level param
+//     refs in legacy bodies that aren't separately AST-typed.
+//   - Other DictValues (macro_use, string literal, etc.) → keep
+//     verbatim. render_macro_body_segments handles them — macro_use
+//     recurses through render_macro_use_inline, so nested expansion
+//     stays in AST land.
+//
+// `args` is positional; arity-mismatched calls pass an empty list
+// from handle_macro_use to disable per-name substitution while
+// still firing stringify/paste markers in text segments.
+std::shared_ptr<ArrayValue> substitute_segments(
+        const ArrayValue& body_segs,
+        const std::vector<std::string>& params,
+        const std::vector<ValuePtr>& args) {
+    std::unordered_map<std::string, std::size_t> param_idx;
+    bool has_params = (params.size() == args.size()) && !params.empty();
+    if (has_params) {
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            param_idx[params[i]] = i;
+        }
+    }
+
+    // Text-segment substitution still wants the args as strings
+    // (it does identifier-level token paste / stringify on flat
+    // text). Render once here so each text segment doesn't pay the
+    // conversion repeatedly. Empty when has_params is false.
+    std::vector<std::string> args_text;
+    if (has_params) {
+        args_text.reserve(args.size());
+        for (const auto& a : args) {
+            if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
+                args_text.push_back(sv->data());
+            } else {
+                args_text.push_back(render_segment(a));
+            }
+        }
+    }
+
+    // Splice an arg AST into `out` — Array args flatten so multi-token
+    // args appear inline rather than as a nested array.
+    auto splice = [](std::vector<ValuePtr>& out, const ValuePtr& arg) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(arg)) {
+            for (const auto& e : arr->data()) out.push_back(e);
+        } else {
+            out.push_back(arg);
+        }
+    };
+
+    auto result = std::make_shared<ArrayValue>();
+    for (const auto& seg : body_segs.data()) {
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+            std::string sub = substitute_params(sv->data(), params, args_text);
+            result->data().push_back(make_string(std::move(sub)));
+            continue;
+        }
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
+            auto type = dict_string_or_empty(*d, "type");
+            if (type == "ref" && has_params) {
+                auto name = dict_string_or_empty(*d, "value");
+                auto it = param_idx.find(name);
+                if (it != param_idx.end()) {
+                    splice(result->data(), args[it->second]);
+                    continue;
+                }
+            }
+            // Nested macro_use: substitute outer params into its arg
+            // list before the inner call expands. LRM §22.5.1 / C99
+            // §6.10.3.1: argument substitution is textual and reaches
+            // into the args of nested invocations.
+            if (type == "macro_use" && has_params) {
+                auto inner_args = std::dynamic_pointer_cast<ArrayValue>(
+                    dict_value_or_null(*d, "args"));
+                if (inner_args && !inner_args->data().empty()) {
+                    auto new_args = std::make_shared<ArrayValue>();
+                    for (const auto& a : inner_args->data()) {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
+                            auto it = param_idx.find(sv->data());
+                            if (it != param_idx.end()) {
+                                splice(new_args->data(), args[it->second]);
+                                continue;
+                            }
+                        }
+                        new_args->data().push_back(a);
+                    }
+                    auto new_use = std::make_shared<DictValue>();
+                    for (const auto& [k, v] : d->data()) {
+                        new_use->data()[k] = (k == "args") ? new_args : v;
+                    }
+                    result->data().push_back(new_use);
+                    continue;
+                }
+            }
+            result->data().push_back(seg);
+            continue;
+        }
+        result->data().push_back(seg);
+    }
+    return result;
+}
+
 } // namespace
 
 std::string Preprocessor::expand_recursive(const std::string& text) {
@@ -647,25 +771,31 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
             }
         }
 
-        std::string body = macro.body;
-        if (macro.is_function_like) {
-            if (macro.params.size() == args.size()) {
-                body = substitute_params(body, macro.params, args);
-            } else {
-                state_.warnings.push_back(
-                    {"macro `" + name + " expects " +
-                     std::to_string(macro.params.size()) +
-                     " args, got " + std::to_string(args.size()),
-                     state_.current_file, state_.current_line});
-                // emit substituted-anyway body verbatim — caller
-                // can decide whether this is acceptable.
-            }
+        // AST-level substitution; render walks segments and
+        // recurses through any nested macro_use AST entries. args
+        // arrived from a text scan of the surrounding body (this
+        // is the legacy text-recursion path), so wrap each into
+        // a StringValue for the AST substituter.
+        std::vector<ValuePtr> args_ast;
+        args_ast.reserve(args.size());
+        for (const auto& a : args) args_ast.push_back(make_string(a));
+
+        std::shared_ptr<ArrayValue> substituted;
+        if (macro.is_function_like && macro.params.size() != args.size()) {
+            state_.warnings.push_back(
+                {"macro `" + name + " expects " +
+                 std::to_string(macro.params.size()) +
+                 " args, got " + std::to_string(args.size()),
+                 state_.current_file, state_.current_line});
+            substituted = substitute_segments(*macro.body_segments, {}, {});
+        } else {
+            substituted = substitute_segments(*macro.body_segments,
+                                              macro.params, args_ast);
         }
 
-        // Recurse with blue paint on this name.
         state_.active_expansions.insert(name);
         ++state_.current_depth;
-        std::string expanded = expand_recursive(body);
+        std::string expanded = render_macro_body_segments(*substituted);
         --state_.current_depth;
         state_.active_expansions.erase(name);
 
@@ -673,6 +803,102 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
         i = after_args;
     }
     return out;
+}
+
+namespace { std::string render_segment(const ValuePtr& seg); }
+
+std::string MacroDef::body_text() const {
+    std::string out;
+    if (!body_segments) return out;
+    for (const auto& seg : body_segments->data()) {
+        out += render_segment(seg);
+    }
+    return out;
+}
+
+std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
+    std::string out;
+    for (const auto& seg : segs.data()) {
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+            // Text may carry literal `\`NAME` patterns that
+            // weren't AST-typed at parse time (legacy text-only
+            // bodies, or expanded-arg text that introduced new
+            // macro references). Run them through the text-based
+            // scan in expand_recursive so they expand naturally.
+            out += expand_recursive(sv->data());
+            continue;
+        }
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
+            auto type = dict_string_or_empty(*d, "type");
+            if (type == "macro_use") {
+                out += render_macro_use_inline(*d);
+                continue;
+            }
+            // ref / string / other typed segments — render leaf.
+            out += render_segment(seg);
+        }
+    }
+    return out;
+}
+
+std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
+    auto name = dict_string_or_empty(d, "name");
+    if (name.empty()) return {};
+
+    std::vector<ValuePtr> args;
+    if (auto args_val = dict_value_or_null(d, "args")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(args_val)) {
+            for (const auto& a : arr->data()) {
+                args.push_back(a);
+            }
+        }
+    }
+
+    auto verbatim = [&]() {
+        std::string s = "`" + name;
+        if (!args.empty()) {
+            s += "(";
+            for (std::size_t i = 0; i < args.size(); ++i) {
+                if (i > 0) s += ",";
+                s += render_segment(args[i]);
+            }
+            s += ")";
+        }
+        return s;
+    };
+
+    // Blue-paint: if this name is already being expanded, emit
+    // verbatim to break the cycle.
+    if (state_.active_expansions.count(name)) return verbatim();
+
+    auto it = state_.macros.find(name);
+    if (it == state_.macros.end()) {
+        // Undefined nested use — leave verbatim. The on_undefined
+        // policy fires at the source-mapped handle_macro_use entry,
+        // not for synthesised inner uses arising from expansion.
+        return verbatim();
+    }
+    const auto& macro = it->second;
+
+    std::shared_ptr<ArrayValue> substituted;
+    if (macro.is_function_like && macro.params.size() != args.size()) {
+        state_.warnings.push_back(
+            {"macro `" + name + " expects " +
+             std::to_string(macro.params.size()) +
+             " args, got " + std::to_string(args.size()),
+             state_.current_file, state_.current_line});
+        substituted = substitute_segments(*macro.body_segments, {}, {});
+    } else {
+        substituted = substitute_segments(*macro.body_segments,
+                                          macro.params, args);
+    }
+
+    state_.active_expansions.insert(name);
+    ++state_.current_depth;
+    std::string result = render_macro_body_segments(*substituted);
+    --state_.current_depth;
+    state_.active_expansions.erase(name);
+    return result;
 }
 
 // Render a segmented macro body (ArrayValue produced by
@@ -733,12 +959,6 @@ std::string render_segment(const ValuePtr& seg) {
     return {};
 }
 
-std::string render_segments(const ArrayValue& body) {
-    std::string out;
-    for (const auto& seg : body.data()) out += render_segment(seg);
-    return out;
-}
-
 } // namespace
 
 void Preprocessor::handle_define(const DictValue& d) {
@@ -778,7 +998,12 @@ void Preprocessor::handle_define(const DictValue& d) {
                     m.is_function_like = true;
                 }
             }
-            m.body = render_segments(*body_arr);
+            // Store the segments AST directly — substitution at
+            // expansion time walks segments and replaces typed `ref`
+            // entries with the corresponding arg value, no string
+            // round-trip.
+            m.body_segments = std::dynamic_pointer_cast<ArrayValue>(
+                body_it->second);
             state_.macros[m.name] = std::move(m);
             return;
         }
@@ -838,14 +1063,21 @@ void Preprocessor::handle_define(const DictValue& d) {
             m.params = split_params(raw_body.substr(1, i - 1));
             std::string body = raw_body.substr(i + 1);
             trim_horiz(body);
-            m.body = std::move(body);
+            // Legacy text body: wrap in a single-segment array.
+            // substitute_segments treats StringValue segments via
+            // substitute_params (text-level), so stringification +
+            // token-paste + identifier-level param substitution
+            // continue to work.
+            m.body_segments = std::make_shared<ArrayValue>();
+            m.body_segments->data().push_back(make_string(std::move(body)));
             m.is_function_like = true;
             state_.macros[m.name] = std::move(m);
             return;
         }
     }
     // Object-like: body is the captured text verbatim.
-    m.body = std::move(raw_body);
+    m.body_segments = std::make_shared<ArrayValue>();
+    m.body_segments->data().push_back(make_string(std::move(raw_body)));
     m.is_function_like = false;
     state_.macros[m.name] = std::move(m);
 }
@@ -864,15 +1096,21 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     auto name = dict_string_or_empty(d, "name");
     if (name.empty()) return;
 
-    // Pull raw argument strings out of the AST. PP_MACRO_ARGS
-    // captures them as an array of sv_balanced_arg strings —
-    // each arg is the raw text between commas at paren depth 0.
-    std::vector<std::string> args;
+    // Pull args out of the AST as ValuePtrs — the substitution path
+    // splices them directly into the body AST at ref positions.
+    // For source-mapped emission we also keep a string view of each
+    // arg (most are identifier StringValues from MACRO_ARGS, so the
+    // string view is the same data without conversion).
+    std::vector<ValuePtr> args;
+    std::vector<std::string> args_text;
     if (auto args_val = dict_value_or_null(d, "args")) {
         if (auto arr = std::dynamic_pointer_cast<ArrayValue>(args_val)) {
             for (const auto& a : arr->data()) {
+                args.push_back(a);
                 if (auto s = std::dynamic_pointer_cast<StringValue>(a)) {
-                    args.push_back(s->data());
+                    args_text.push_back(s->data());
+                } else {
+                    args_text.push_back(render_segment(a));
                 }
             }
         }
@@ -935,31 +1173,33 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     auto it = state_.macros.find(name);
     if (it != state_.macros.end()) {
         const auto& macro = it->second;
-        std::string substituted;
+        std::shared_ptr<ArrayValue> substituted;
         if (macro.is_function_like && macro.params.size() != args.size()) {
-            // Arity mismatch — warn; still run substitute_params to
-            // process \`"…\`" stringification and \`\` token paste,
-            // which should fire regardless of param substitution.
+            // Arity mismatch — warn; still substitute (with empty
+            // param/arg lists) so `\`"…\`"` stringification and
+            // `\`\`` token-paste markers fire regardless.
             state_.warnings.push_back(
                 {"macro `" + name + " expects " +
                  std::to_string(macro.params.size()) +
                  " args, got " + std::to_string(args.size()),
                  state_.current_file, state_.current_line});
-            substituted = substitute_params(macro.body, {}, {});
+            substituted = substitute_segments(*macro.body_segments, {}, {});
         } else {
-            // Function-like with matching arity OR object-like
-            // (no params). The substitution helper handles both
-            // cases — empty params means identifier passes through
-            // but token operators still fire.
-            substituted = substitute_params(macro.body, macro.params, args);
+            // Matching arity OR object-like (no params). Empty
+            // params means identifier-shaped refs in text segments
+            // pass through but stringify / paste markers still
+            // fire, and typed `ref` segments stay verbatim (which
+            // is what we want — they were never parameter refs).
+            substituted = substitute_segments(*macro.body_segments,
+                                              macro.params, args);
         }
-        // Recursively expand inline macro uses inside the body.
-        // The current macro's own name is added to active_expansions
-        // before recursing so `\`A`-in-`\`A`-body becomes a verbatim
-        // emit instead of infinite recursion.
+        // Render the substituted segments. macro_use segments
+        // recurse through render_macro_use_inline — no string
+        // round-trip, no re-parse. Blue-paint guard prevents
+        // `\`A`-in-`\`A`-body infinite recursion.
         state_.active_expansions.insert(name);
         ++state_.current_depth;
-        std::string emitted = expand_recursive(substituted);
+        std::string emitted = render_macro_body_segments(*substituted);
         --state_.current_depth;
         state_.active_expansions.erase(name);
         emit_expansion(emitted, "macro " + name + " expansion");
@@ -973,7 +1213,7 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     // uses). If it returns nullopt, fall through to the static
     // on_undefined policy.
     if (opts_.undefined_handler) {
-        if (auto replacement = opts_.undefined_handler(name, args)) {
+        if (auto replacement = opts_.undefined_handler(name, args_text)) {
             state_.active_expansions.insert(name);
             ++state_.current_depth;
             std::string emitted = expand_recursive(*replacement);
@@ -988,11 +1228,11 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
 
     auto leave_emit = [&]() {
         std::string emit = "`" + name;
-        if (!args.empty()) {
+        if (!args_text.empty()) {
             emit += "(";
-            for (std::size_t i = 0; i < args.size(); ++i) {
+            for (std::size_t i = 0; i < args_text.size(); ++i) {
                 if (i > 0) emit += ",";
-                emit += args[i];
+                emit += args_text[i];
             }
             emit += ")";
         }

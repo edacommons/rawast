@@ -302,7 +302,7 @@ TEST_CASE("mini_preprocessor: `define registers an object-like macro") {
     auto m = pp.get_macro("WIDTH");
     REQUIRE(m != nullptr);
     CHECK(m->name == "WIDTH");
-    CHECK(m->body == "BAR");
+    CHECK(m->body_text() == "BAR");
     CHECK_FALSE(m->is_function_like);
 }
 
@@ -462,7 +462,7 @@ TEST_CASE("mini_preprocessor: PpOptions.predefined seeds the macro table") {
     CHECK(pp.is_defined("PRESET"));
     auto m = pp.get_macro("PRESET");
     REQUIRE(m != nullptr);
-    CHECK(m->body == "ON");
+    CHECK(m->body_text() == "ON");
 }
 
 TEST_CASE("mini_preprocessor: snapshot/restore round-trips active macro state") {
@@ -501,7 +501,7 @@ TEST_CASE("process_ast: synthesized `define registers a macro") {
     CHECK(out.empty());                          // directive emits nothing
     CHECK(pp.is_defined("WIDTH"));
     REQUIRE(pp.get_macro("WIDTH"));
-    CHECK(pp.get_macro("WIDTH")->body == "32");
+    CHECK(pp.get_macro("WIDTH")->body_text() == "32");
 }
 
 TEST_CASE("process_ast: synthesized `undef removes a macro") {

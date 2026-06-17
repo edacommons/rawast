@@ -447,7 +447,7 @@ TEST_CASE("Preprocessor::process: `\\`define FOO bar` registers macro") {
     CHECK(m->params.empty());
     CHECK_FALSE(m->is_function_like);
     // Body rendered back to text.
-    CHECK(m->body == "bar");
+    CHECK(m->body_text() == "bar");
 }
 
 TEST_CASE("Preprocessor::process: spaced-param macro expansion end-to-end") {
@@ -459,6 +459,22 @@ TEST_CASE("Preprocessor::process: spaced-param macro expansion end-to-end") {
         "`ADD(p, q)\n"
     );
     CHECK(out.find("(p + q)") != std::string::npos);
+}
+
+// LRM §22.5.1 / C99 §6.10.3.1: textual arg substitution reaches into
+// the args of nested macro calls before they expand. DOUBLE(5)'s body
+// `\`INC(Y)` must become `\`INC(5)` before INC fires.
+TEST_CASE("Preprocessor::process: outer param substitutes into nested macro_use args") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    // Identifier arg, since MACRO_ARGS currently captures identifiers only.
+    auto out = pp.process(
+        "`define INC(X) X + 1\n"
+        "`define DOUBLE(Y) `INC(Y) + `INC(Y)\n"
+        "`DOUBLE(foo)\n"
+    );
+    CHECK(out.find("foo + 1") != std::string::npos);
+    CHECK(out.find("Y + 1") == std::string::npos);
 }
 
 TEST_CASE("Preprocessor::process: parameterised define registers params") {
@@ -473,7 +489,7 @@ TEST_CASE("Preprocessor::process: parameterised define registers params") {
     CHECK(m->params[0] == "x");
     CHECK(m->params[1] == "y");
     CHECK(m->is_function_like);
-    CHECK(m->body == "x + y");
+    CHECK(m->body_text() == "x + y");
 }
 
 // ─── Multi-directive input ─────────────────────────────────────────
@@ -484,8 +500,8 @@ TEST_CASE("Preprocessor::process: two defines in sequence both register") {
     pp.process("`define FOO 1\n`define BAR 2\n");
     REQUIRE(pp.is_defined("FOO"));
     REQUIRE(pp.is_defined("BAR"));
-    CHECK(pp.get_macro("FOO")->body == "1");
-    CHECK(pp.get_macro("BAR")->body == "2");
+    CHECK(pp.get_macro("FOO")->body_text() == "1");
+    CHECK(pp.get_macro("BAR")->body_text() == "2");
 }
 
 TEST_CASE("Preprocessor::process: define + text + define interleaved") {
@@ -495,8 +511,8 @@ TEST_CASE("Preprocessor::process: define + text + define interleaved") {
     REQUIRE(pp.is_defined("FOO"));
     REQUIRE(pp.is_defined("BAR"));
     // Both macros register regardless of intervening text.
-    CHECK(pp.get_macro("FOO")->body == "1");
-    CHECK(pp.get_macro("BAR")->body == "2");
+    CHECK(pp.get_macro("FOO")->body_text() == "1");
+    CHECK(pp.get_macro("BAR")->body_text() == "2");
 }
 
 TEST_CASE("Preprocessor::process: pure text input passes through") {
@@ -543,7 +559,7 @@ TEST_CASE("Preprocessor::process: include_source callback supplies content") {
     Preprocessor pp(g, opts);
     pp.process("`include \"macros.svh\"\n");
     REQUIRE(pp.is_defined("WIDTH"));
-    CHECK(pp.get_macro("WIDTH")->body == "32");
+    CHECK(pp.get_macro("WIDTH")->body_text() == "32");
     // included_files records the canonical id (host-supplied).
     auto& files = pp.included_files();
     REQUIRE(files.size() == 1);
@@ -592,7 +608,7 @@ TEST_CASE("Preprocessor::process: multi-include with redefine reprocesses each t
     // got redefined three times and its current body reflects the
     // last include pass (`WIDTH at body parse time).
     REQUIRE(pp.is_defined("WIDTH"));
-    CHECK(pp.get_macro("WIDTH")->body == "32");
+    CHECK(pp.get_macro("WIDTH")->body_text() == "32");
     REQUIRE(pp.is_defined("RESULT"));
 }
 
@@ -648,7 +664,7 @@ TEST_CASE("Preprocessor::process: define/undef/define cycle ends defined") {
         "`define X 2\n"
     );
     REQUIRE(pp.is_defined("X"));
-    CHECK(pp.get_macro("X")->body == "2");
+    CHECK(pp.get_macro("X")->body_text() == "2");
 }
 
 // ─── `\`ifdef` / `\`ifndef` / `\`endif` ──────────────────────────────

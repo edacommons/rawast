@@ -267,7 +267,21 @@ void Preprocessor::use_default_expr_eval() {
     opts_.expr_eval = [this](const ValuePtr& cond) -> std::optional<bool> {
         return default_pp_expr_eval(cond,
             [this](const std::string& name) -> std::optional<std::string> {
-                if (auto m = get_macro(name)) return m->body;
+                if (auto m = get_macro(name)) {
+                    // The resolver needs a string view of the body
+                    // (the default expr-eval parses it as an int
+                    // in arithmetic context). Render the segments
+                    // back to text — no expansion, just leaf
+                    // representation.
+                    if (!m->body_segments) return std::nullopt;
+                    std::string s;
+                    for (auto& seg : m->body_segments->data()) {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+                            s += sv->data();
+                        }
+                    }
+                    return s;
+                }
                 return std::nullopt;
             });
     };
@@ -278,7 +292,21 @@ void Preprocessor::use_default_expr_eval(const Grammar& expr_grammar) {
         -> std::optional<bool> {
         auto resolver =
             [this](const std::string& name) -> std::optional<std::string> {
-                if (auto m = get_macro(name)) return m->body;
+                if (auto m = get_macro(name)) {
+                    // The resolver needs a string view of the body
+                    // (the default expr-eval parses it as an int
+                    // in arithmetic context). Render the segments
+                    // back to text — no expansion, just leaf
+                    // representation.
+                    if (!m->body_segments) return std::nullopt;
+                    std::string s;
+                    for (auto& seg : m->body_segments->data()) {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+                            s += sv->data();
+                        }
+                    }
+                    return s;
+                }
                 return std::nullopt;
             };
         // Synthesized AST cond (process_ast path or other grammar

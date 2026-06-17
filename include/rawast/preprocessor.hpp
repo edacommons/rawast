@@ -41,16 +41,33 @@ std::optional<PpOnUndefined> parse_pp_on_undefined(std::string_view name) noexce
 // One macro definition. Function-like macros carry a non-empty
 // `params` list AND `is_function_like = true`; an empty `params`
 // list with `is_function_like = false` is the object-like form.
-// `body` is the raw body text captured by the grammar; substitution
-// happens at expansion time (see preprocessor_macro_lex.cpp once it
-// lands). For Phase 1.2 only object-like macros are supported; the
-// function-like fields are present in the struct so we don't churn
-// the layout when function-like support arrives in Phase 2.
+//
+// `body_segments` keeps the body as an AST array — the same shape
+// the grammar produces for `\`define`'s `body` field (mixed bare
+// StringValue text runs interleaved with typed segments for
+// PARAM_REF / STRING / macro_use). Substitution at expansion time
+// is an AST-to-AST splice: walk the segments, replace each
+// `{type:"ref"}` whose value matches a parameter name with the
+// corresponding arg's value, then walk the result through the
+// normal segment dispatch — no string round-trip, no re-parse.
+//
+// Legacy bodies that arrived as a single string (mini_preprocessor
+// synthesized ASTs, process_ast callers) are normalised to a one-
+// element segments array at register time.
 struct MacroDef {
     std::string name;
     std::vector<std::string> params;
-    std::string body;
+    std::shared_ptr<ArrayValue> body_segments;
     bool is_function_like = false;
+
+    // Convenience: text representation of the body's flat text
+    // segments. For legacy bodies that wrap a single StringValue
+    // this is the original captured text; for sv_preprocessor.rawast
+    // bodies with typed segments, this only renders the bare text
+    // runs (typed segments like `{type:"ref"}` are skipped). Used
+    // by tests and the default expr-eval ref resolver — not by the
+    // expansion path, which walks segments directly.
+    std::string body_text() const;
 };
 
 // A preprocessor warning surfaced at process time. Accumulated on
@@ -481,6 +498,23 @@ private:
                           const std::string& source,
                           std::uint32_t parent_span_id,
                           bool consume_line = true);
+
+    // Expand a `\`MACRO` use whose AST sits inside a substituted
+    // macro body — no source-mapped cursor or span tracking, just
+    // produce the text the use site would emit. Used by
+    // `render_macro_body_segments` to walk macro_use AST nodes that
+    // appeared inside the body of another macro after AST-level
+    // parameter substitution. Mirrors the matching logic of
+    // `handle_macro_use` (lookup, arity check, blue-paint cycle
+    // guard, undefined_handler dispatch, on_undefined policy) but
+    // emits to a string instead of `out`.
+    std::string render_macro_use_inline(const class DictValue& d);
+
+    // Render a (possibly post-substitution) macro body's segments
+    // to text. Bare StringValue runs emit verbatim; macro_use dicts
+    // recurse through `render_macro_use_inline`; other typed
+    // segments fall back to `render_segment` for leaf text.
+    std::string render_macro_body_segments(const class ArrayValue& segs);
     void handle_ifdef(const class DictValue& d, std::string& out,
                       std::size_t& src_cursor,
                       const std::string& source,
