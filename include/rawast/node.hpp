@@ -174,6 +174,27 @@ public:
     //   Value - any Value, emitted directly when the surrounding branch fires.
     ValuePtr value;
 
+    // Raw/Scope stop literals — the set of Key-literal byte strings that
+    // terminate the byte-scan when matched at the cursor. Populated by
+    // the load-time stop resolver (see `resolve_raw_stops` in
+    // src/loader.cpp).
+    //
+    // Single-stop case (`sequence { OPEN, scope { ... }, CLOSE }`) → one
+    // entry: the next sibling Key's literal.
+    //
+    // Multi-stop case (`sequence { OPEN, repeat scope { ... } separator
+    // SEP, CLOSE }`) → two entries: the repeat's separator literal and
+    // the post-repeat Key literal. Either marks a legitimate boundary
+    // — non-final iterations terminate at SEP, the final iteration at
+    // CLOSE.
+    //
+    // For backward-compatible introspection / save round-trip, `value`
+    // is also kept set to the FIRST stop literal in the single-stop
+    // case (the dominant historical form). Multi-stop save round-trip
+    // is a separate piece — preprocessor-side grammars own their files,
+    // so it isn't on the critical path.
+    std::vector<std::string> stops;
+
     // Save-direction pretty-print metadata. All ignored by parse.
     //
     // The save direction emits, for each Node entered:

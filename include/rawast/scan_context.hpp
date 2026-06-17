@@ -28,15 +28,20 @@ class Parser;
 //                  empty means the scan starts immediately at the
 //                  caller's cursor (the Raw / sibling-stop case).
 //
-//   stop           Closing-condition literal. The byte-scan terminates
-//                  when this literal matches at the cursor. For Raw
-//                  nodes this is the pre-resolved next-sibling literal
-//                  (populated by `resolve_raw_stops` at load time); for
-//                  Scope nodes it's the user's `stop="…"` attribute.
+//   stops          The set of literal byte strings that terminate the
+//                  byte-scan when any of them matches at the cursor.
+//                  Populated from Node.stops (filled by the load-time
+//                  resolver in src/loader.cpp). Tried in order; the
+//                  first that matches wins.
 //
-//                  Empty stop with no parent-resolution path is an
-//                  error at run time; sibling-stop on Scope lands in
-//                  Phase 3.
+//                  Single-stop case (the historical default —
+//                  `sequence { OPEN, scope { ... }, CLOSE }`) → one
+//                  entry, the next-sibling Key literal.
+//                  Multi-stop case (`sequence { OPEN, repeat scope { ... }
+//                  separator SEP, CLOSE }`) → two entries, SEP and CLOSE.
+//
+//                  Empty stops with no parent-resolution path is an
+//                  error at run time.
 //
 //   start_strict /
 //   stop_strict    Word-boundary check on the matching delimiter —
@@ -60,7 +65,7 @@ class Parser;
 //                  the existing `#subparse` annotation.
 struct ScanConfig {
     std::string start;
-    std::string stop;
+    std::vector<std::string> stops;
     bool start_strict = false;
     bool stop_strict  = false;
     std::vector<NodeId> inners;

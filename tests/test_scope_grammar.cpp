@@ -275,3 +275,35 @@ TEST_CASE("scope array: Ref-to-rule INNER produces typed dict segment") {
     REQUIRE(value2); CHECK(value2->data() == "BAR");
     CHECK(save_value(g, v) == "(FOO BAR)");
 }
+
+// ─── Multi-stop scope (inside repeat + separator) ──────────────────────────
+
+// A scope placed inside `repeat ... separator X` followed by a closing
+// sibling Y can naturally appear in two terminal contexts:
+//
+//   - Non-final element: terminates at the separator X.
+//   - Final element:     terminates at the post-repeat sibling Y.
+//
+// The byte-scan must accept BOTH literals as stops. This is the pattern
+// macro arg lists need: `(arg1, arg2, arg3)` — each ARG body is a
+// balanced-token run ending at `,` or `)`. The engine resolves the
+// scope's stop set at load time by walking down into the surrounding
+// repeat to pick up both the separator and the post-repeat sibling.
+TEST_CASE("scope: stops include both repeat separator and post-repeat sibling") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <PROG>
+        PROG: sequence array {
+          "(",
+          repeat scope { std.string } separator ",",
+          ")"
+        }
+    )GRAM");
+    auto v = parse_input(g, "(alpha,beta,gamma)");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    REQUIRE(arr->data().size() == 3);
+    CHECK(as_string(arr->data()[0])->data() == "alpha");
+    CHECK(as_string(arr->data()[1])->data() == "beta");
+    CHECK(as_string(arr->data()[2])->data() == "gamma");
+}
