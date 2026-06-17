@@ -370,6 +370,15 @@ private:
     // method (called lazily by parse_from on first use).
     mutable std::vector<std::bitset<256>> first_bytes_;
     mutable std::vector<bool>             first_bytes_known_;
+    // Strict CONTENT first-byte set — what bytes the node's body
+    // actually starts with, ignoring nullability. `first_bytes_`
+    // (above) is set-all when the node is nullable so the Choice
+    // peek-and-skip never wrongly rejects a nullable alternative.
+    // `should_skip_optional` uses THIS strict set: an `?<X>` whose
+    // content can't start at the next byte can be cleanly skipped
+    // even if X is nullable (skipping is equivalent to matching
+    // empty in that case).
+    mutable std::vector<std::bitset<256>> strict_first_bytes_;
     // Per-NodeId flag: this node is at an `?<...>` use-site optional
     // position (its own is_optional is set, OR it's a Ref into a
     // chain where some link carries is_optional). The parse-loop

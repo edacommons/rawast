@@ -324,35 +324,15 @@ FirstByteResult compute_node_first_bytes(
         break;
     }
 
-    // Fold in the resolved rule's rule-local ignore parsers'
-    // first-byte sets. The parse driver runs `run_ignore` BEFORE
-    // matching the rule's first item, so the predictive peek check
-    // at `?<RULE>` entry must accept any byte the ignore parsers
-    // would consume — otherwise a leading space (with
-    // `ignore linespace`) routes around the optional even though
-    // the rule would have happily eaten it. Hardcoded for the std
-    // ignore-parser group; unknown ignore parsers degrade to
-    // "any byte" (over-accept rather than over-reject; the rule
-    // attempt still fails cleanly inside the body).
-    if (auto* igns = g.rule_ignore(resolved); igns && !igns->empty() && result.known) {
-        for (Parser* ip : *igns) {
-            const std::string& pname = ip->name();
-            if (pname == "linespace") {
-                result.bytes.set(' ');
-                result.bytes.set('\t');
-            } else if (pname == "whitespace") {
-                result.bytes.set(' ');
-                result.bytes.set('\t');
-                result.bytes.set('\n');
-                result.bytes.set('\r');
-            } else if (pname == "line_comment" || pname == "block_comment") {
-                result.bytes.set('/');
-            } else {
-                result = any_byte_result();
-                break;
-            }
-        }
-    }
+    // (Earlier attempt to fold rule-local ignore parsers' first-byte
+    // sets into the rule's predictive set was reverted — it broke
+    // `?<X>` adjacency at the parent level when X had `ignore linespace`,
+    // because the predictive check would take the optional on a leading
+    // space, then run_ignore inside X's body would consume that space,
+    // and a subsequent failure inside X would leave the space lost. The
+    // optional's mark/restore would only restore to AFTER the eaten
+    // whitespace. See conversation log: SV preprocessor's
+    // MACRO_USE / MACRO_ARGS adjacency case.)
 
     // An optional original node is nullable — its first-byte set
     // is the union with "anything that comes after." The Sequence
@@ -386,6 +366,7 @@ void Grammar::compute_first_bytes() const {
     if (first_bytes_computed_) return;
     const std::size_t N = nodes_.size();
     first_bytes_.assign(N, std::bitset<256>{});
+    strict_first_bytes_.assign(N, std::bitset<256>{});
     first_bytes_known_.assign(N, false);
     is_optional_chain_.assign(N, false);
     std::vector<int>             state(N, 0);
@@ -397,9 +378,15 @@ void Grammar::compute_first_bytes() const {
     for (std::size_t i = 0; i < N; ++i) {
         if (state[i] == 2 && cache[i].known) {
             first_bytes_known_[i] = true;
+            // Strict content bytes — always the actual computed set,
+            // regardless of nullability. should_skip_optional uses
+            // this to skip an `?<X>` whose body can't start at the
+            // next byte (skipping is equivalent to matching empty).
+            strict_first_bytes_[i] = cache[i].bytes;
             // Nullable nodes: any byte is fine (since "skip" is a
             // valid match). Encode as "known" + all bits set so the
-            // parse loop's peek check never rejects them.
+            // parse loop's peek check never wrongly rejects them in
+            // a Choice context where a sibling might match.
             if (cache[i].nullable) {
                 first_bytes_[i].set();
             } else {
@@ -506,7 +493,20 @@ void Grammar::register_rule(std::string name, NodeId node) {
 
 void Grammar::register_parser(std::unique_ptr<Parser> p) {
     std::string name = p->name();
-    parsers_[std::move(name)] = std::move(p);
+    parsers_[name] = std::move(p);
+    // If this parser was on the ignore list (host called add_ignore
+    // before the parser was registered, or a parser group is replacing
+    // an earlier registration), refresh the raw pointer so the
+    // driver's ignore loop doesn't dereference the old (destroyed)
+    // unique_ptr.
+    for (std::size_t i = 0; i < ignore_names_.size(); ++i) {
+        if (ignore_names_[i] == name) {
+            ignore_[i] = parsers_[name].get();
+        }
+    }
+    // Same possibility for rule-local override lists; rebuild lazily
+    // on the next rule_ignore() call.
+    rule_ignore_dirty_ = true;
 }
 
 void Grammar::register_parser_alias(std::string key, std::unique_ptr<Parser> p) {
@@ -1359,8 +1359,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             static_cast<unsigned char>(*c));
     };
 
-    auto should_skip_optional = [this, &sr, &current_ignore,
-                                  &ensure_first_bytes](NodeId id) -> bool {
+    auto should_skip_optional = [&](NodeId id) -> bool {
         // Fast path: precomputed flag tells us in O(1) whether this
         // node is in an `?<...>` use-site optional chain. Non-
         // optional pushes (the vast majority — Sequence children,
@@ -1378,8 +1377,9 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         run_ignore(sr, current_ignore());
         auto c = sr.peek();
         if (!c) return false;   // EOF — let the engine handle
-        return !first_bytes_[resolved.value()].test(
+        bool skip = !strict_first_bytes_[resolved.value()].test(
             static_cast<unsigned char>(*c));
+        return skip;
     };
 
     auto push_with_optional_mark = [&](NodeId id) {
@@ -1406,11 +1406,16 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             stack.back().set_has_neg_mark(true);
         }
         // Rule-local ignore: if the just-pushed frame's node has an
-        // override registered, push it. Lives for the lifetime of the
-        // frame and any children — trim_ignore_stack() pops it when
-        // the frame goes away.
+        // override registered, push it. Before pushing the override,
+        // run the OUTER (caller's) `run_ignore` so whitespace at a
+        // rule boundary gets eaten by the policy active when this
+        // frame was about to be entered. Without this step, a rule
+        // with `ignore:` (empty, suspending the inherited policy)
+        // entered via a Ref would never see its caller's ignore
+        // applied at the boundary.
         if (!stack.empty()) {
             if (const auto* ovr = rule_ignore(stack.back().node_id())) {
+                run_ignore(sr, current_ignore());
                 ignore_stack.push_back({stack.size(), ovr});
             }
         }
