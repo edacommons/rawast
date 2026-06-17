@@ -239,9 +239,19 @@ public:
     // for a top-level parse or subparse. Set false for sub-invocations
     // that may legitimately consume only a prefix (the byte-scan INNER
     // trial path in walk_scan, for example).
+    //
+    // `initial_ignore` seeds the parse driver's ignore_stack with the
+    // caller's active policy. Used by walk_scan when subparsing an
+    // INNER rule from within a scope/raw scan — without it the INNER
+    // would lose any ignore policy inherited from the calling context
+    // (e.g. PP_FILE's `ignore linespace`), and predictive checks at
+    // optional boundaries would see raw whitespace. nullptr means
+    // "no seed" — the parse starts with an empty ignore_stack and
+    // falls back to the grammar's default ignore set.
     tl::expected<ValuePtr, ParseError> parse_from(
             StreamReader& sr, ValuePool& pool, NodeId start,
-            bool require_full_consume = true) const;
+            bool require_full_consume = true,
+            const std::vector<Parser*>* initial_ignore = nullptr) const;
 
     // Convenience: parse from a rule name. Looks up the named rule's
     // body NodeId via the registry; fails if the rule doesn't exist.

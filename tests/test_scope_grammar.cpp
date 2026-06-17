@@ -116,6 +116,56 @@ TEST_CASE("scope: nested scope containing a string with ')'") {
     CHECK(save_value(g, v) == "(outer (\"in)ner\") done)");
 }
 
+// ─── Scope INNER subparse must inherit caller's ignore_stack ────────────
+
+// When `scope` dispatches a non-leaf INNER rule, the INNER's subparse
+// (walk_scan: parse_from) must carry the caller's active ignore
+// policy. Without this, an INNER rule with no explicit `ignore`
+// declaration loses its inherited ignore set — predictive checks at
+// optional boundaries see raw whitespace instead of the eaten policy.
+//
+// Setup: PROG declares `ignore linespace`. Its body is a scope-array
+// dispatching ITEM. ITEM has no explicit ignore — should inherit
+// linespace. Between ITEM's mark `a` and the optional `?<TAG>` there
+// is a space byte; with proper inheritance the optional's first-byte
+// peek runs the ignore first, sees `[`, and pushes TAG. With the bug
+// the ignore is empty (fresh subparse stack), peek sees ` `, skips
+// the optional → tag never captured.
+TEST_CASE("scope: INNER subparse inherits caller's ignore_stack") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <PROG>
+        PROG ignore linespace: sequence {
+          "{", scope array { <ITEM> }, "}"
+        }
+        ITEM: sequence dict {
+          "a":mark="a",
+          ?<TAG>:tag=@
+        }
+        TAG: sequence dict {
+          "[":t="bracket",
+          "]"
+        }
+    )GRAM");
+    auto v = parse_input(g, "{a []}");
+    auto arr = as_array(v);
+    REQUIRE(arr);
+    // Layout (with fix): one ITEM segment whose dict has tag=bracket.
+    // (with bug): ITEM segment with no tag, plus separate text/raw bytes.
+    REQUIRE(arr->data().size() >= 1);
+    auto item = std::dynamic_pointer_cast<DictValue>(arr->data()[0]);
+    REQUIRE_MESSAGE(item, "first segment isn't ITEM dict");
+    auto tag_it = item->data().find("tag");
+    REQUIRE_MESSAGE(tag_it != item->data().end(),
+                    "ITEM's optional ?<TAG> didn't capture — inherited "
+                    "linespace was lost at scope/INNER subparse boundary");
+    auto tag_d = std::dynamic_pointer_cast<DictValue>(tag_it->second);
+    REQUIRE(tag_d);
+    auto t_sv = as_string(tag_d->data()["t"]);
+    REQUIRE(t_sv);
+    CHECK(t_sv->data() == "bracket");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {

@@ -1054,7 +1054,8 @@ tl::expected<ValuePtr, ParseError> walk_scan(
                 sr.mark();
                 const Position before = sr.position();
                 auto sub_r = g.parse_from(sr, pool, g.resolve_ref(inner_id),
-                                          /*require_full_consume=*/false);
+                                          /*require_full_consume=*/false,
+                                          cfg.caller_ignore);
                 if (sub_r && sr.position().bytes > before.bytes) {
                     sr.accept();
                     if (array_mode) {
@@ -1108,7 +1109,8 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         StreamReader& sr, ValuePool& pool, NodeId start,
-        bool require_full_consume) const {
+        bool require_full_consume,
+        const std::vector<Parser*>* initial_ignore) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
     ValuePtr result_value;
@@ -1292,6 +1294,20 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     auto current_ignore = [&]() -> const std::vector<Parser*>& {
         return ignore_stack.empty() ? ignore() : *ignore_stack.back().parsers;
     };
+    // Caller's active ignore policy at the dispatch site of this
+    // sub-parse (set by walk_scan when an INNER rule is subparsed
+    // from within a scope/raw scan). Used ONLY by predictive checks
+    // at optional sites — `should_skip_optional` consults this when
+    // the local ignore_stack is empty. Crucially NOT used by the
+    // run_ignore calls in Key / Parse / Raw / Sequence steps: those
+    // would eat leading or trailing whitespace inside the INNER's
+    // span, shifting bytes from the surrounding scope's body capture
+    // into the INNER's match. The fix's intent is "INNERs make the
+    // SAME optional-dispatch decisions they would in the calling
+    // context, but their byte boundaries stay anchored at the
+    // cursor walk_scan handed them."
+    const std::vector<Parser*>* predictive_fallback =
+        (initial_ignore && !initial_ignore->empty()) ? initial_ignore : nullptr;
     auto trim_ignore_stack = [&]() {
         while (!ignore_stack.empty()
                && ignore_stack.back().entry_depth > stack.size()) {
@@ -1358,7 +1374,24 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         // Peek the next byte after ignore-skip. Whitespace skipping
         // is idempotent; if we later push the frame, the inner
         // terminal re-runs ignore harmlessly.
-        run_ignore(sr, current_ignore());
+        //
+        // Predictive-only inheritance: when this parse_from was
+        // entered as a walk_scan INNER subparse, the caller's
+        // ignore policy seeds the predictive decision (without
+        // it the optional would skip on inherited whitespace
+        // that the body never declared as syntactic). The
+        // run_ignore here is local to the predictive trial — if
+        // we end up pushing the frame, the rule's own terminals
+        // re-run ignore over the same bytes (no-op); if we skip
+        // the optional, the consumed whitespace stays consumed
+        // because it would have been eaten by any later child
+        // anyway. The seed is NOT used inside the rule's body,
+        // so INNER byte boundaries stay anchored at the cursor.
+        const auto& predictive_ignore =
+            (ignore_stack.empty() && predictive_fallback)
+                ? *predictive_fallback
+                : current_ignore();
+        run_ignore(sr, predictive_ignore);
         auto c = sr.peek();
         if (!c) return false;   // EOF — let the engine handle
         bool skip = !strict_first_bytes_[resolved.value()].test(
@@ -1668,6 +1701,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             sr.mark();
             ScanConfig raw_cfg = scan_config_from_raw(n);
+            raw_cfg.caller_ignore = &current_ignore();
             auto r = walk_scan(*this, sr, pool, raw_cfg);
             // Negative-lookahead inversion for Raw. Same shape as the
             // Key and Parse arms: a Raw frame marked `!*` inverts its
@@ -1768,6 +1802,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (trace_enabled) trace("  scope");
             sr.mark();
             ScanConfig scope_cfg = scan_config_from_scope(n);
+            scope_cfg.caller_ignore = &current_ignore();
             auto r = walk_scan(*this, sr, pool, scope_cfg);
             // Negative-lookahead inversion — same shape as Key / Raw.
             if (top.is_negative()) {

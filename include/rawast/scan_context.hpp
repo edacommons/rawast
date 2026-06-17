@@ -8,6 +8,8 @@
 
 namespace rawast {
 
+class Parser;
+
 // Configuration for the engine's unified byte-scan routine. Both the
 // `*` Raw primitive and the `scope { … }` grammar form materialise to
 // `walk_scan` invocations with different ScanConfig values — they're
@@ -71,6 +73,14 @@ struct ScanConfig {
     // sibling in the surrounding sequence to match (Raw's semantic —
     // `*` is followed by a Key sibling that owns the stop bytes).
     bool consume_stop = true;
+
+    // Caller's active ignore policy at the scope/raw call site. INNER
+    // rules that subparse via walk_scan must inherit this — otherwise
+    // an INNER without its own `ignore` declaration loses the policy
+    // that was active when the scope was entered, and predictive
+    // optional checks see raw whitespace instead of the eaten policy.
+    // nullptr → no inheritance (treated as empty).
+    const std::vector<Parser*>* caller_ignore = nullptr;
 };
 
 } // namespace rawast
