@@ -13,10 +13,12 @@ namespace rawast {
 class KeyParser final : public Parser {
     std::string token_;
     bool        strict_;
+    std::string fb_spec_;
 public:
     explicit KeyParser(std::string token, bool strict = false);
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return fb_spec_; }
 };
 
 // Optional leading '-' followed by one or more digits. accum_ holds the
@@ -27,6 +29,9 @@ public:
     WalkResult walk(StreamReader& sr) override;
     ValuePtr   value() const override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR("-") INC_RANGE("0", "9");
+    }
 };
 
 // One or more digits. accum_ holds the digit string; value() → UIntValue.
@@ -36,6 +41,9 @@ public:
     WalkResult walk(StreamReader& sr) override;
     ValuePtr   value() const override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_RANGE("0", "9");
+    }
 };
 
 // Floating-point with optional sign, optional fractional part, optional
@@ -48,6 +56,9 @@ public:
     WalkResult walk(StreamReader& sr) override;
     ValuePtr   value() const override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR("+") INC_CHAR("-") INC_CHAR(".") INC_RANGE("0", "9");
+    }
 };
 
 // One or more consecutive whitespace characters. accum_ holds the run;
@@ -56,6 +67,9 @@ class WhitespaceParser final : public Parser {
 public:
     WhitespaceParser();
     WalkResult walk(StreamReader& sr) override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR(" ") INC_CHAR("\t") INC_CHAR("\n") INC_CHAR("\r");
+    }
 };
 
 // Zero or more horizontal whitespace bytes (space, tab). CRUCIALLY
@@ -76,6 +90,9 @@ public:
     WalkResult walk(StreamReader& sr) override;
     ValuePtr   value() const override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR(" ") INC_CHAR("\t");
+    }
 };
 
 // Identifier in the C-family sense: starts with letter or underscore,
@@ -88,6 +105,7 @@ public:
 class IdentifierParser final : public Parser {
     std::string extra_lead_;    // additional chars valid at first position
     std::string extra_cont_;    // additional chars valid in continuation
+    mutable std::string fb_spec_;
 public:
     IdentifierParser();
     // Parameterised: extra characters that can appear in identifiers
@@ -99,6 +117,7 @@ public:
     IdentifierParser(std::string extra_lead, std::string extra_cont);
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override;
 };
 
 // `ident('.' ident)*` — a dotted, group-qualified name. accum_ holds
@@ -108,6 +127,9 @@ public:
     QualifiedIdentifierParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_RANGE("A", "Z") INC_RANGE("a", "z") INC_CHAR("_");
+    }
 };
 
 // Double-quoted string. Backslash escape sequences are preserved verbatim
@@ -120,6 +142,7 @@ public:
     DoubleQuoteStringParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\""); }
 };
 
 // `'...'`-delimited string. Mirror of DoubleQuoteStringParser but uses
@@ -134,6 +157,7 @@ public:
     SingleQuoteStringParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("'"); }
 };
 
 // `//` line comment, consumed up to but not including the line terminator
@@ -149,6 +173,7 @@ class LineCommentParser final : public Parser {
 public:
     LineCommentParser();
     WalkResult walk(StreamReader& sr) override;
+    std::string_view first_bytes() const override { return INC_CHAR("/"); }
 };
 
 // `/* ... */` block comment. Spans multiple lines. accum_ holds the full
@@ -161,6 +186,7 @@ class BlockCommentParser final : public Parser {
 public:
     BlockCommentParser();
     WalkResult walk(StreamReader& sr) override;
+    std::string_view first_bytes() const override { return INC_CHAR("/"); }
 };
 
 // Register the `std` parser group. Idempotent — safe to call from

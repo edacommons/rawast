@@ -198,55 +198,39 @@ FirstByteResult compute_node_first_bytes(
         break;
     }
     case NodeKind::Parse: {
-        // Some standard terminal parsers have well-defined first-byte
-        // sets that we can hardcode here — `int`/`uint`/`float`
-        // accept only `[0-9+-]` (plus `.` for float), and `string`
-        // requires a leading `"`. Knowing those lets the engine
-        // skip ?<X> optionals like `?<STEP_PATTERN>` (4 int/float
-        // arguments) when the input cursor is on `;` or any other
-        // non-numeric byte. Tested on the LEF corpus: profiles
-        // showed STEP_PATTERN burning 4.7% of parse time at 100%
-        // fail rate, almost entirely from `;`-position dispatches.
-        //
-        // Bare `identifier` / `qualified_identifier` are NOT hardcoded
-        // because they may resolve to either std (strict
-        // `[A-Za-z_]…`) or lefdef (permissive — accepts dots,
-        // hyphens, brackets, digits) — taking the union would be
-        // too permissive to optimize, and being stricter than the
-        // active parser would wrongly skip valid input. Leave them
-        // as "any" until the bare-alias resolution is deterministic
-        // at compute time.
+        // Ask the parser itself for its first-byte set via the
+        // Parser::first_bytes() spec string. Each shipped parser
+        // overrides this with a compile-time-concatenated spec built
+        // from the INC_RANGE/EXC_RANGE/INC_CHAR/EXC_CHAR/ALL_BYTES
+        // macros in parser.hpp. Default (unknown / user-defined
+        // parsers that don't override) returns an empty spec, which
+        // we treat as the conservative "any byte" fallback — matches
+        // the legacy behaviour for parsers without a known first-byte
+        // set.
         std::string pname;
         if (auto sv = std::dynamic_pointer_cast<StringValue>(n.value)) {
             pname = sv->data();
         }
-        auto set_digit_signs = [](std::bitset<256>& b, bool with_plus,
-                                   bool with_dot) {
-            b.set(static_cast<unsigned char>('-'));
-            if (with_plus) b.set(static_cast<unsigned char>('+'));
-            if (with_dot)  b.set(static_cast<unsigned char>('.'));
-            for (char c = '0'; c <= '9'; ++c) {
-                b.set(static_cast<unsigned char>(c));
-            }
-        };
-        if (pname == "int" || pname == "std.int") {
-            set_digit_signs(result.bytes, /*with_plus=*/false,
-                            /*with_dot=*/false);
-            result.known = true;
-        } else if (pname == "uint" || pname == "std.uint") {
-            for (char c = '0'; c <= '9'; ++c) {
-                result.bytes.set(static_cast<unsigned char>(c));
-            }
-            result.known = true;
-        } else if (pname == "float" || pname == "std.float") {
-            set_digit_signs(result.bytes, /*with_plus=*/true,
-                            /*with_dot=*/true);
-            result.known = true;
-        } else if (pname == "string" || pname == "std.string") {
-            result.bytes.set(static_cast<unsigned char>('"'));
-            result.known = true;
-        } else {
+        Parser* p = g.parser(pname);
+        std::string_view spec = p ? p->first_bytes() : std::string_view{};
+        if (spec.empty()) {
             result = any_byte_result();
+        } else {
+            // Decode the spec: consecutive 3-byte entries
+            //   byte[0] = '+' include or '-' exclude
+            //   byte[1] = lo (range low, inclusive)
+            //   byte[2] = hi (range high, inclusive)
+            for (std::size_t i = 0; i + 2 < spec.size(); i += 3) {
+                char op = spec[i];
+                unsigned lo = static_cast<unsigned char>(spec[i + 1]);
+                unsigned hi = static_cast<unsigned char>(spec[i + 2]);
+                if (op == '+') {
+                    for (unsigned c = lo; c <= hi; ++c) result.bytes.set(c);
+                } else if (op == '-') {
+                    for (unsigned c = lo; c <= hi; ++c) result.bytes.reset(c);
+                }
+            }
+            result.known = true;
         }
         break;
     }

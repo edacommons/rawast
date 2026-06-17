@@ -15,7 +15,18 @@ namespace rawast {
 // KeyParser ---------------------------------------------------------------
 
 KeyParser::KeyParser(std::string token, bool strict)
-    : Parser(token), token_(std::move(token)), strict_(strict) {}
+    : Parser(token), token_(std::move(token)), strict_(strict) {
+    // first-byte spec: single 3-byte entry "+xx" where x is the
+    // literal's first char. Empty token → empty spec → engine treats
+    // as "any byte" (matches legacy behaviour for the degenerate
+    // empty-Key case).
+    if (!token_.empty()) {
+        fb_spec_.reserve(3);
+        fb_spec_ += '+';
+        fb_spec_ += token_.front();
+        fb_spec_ += token_.front();
+    }
+}
 
 namespace {
 // Word character: ASCII alphanumeric or underscore. Mirrors the regex `\w`
@@ -470,6 +481,21 @@ IdentifierParser::IdentifierParser(std::string extra_lead, std::string extra_con
     : Parser("identifier"),
       extra_lead_(std::move(extra_lead)),
       extra_cont_(std::move(extra_cont)) {}
+
+std::string_view IdentifierParser::first_bytes() const {
+    // Built once per instance, cached. extra_lead_ is set at
+    // construction time so the spec is stable for the parser's
+    // lifetime.
+    if (fb_spec_.empty()) {
+        fb_spec_ = INC_RANGE("A", "Z") INC_RANGE("a", "z") INC_CHAR("_");
+        for (char c : extra_lead_) {
+            fb_spec_ += '+';
+            fb_spec_ += c;
+            fb_spec_ += c;
+        }
+    }
+    return fb_spec_;
+}
 
 WalkResult IdentifierParser::walk(StreamReader& sr) {
     sr.mark();

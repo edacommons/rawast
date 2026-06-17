@@ -27,6 +27,9 @@ public:
     TclHspaceParser();
     WalkResult walk(StreamReader& sr) override;
     ValuePtr   value() const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR(" ") INC_CHAR("\t") INC_CHAR("\\");
+    }
 };
 
 // A single `\n` byte. Used as a structural command separator.
@@ -41,6 +44,7 @@ public:
     // grammar may dispatch this alternative on save; without unparse
     // the dispatch would fail.
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\n"); }
 };
 
 // Command separator that accepts either `\n` or `;`. Per Dodekalogue
@@ -54,6 +58,9 @@ public:
     WalkResult walk(StreamReader& sr) override;
     ValuePtr   value() const override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR("\n") INC_CHAR(";");
+    }
 };
 
 // `#` followed by everything up to (and including) the next newline.
@@ -67,6 +74,7 @@ public:
     TclCommentParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("#"); }
 };
 
 // `{...}` with brace-depth counting. Returns the inner content
@@ -77,6 +85,7 @@ public:
     TclBraceGroupParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("{"); }
 };
 
 // `"..."` with backslash escapes. Returns the inner content
@@ -87,6 +96,7 @@ public:
     TclQuotedStringParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\""); }
 };
 
 // `[...]` with bracket nesting. Inside, `"..."` and `{...}` are
@@ -98,6 +108,7 @@ public:
     TclBracketSubParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("["); }
 };
 
 // Maximal run of non-special chars. Specials are whitespace (space,
@@ -109,6 +120,14 @@ public:
     TclBareWordParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        // Any byte except the bare-word stops (whitespace and
+        // `;[]{}"`).
+        return ALL_BYTES
+               EXC_CHAR(" ") EXC_CHAR("\t") EXC_CHAR("\n")
+               EXC_CHAR(";") EXC_CHAR("[") EXC_CHAR("]")
+               EXC_CHAR("{") EXC_CHAR("}") EXC_CHAR("\"");
+    }
 };
 
 // `{*}` followed by non-whitespace (Dodekalogue rule 5 — argument
@@ -125,6 +144,7 @@ public:
     // via the bound `expand=true` flag on EXPAND_WORD), but save
     // dispatch still routes some value through here.
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("{"); }
 };
 
 // Variable name — either `name` (bare) or `{name}` (braced). For the
@@ -139,6 +159,10 @@ public:
     // but stores only the bare name; unparse picks the form by checking
     // whether every byte is a valid bare-form char.
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_RANGE("A", "Z") INC_RANGE("a", "z") INC_RANGE("0", "9")
+               INC_CHAR("_") INC_CHAR(":") INC_CHAR("{");
+    }
 };
 
 // Retired: `TclUntilParenParser`. Replaced by the grammar-level
@@ -155,6 +179,7 @@ public:
     TclEscapeParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\\"); }
 };
 
 // Run of chars that aren't `$`, `[`, `\`, or `"`. At least one char;
@@ -165,6 +190,10 @@ public:
     TclLiteralRunParser();
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return ALL_BYTES
+               EXC_CHAR("$") EXC_CHAR("[") EXC_CHAR("\\") EXC_CHAR("\"");
+    }
 };
 
 // Register the "tcl" parser group in the global registry. Grammars

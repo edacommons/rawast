@@ -6,6 +6,7 @@
 #include <tl/expected.hpp>
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace rawast {
@@ -114,6 +115,43 @@ public:
         return tl::unexpected(SaveError{
             "parser '" + name_ + "' does not implement unparse"});
     }
+
+    // First-byte set as a compile-time-concatenated spec string.
+    //
+    // Each consecutive 3-byte group encodes one range operation:
+    //   byte[0] = '+' include  OR  '-' exclude
+    //   byte[1] = lo (low end of range, inclusive)
+    //   byte[2] = hi (high end of range, inclusive)
+    //
+    // Operations apply left-to-right onto an initially-empty bitset.
+    // Use the macros below — they expand to adjacent string literals
+    // which the C++ compiler concatenates at compile time, so the
+    // returned `string_view` points into the binary's read-only pool
+    // with zero runtime construction.
+    //
+    // Empty result = "any byte / unknown" — engine treats this as
+    // the conservative fallback (matches the legacy behaviour for
+    // parsers that don't override).
+    //
+    // Examples:
+    //   IntParser           → INC_CHAR("-") INC_RANGE("0","9")
+    //   IdentifierParser    → INC_RANGE("A","Z") INC_RANGE("a","z") INC_CHAR("_")
+    //   LefdefIdentParser   → ALL_BYTES EXC_CHAR(" ") EXC_CHAR(";") ...
+    //
+    // Engine reads the spec once at compute_first_bytes time and
+    // converts it to a bitset for O(1) membership at parse time.
+    virtual std::string_view first_bytes() const { return {}; }
 };
+
+// Helpers for the Parser::first_bytes() spec format. Each expands to
+// a 3-byte string literal; adjacent ones concatenate at compile time.
+#define INC_RANGE(lo, hi) "+" lo hi
+#define EXC_RANGE(lo, hi) "-" lo hi
+#define INC_CHAR(c)       "+" c c
+#define EXC_CHAR(c)       "-" c c
+// Start with every byte from 0x01 through 0x7F set. Useful as a base
+// for `… EXC_CHAR(…) EXC_CHAR(…) …` ("everything except these"). 0x00
+// is omitted since it isn't a legal grammar input byte.
+#define ALL_BYTES         "+\x01\x7f"
 
 } // namespace rawast
