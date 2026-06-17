@@ -397,21 +397,28 @@ TEST_CASE("sv_pp define: body MACRO_USE with multiple arguments") {
     CHECK(as_string(args->data()[2])->data() == "z");
 }
 
-TEST_CASE("sv_pp define: body MACRO_USE with no args when `(` not adjacent") {
+TEST_CASE("sv_pp define: body MACRO_USE captures args even with leading space") {
     auto g = load_grammar();
-    // Space between backtick-ident and `(` means no args — the
-    // `(...)` is text in the surrounding body.
+    // LRM §22.5.1: at the use site, whitespace between the macro
+    // name and the opening `(` of args is allowed for function-like
+    // macros. Inside a body, MACRO_USE inherits PP_FILE's
+    // `ignore linespace` from the surrounding scope dispatch, so
+    // `\`OTHER (x)` captures `(x)` as args rather than dropping
+    // `(x)` to text.
     auto ast = parse(g, "`define A `OTHER (x)\n");
     auto body = body_of(ast);
     REQUIRE(body);
-    // First segment is macro_use without args
+    REQUIRE(body->data().size() >= 1);
     auto seg0 = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
     REQUIRE(seg0);
     CHECK(str_field(seg0, "type") == "macro_use");
     CHECK(str_field(seg0, "name") == "OTHER");
-    CHECK(seg0->data().find("args") == seg0->data().end());
-    // Subsequent segments include the literal ` (x)` text + refs.
-    REQUIRE(body->data().size() >= 2);
+    auto args_it = seg0->data().find("args");
+    REQUIRE(args_it != seg0->data().end());
+    auto args = std::dynamic_pointer_cast<ArrayValue>(args_it->second);
+    REQUIRE(args);
+    REQUIRE(args->data().size() == 1);
+    CHECK(as_string(args->data()[0])->data() == "x");
 }
 
 TEST_CASE("sv_pp define: body MACRO_USE single arg round-trips") {
@@ -459,6 +466,25 @@ TEST_CASE("Preprocessor::process: spaced-param macro expansion end-to-end") {
         "`ADD(p, q)\n"
     );
     CHECK(out.find("(p + q)") != std::string::npos);
+}
+
+// LRM §22.5.1: at the use site, whitespace between macro name and
+// the opening `(` of args is allowed for function-like macros (the
+// asymmetric counterpart to the `\`define` adjacency rule). Inside
+// a macro body MACRO_USE inherits PP_FILE's `ignore linespace` from
+// the surrounding scope dispatch — so `\`INC (Y)` captures (Y) as
+// args rather than dropping `(Y)` to text. Relies on the engine
+// fix: scope/Raw INNER subparse inherits caller's ignore at
+// optional boundaries (`should_skip_optional` predictive seed).
+TEST_CASE("Preprocessor::process: use-site whitespace before macro args") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto out = pp.process(
+        "`define INC(X) X + 1\n"
+        "`define USE(Y) `INC (Y)\n"
+        "`USE(foo)\n"
+    );
+    CHECK(out.find("foo + 1") != std::string::npos);
 }
 
 // LRM §22.5.1 / C99 §6.10.3.1: textual arg substitution reaches into

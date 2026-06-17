@@ -22,7 +22,6 @@
 //                         between `identifier` and `(`:
 //                         `\`define FOO(x)` vs `\`define FOO (x)`
 //                         parse as parameterised vs object-like.
-//   MACRO_USE           — same adjacency story for `\`NAME(args)`.
 //   TEXT_LINE           — line content captured verbatim by scope.
 
 use: std
@@ -158,8 +157,14 @@ PARAMS ignore linespace: sequence array {
   ")"
 }
 
-// `\`NAME[(args)]` use site. `ignore:` empty for adjacency.
-MACRO_USE ignore: sequence dict {
+// `\`NAME[(args)]` use site. No explicit ignore — inherit from
+// caller. LRM §22.5.1 allows whitespace between macro name and the
+// opening `(` of args at the use site (asymmetric to `\`define`,
+// where no whitespace is allowed). Inside a macro body MACRO_USE
+// inherits PP_FILE's `ignore linespace`, so `\`INC (Y)` captures
+// (Y) as args. Inside TEXT_LINE (empty ignore), line content stays
+// verbatim — `\`FOO (5)` at the top level treats `(5)` as text.
+MACRO_USE: sequence dict {
   "`":type="macro_use",
   identifier:name=@,
   ?<MACRO_ARGS>:args=@
