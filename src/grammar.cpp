@@ -549,27 +549,6 @@ const std::vector<Parser*>* Grammar::rule_ignore(NodeId rule_node) const {
     return it == rule_ignore_resolved_.end() ? nullptr : &it->second;
 }
 
-void Grammar::on_rule_complete(const std::string& rule_name, RuleCallback cb) {
-    auto it = named_rules_.find(rule_name);
-    assert(it != named_rules_.end() && "on_rule_complete: unknown rule");
-    callbacks_by_node_[it->second.value()].push_back(std::move(cb));
-}
-
-void Grammar::replace_parser(std::unique_ptr<Parser> p) const {
-    std::string name = p->name();
-    parsers_[name] = std::move(p);
-    // If this parser was on the ignore list, refresh the pointer so the
-    // driver's ignore loop picks up the new instance.
-    for (std::size_t i = 0; i < ignore_names_.size(); ++i) {
-        if (ignore_names_[i] == name) {
-            ignore_[i] = parsers_[name].get();
-        }
-    }
-    // The same parser may appear in rule-local override lists; rebuild
-    // them lazily next time rule_ignore() is called.
-    rule_ignore_dirty_ = true;
-}
-
 void Grammar::set_top(NodeId node) {
     top_ = node;
 }
@@ -1282,57 +1261,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         std::cerr << msg << "\n";
     };
 
-    // Rule-callback machinery -------------------------------------------
-    //
-    // pending_per_mark[i] is the queue of callbacks-to-fire that
-    // accumulated while stream mark #i was active. On sr.accept() we
-    // pop the back queue and either fire its contents (if no outer
-    // mark) or merge them into the new back queue (their fate now
-    // depends on the outer mark's resolution). On sr.reject() we pop
-    // and discard — callbacks in a rejected branch never fire.
-    struct PendingCallback {
-        RuleCallback cb;
-        ValuePtr     value;
-    };
-    std::vector<std::vector<PendingCallback>> pending_per_mark;
-
-    auto fire_or_queue = [&](const RuleCallback& cb, ValuePtr v) {
-        if (pending_per_mark.empty()) {
-            cb(v);
-        } else {
-            pending_per_mark.back().push_back({cb, std::move(v)});
-        }
-    };
-
-    auto fire_callbacks_for_frame = [&](Frame& popped) {
-        auto it = callbacks_by_node_.find(popped.node_id().value());
-        if (it == callbacks_by_node_.end()) return;
-        ValuePtr v = popped.result();
-        for (const auto& cb : it->second) {
-            fire_or_queue(cb, v);
-        }
-    };
-
-    auto on_mark_accept = [&]() {
-        sr.accept();
-        if (pending_per_mark.empty()) return;
-        auto popped_q = std::move(pending_per_mark.back());
-        pending_per_mark.pop_back();
-        if (pending_per_mark.empty()) {
-            for (auto& p : popped_q) p.cb(p.value);
-        } else {
-            auto& outer = pending_per_mark.back();
-            for (auto& p : popped_q) outer.push_back(std::move(p));
-        }
-    };
-
-    auto on_mark_reject = [&]() {
-        sr.reject();
-        if (!pending_per_mark.empty()) {
-            pending_per_mark.pop_back();
-        }
-    };
-
     // Rule-local ignore overrides ---------------------------------------
     //
     // An IgnoreScope captures "stack depth at which this override was
@@ -1468,7 +1396,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!stack.empty() && stack.back().is_optional()
             && !stack.back().has_mark()) {
             sr.mark();
-            pending_per_mark.emplace_back();
             stack.back().set_has_mark(true);
         }
         // Negative-lookahead entry: take a stream mark so the cursor
@@ -1478,7 +1405,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!stack.empty() && stack.back().is_negative()
             && !stack.back().has_neg_mark()) {
             sr.mark();
-            pending_per_mark.emplace_back();
             stack.back().set_has_neg_mark(true);
         }
         // Rule-local ignore: if the just-pushed frame's node has an
@@ -1515,7 +1441,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // this Choice was backtracking and had marked the stream
                 // for the just-succeeded alternative, accept that mark.
                 if (top.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     top.set_has_mark(false);
                 }
                 more = false;
@@ -1532,7 +1458,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // mark) would leave the cursor advanced even if a
                 // later required item failed.
                 if (top.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     top.set_has_mark(false);
                 }
                 more = top.step_next();
@@ -1564,7 +1490,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // "no", not "yes with empty payload."
             if (popped.is_negative()) {
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (trace_enabled) {
@@ -1578,11 +1504,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // Optional frame completed successfully — accept the entry
             // mark so the stream advances permanently.
             if (popped.is_optional() && popped.has_mark()) {
-                on_mark_accept();
+                sr.accept();
                 popped.set_has_mark(false);
             }
             popped.finish(pool);
-            fire_callbacks_for_frame(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -1643,7 +1568,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // Reject it now so the stream rewinds to the position
                 // before this alternative was tried.
                 if (popped.has_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_mark(false);
                 }
                 if (popped.step_next()) {
@@ -1671,7 +1596,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // `!` — the result of the operator must be empty, not
                 // a partial inner match.
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (trace_enabled) {
@@ -1688,7 +1613,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // the optional started — without this, any consumed
                 // input before the inner failure is left dangling.
                 if (popped.has_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_mark(false);
                 }
                 // Treat as success-with-empty.
@@ -1707,7 +1632,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // failed) leaves the cursor advanced and breaks the
                 // outer rule's continuation.
                 if (popped.has_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_mark(false);
                 }
                 // `repeat+` (min=1) form: the Repeat itself fails if too
@@ -1718,7 +1643,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 // Iteration ended -- accept what we collected so far.
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1773,7 +1697,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -1835,11 +1759,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // NEXT mark-pop (Choice accept or any reject) targets
                 // the WRONG mark — subtle and ugly.
                 if (popped.is_optional() && popped.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     popped.set_has_mark(false);
                 }
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1871,7 +1794,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -1934,11 +1857,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.is_optional() && popped.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     popped.set_has_mark(false);
                 }
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1971,7 +1893,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -2004,11 +1926,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     // See the Raw / Parse cases for why the optional
                     // mark accept is required here.
                     if (popped.is_optional() && popped.has_mark()) {
-                        on_mark_accept();
+                        sr.accept();
                         popped.set_has_mark(false);
                     }
                     popped.finish(pool);
-                    fire_callbacks_for_frame(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -2041,7 +1962,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -2103,11 +2024,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     // See the Raw / Key cases for why the optional
                     // mark accept is required here.
                     if (popped.is_optional() && popped.has_mark()) {
-                        on_mark_accept();
+                        sr.accept();
                         popped.set_has_mark(false);
                     }
                     popped.finish(pool);
-                    fire_callbacks_for_frame(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -2128,7 +2048,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             Frame popped = std::move(stack.back());
             stack.pop_back();
             popped.finish(pool);
-            fire_callbacks_for_frame(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -2157,7 +2076,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // alternative failure) before we move on.
                 if (top.is_backtrack() && !top.has_mark()) {
                     sr.mark();
-                    pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
                 push_or_skip_optional(top.current_child());
@@ -2175,7 +2093,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -2200,7 +2117,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // unable to roll back over the committed Choice.
                 if (!top.has_mark()) {
                     sr.mark();
-                    pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
                 push_or_skip_optional(top.current_child());
@@ -2209,7 +2125,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -2229,7 +2144,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;

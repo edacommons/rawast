@@ -110,10 +110,7 @@ public:
     IdentifierParser();
     // Parameterised: extra characters that can appear in identifiers
     // beyond the C-family default. Use to teach the parser about
-    // format-specific identifier chars discovered at parse time — e.g.
-    // LEF's DIVIDERCHAR "/" becomes an extra continuation char after
-    // the preamble parses (wired through Grammar::replace_parser from
-    // an on_rule_complete callback).
+    // format-specific identifier chars at construction time.
     IdentifierParser(std::string extra_lead, std::string extra_cont);
     WalkResult walk(StreamReader& sr) override;
     SaveResult unparse(const Value& value) const override;

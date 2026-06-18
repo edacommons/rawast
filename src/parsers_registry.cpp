@@ -27,9 +27,7 @@ std::map<std::string, RegistryEntry>& registry() {
 // Apply a structured group to a Grammar: each parser is instantiated
 // twice and registered under both bare and dotted keys. Terminal
 // parsers are stateless across `parse()` calls (their state lives in
-// the StreamReader), so two instances behave identically. The
-// callback-driven `replace_parser` machinery operates on whichever
-// key the rule referenced.
+// the StreamReader), so two instances behave identically.
 void apply_structured(Grammar& g, const ParserGroup& group) {
     for (const ParserSpec& spec : group.parsers) {
         const std::string dotted = group.name + "." + spec.local_name;

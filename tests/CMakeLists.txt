@@ -23,7 +23,6 @@ add_executable(rawast_tests
     test_loader.cpp
     test_to_value.cpp
     test_linter.cpp
-    test_callbacks.cpp
     test_pretty.cpp
     test_gdsii.cpp
     test_preprocessor.cpp

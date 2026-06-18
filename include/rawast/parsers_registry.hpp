@@ -20,9 +20,7 @@ class Parser;
 //   * dotted:  "std.int"      — always works, self-documenting
 //
 // Both names resolve to the same kind of Parser (a separate instance
-// per Grammar); replace_parser (used for callback-driven parser
-// rewriting in LEF/DEF/Liberty) operates on whichever name the rule
-// referenced. Future M1 work: detect bare-name collisions across
+// per Grammar). Future M1 work: detect bare-name collisions across
 // active groups and require qualification when ambiguous.
 
 // Factory for one parser. Called every time the group is applied —
