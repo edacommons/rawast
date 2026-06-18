@@ -1313,3 +1313,66 @@ TEST_CASE("Preprocessor::process: macro use after `\\`ifdef-taken branch") {
     );
     CHECK(out.find("x = 42;") != std::string::npos);
 }
+
+// ─── Three-mode API ──────────────────────────────────────────────────
+
+TEST_CASE("Preprocessor::parse returns AST without expanding") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    auto r = pp.parse(
+        "`define WIDTH 32\n"
+        "wire [`WIDTH-1:0] x;\n"
+    );
+    REQUIRE(r);
+    REQUIRE(*r);
+    // No state mutation — parse does not run the walker, so macros
+    // are still empty.
+    CHECK(pp.macros().empty());
+    // The AST is a PP_FILE (ArrayValue) of items including the
+    // \`define directive.
+    auto arr = std::dynamic_pointer_cast<ArrayValue>(*r);
+    REQUIRE(arr);
+    CHECK(arr->data().size() >= 1);
+}
+
+TEST_CASE("Preprocessor::preprocess: AST → Stream round-trips through Grammar") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    std::string src =
+        "`define WIDTH 32\n"
+        "wire [`WIDTH-1:0] x;\n";
+    auto ast = pp.parse(src);
+    REQUIRE(ast);
+
+    // Mode 2: expand the AST to a Stream. The Stream owns the
+    // expanded buffer — it survives past this scope into the next
+    // grammar-parse step.
+    Stream s = pp.preprocess(*ast, src);
+
+    // Mode 2 walker mutates state — the macro should now be visible.
+    CHECK(pp.macros().count("WIDTH") == 1);
+
+    // The Stream's bytes should be the expanded text (no \`define
+    // line, WIDTH replaced by 32). Drain the reader to verify.
+    std::string out;
+    while (auto c = s.reader().get()) out.push_back(*c);
+    CHECK(out.find("`define") == std::string::npos);
+    CHECK(out.find("wire [32-1:0] x;") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::preprocess: returned Stream survives Stream move") {
+    // The expanded buffer is owned via Stream::owner_; moving the
+    // Stream must keep the istream's source bytes alive.
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    std::string src = "`define X 7\n`X\n";
+    auto ast = pp.parse(src);
+    REQUIRE(ast);
+
+    Stream s1 = pp.preprocess(*ast, src);
+    Stream s2 = std::move(s1);
+
+    std::string out;
+    while (auto c = s2.reader().get()) out.push_back(*c);
+    CHECK(out.find("7") != std::string::npos);
+}

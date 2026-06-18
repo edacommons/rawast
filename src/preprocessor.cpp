@@ -164,6 +164,25 @@ std::string Preprocessor::process(const std::string& text) {
     return process_ast(*parsed, text);
 }
 
+tl::expected<ValuePtr, ParseError>
+Preprocessor::parse(const std::string& source) {
+    if (!pp_grammar_.top().valid()) {
+        return tl::unexpected(ParseError{
+            {}, "Preprocessor::parse: pp_grammar has no top rule"});
+    }
+    auto stream = Stream::from_string(source);
+    return pp_grammar_.parse(stream);
+}
+
+Stream Preprocessor::preprocess(const ValuePtr& ast,
+                                 const std::string& source) {
+    // Eager expansion into a heap-owned string; the Stream owns the
+    // buffer via owner_, so the returned Stream is self-contained.
+    auto expanded = std::make_shared<std::string>(process_ast(ast, source));
+    auto is = std::make_unique<std::istringstream>(*expanded);
+    return Stream(std::move(is), std::move(expanded));
+}
+
 std::string Preprocessor::process_ast(const ValuePtr& ast,
                                        const std::string& source) {
     // Reset the source map for this call. Spans are scoped to one

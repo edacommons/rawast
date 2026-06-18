@@ -1,6 +1,8 @@
 #pragma once
 
 #include <rawast/node.hpp>
+#include <rawast/parser.hpp>
+#include <rawast/stream.hpp>
 
 #include <functional>
 #include <optional>
@@ -376,6 +378,34 @@ public:
     // records the path in `included_files()` (first-seen order;
     // duplicates suppressed). Returns the preprocessed text.
     std::string process_file(const std::string& path);
+
+    // ─── Three-mode API ─────────────────────────────────────────────
+    //
+    // Mode 1: parse the source through the preprocessor grammar and
+    // return the raw AST, without expanding `\`define / \`include /
+    // \`ifdef ...`. Useful for tooling that wants to inspect macro
+    // and include structure without paying expansion cost (or without
+    // having the surrounding source resolvable at all).
+    //
+    // No mutation of state_ macros / included_files / spans — pure
+    // parse. Returns ParseError on grammar failure; a no-top-rule
+    // grammar yields ParseError too (degenerate construction).
+    tl::expected<ValuePtr, ParseError>
+    parse(const std::string& source);
+
+    // Mode 2: expand a preprocessor AST into a Stream of expanded
+    // bytes ready to feed to a host Grammar::parse. State accumulates
+    // on the instance same as process_ast — macros, includes,
+    // warnings, and spans are all populated.
+    //
+    // The returned Stream owns the expanded byte buffer (via Stream's
+    // shared_ptr<void> owner_ slot); the buffer outlives this call,
+    // so callers can hold the Stream and consume it later.
+    //
+    // `source` is the original input text spans should reference; see
+    // process_ast() for the contract.
+    Stream
+    preprocess(const ValuePtr& ast, const std::string& source);
 
     // Walk a pre-built AST. Bypasses the grammar layer entirely —
     // useful for unit-testing the walker (and the dynamic_macros /
