@@ -1117,30 +1117,48 @@ tl::expected<ValuePtr, ParseError> walk_scan(
 
 } // namespace
 
-tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
+tl::expected<ValuePtr, ParseError> Grammar::parse(Stream& stream) const {
     ValuePool pool;
-    return parse(sr, pool);
+    return parse(stream, pool);
 }
 
-tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& pool) const {
-    return parse_from(sr, pool, top_);
+tl::expected<ValuePtr, ParseError> Grammar::parse(Stream& stream, ValuePool& pool) const {
+    return parse_from(stream.reader(), pool, top_);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse(std::string text) const {
+    auto stream = Stream::from_string(std::move(text));
+    return parse(stream);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse(std::string text, ValuePool& pool) const {
+    auto stream = Stream::from_string(std::move(text));
+    return parse(stream, pool);
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, const std::string& start_name) const {
+        Stream& stream, const std::string& start_name) const {
     ValuePool pool;
-    return parse_from(sr, pool, start_name);
+    return parse_from(stream, pool, start_name);
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, ValuePool& pool, const std::string& start_name) const {
+        Stream& stream, ValuePool& pool, const std::string& start_name) const {
     auto it = named_rules_.find(start_name);
     if (it == named_rules_.end()) {
         return tl::unexpected(ParseError{
-            sr.position(),
+            stream.reader().position(),
             "parse_from: no rule named '" + start_name + "'"});
     }
-    return parse_from(sr, pool, it->second);
+    return parse_from(stream.reader(), pool, it->second);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse_from(
+        Stream& stream, ValuePool& pool, NodeId start,
+        bool require_full_consume,
+        const std::vector<Parser*>* initial_ignore) const {
+    return parse_from(stream.reader(), pool, start,
+                       require_full_consume, initial_ignore);
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(

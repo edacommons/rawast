@@ -40,9 +40,8 @@ std::string save(Grammar& g, ValuePtr v) {
 }
 
 ValuePtr parse(Grammar& g, const std::string& input) {
-    std::istringstream is{input};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(input);
+    auto r = g.parse(stream);
     REQUIRE_MESSAGE(r, "parse failed for input '" << input << "': "
                        << (r ? "" : r.error().message));
     return *r;

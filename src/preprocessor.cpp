@@ -149,9 +149,8 @@ std::string Preprocessor::process(const std::string& text) {
     // text through unchanged in that case.
     if (!pp_grammar_.top().valid()) return text;
 
-    std::istringstream is(text);
-    StreamReader sr{is};
-    auto parsed = pp_grammar_.parse(sr);
+    auto stream = Stream::from_string(text);
+    auto parsed = pp_grammar_.parse(stream);
     if (!parsed) {
         state_.warnings.push_back(
             {"preprocessor parse failed: " + parsed.error().message,
@@ -1358,9 +1357,8 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
 
     // Parse the included file with the same preprocessor grammar.
     // (No depth-of-includes check yet — Phase 3 polish.)
-    std::istringstream is(include_text);
-    StreamReader sr{is};
-    auto parsed = pp_grammar_.parse(sr);
+    auto include_stream = Stream::from_string(include_text);
+    auto parsed = pp_grammar_.parse(include_stream);
     if (!parsed) {
         state_.warnings.push_back(
             {"`include: parse failed in '" + canonical + "': " +

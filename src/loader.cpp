@@ -1408,9 +1408,8 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
 
 tl::expected<void, std::string>
 load_json_grammar_from_string(Grammar& g, std::string_view content) {
-    std::istringstream is{std::string{content}};
-    StreamReader sr{is};
-    auto parsed = json_meta_grammar().parse(sr);
+    auto stream = Stream::from_string(std::string{content});
+    auto parsed = json_meta_grammar().parse(stream);
     if (!parsed) {
         return tl::unexpected(
             "failed to parse JSON-grammar text at byte " +
@@ -1465,9 +1464,8 @@ load_rawast_grammar_from_string(Grammar& g, std::string_view content) {
     const auto& meta = rawast_meta_grammar();
     if (!meta) return tl::unexpected(meta.error());
 
-    std::istringstream is{std::string{content}};
-    StreamReader sr{is};
-    auto parsed = meta->parse(sr);
+    auto stream = Stream::from_string(std::string{content});
+    auto parsed = meta->parse(stream);
     if (!parsed) {
         return tl::unexpected(
             "failed to parse .rawast text at byte " +

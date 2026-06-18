@@ -17,9 +17,8 @@ std::string save_to_string(const Grammar& g, ValuePtr value) {
 }
 
 ValuePtr parse_to_value(const Grammar& g, std::string input) {
-    std::istringstream is{std::move(input)};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(std::move(input));
+    auto r = g.parse(stream);
     REQUIRE(r);
     return *r;
 }

@@ -316,9 +316,8 @@ void Preprocessor::use_default_expr_eval(const Grammar& expr_grammar) {
         }
         // Raw-text cond from sv_preprocessor.rawast's IF rule: parse
         // it with the supplied expression grammar.
-        std::istringstream is{as_string(cond)->data()};
-        StreamReader sr{is};
-        auto r = expr_grammar.parse(sr);
+        auto stream = Stream::from_string(as_string(cond)->data());
+        auto r = expr_grammar.parse(stream);
         if (!r) {
             state_.warnings.push_back(
                 {"failed to parse `if condition '" +

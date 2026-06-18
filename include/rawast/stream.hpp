@@ -2,11 +2,59 @@
 
 #include <cstddef>
 #include <istream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace rawast {
+
+class StreamReader;  // defined below
+
+// Public handoff type for parser input. The canonical type passed to
+// Grammar::parse and produced by Preprocessor::preprocess. Owns the
+// backing (istream + StreamReader cursor + lifetime ownership of any
+// upstream state); engine consumers use `reader()` to drive the parse.
+//
+// All input producers go through Stream factories or are constructed
+// directly by Preprocessor::preprocess(). All input consumers
+// (Grammar::parse, Grammar::parse_from) take Stream&. There is no
+// separate "wrap an istream / StreamReader / string" entry — every
+// parse goes through Stream.
+class Stream {
+public:
+    // Construct a Stream backed by an in-memory string.
+    static Stream from_string(std::string source);
+
+    // Construct a Stream that reads from a file path. The file handle
+    // is owned by the Stream — closed when the Stream is destroyed.
+    // Throws std::runtime_error on open failure.
+    static Stream from_file(const std::string& path);
+
+    // Construct from an arbitrary istream + an owner that keeps any
+    // upstream backing-state alive (e.g. Preprocessor::preprocess()
+    // passes its expanded string buffer here so the istream can read
+    // from it after preprocess() returns).
+    Stream(std::unique_ptr<std::istream> is,
+           std::shared_ptr<void> owner = {});
+
+    Stream(Stream&&) noexcept;
+    Stream& operator=(Stream&&) noexcept;
+    Stream(const Stream&) = delete;
+    Stream& operator=(const Stream&) = delete;
+    ~Stream();
+
+    // Engine-facing cursor. Holds the mark/accept/reject machinery the
+    // parse driver uses. Stable across moves of the Stream because
+    // the underlying istream is heap-allocated (unique_ptr) — moving
+    // the Stream doesn't relocate the istream object.
+    StreamReader& reader() noexcept { return *reader_; }
+
+private:
+    std::unique_ptr<std::istream> is_;
+    std::unique_ptr<StreamReader> reader_;
+    std::shared_ptr<void> owner_;  // type-erased backing-state owner
+};
 
 // Snapshot of a position in the input stream. 1-based line/column,
 // 0-based absolute byte offset.

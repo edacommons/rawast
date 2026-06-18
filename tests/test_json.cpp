@@ -9,9 +9,8 @@ using namespace rawast;
 
 namespace {
 tl::expected<ValuePtr, ParseError> parse_json(const Grammar& g, std::string input) {
-    std::istringstream is{std::move(input)};
-    StreamReader sr{is};
-    return g.parse(sr);
+    auto stream = Stream::from_string(std::move(input));
+    return g.parse(stream);
 }
 } // namespace
 

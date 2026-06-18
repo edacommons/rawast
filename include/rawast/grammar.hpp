@@ -227,8 +227,14 @@ public:
     // The pool-aware overload uses the caller-provided pool. After parse
     // returns, the caller owns the pool and can query its back-references
     // (find_containers_of) to do value search across the produced tree.
-    tl::expected<ValuePtr, ParseError> parse(StreamReader& sr) const;
-    tl::expected<ValuePtr, ParseError> parse(StreamReader& sr, ValuePool& pool) const;
+    tl::expected<ValuePtr, ParseError> parse(Stream& stream) const;
+    tl::expected<ValuePtr, ParseError> parse(Stream& stream, ValuePool& pool) const;
+
+    // Convenience overloads: build a Stream from a string and parse it.
+    // Equivalent to `parse(Stream::from_string(text), ...)`. The Stream
+    // is constructed, consumed, and destroyed within the call.
+    tl::expected<ValuePtr, ParseError> parse(std::string text) const;
+    tl::expected<ValuePtr, ParseError> parse(std::string text, ValuePool& pool) const;
     // Parse from an explicit start node — used by the subparse hook to
     // re-enter the engine on an item's captured string with a different
     // entry rule. The same grammar is reused; only the starting point
@@ -249,6 +255,14 @@ public:
     // "no seed" — the parse starts with an empty ignore_stack and
     // falls back to the grammar's default ignore set.
     tl::expected<ValuePtr, ParseError> parse_from(
+            Stream& stream, ValuePool& pool, NodeId start,
+            bool require_full_consume = true,
+            const std::vector<Parser*>* initial_ignore = nullptr) const;
+    // Internal entry — engine's walk_scan calls this directly with the
+    // outer parse's StreamReader to keep stream marks coherent across
+    // INNER subparses. Not part of the public API; use the Stream
+    // overload above for external subparse calls.
+    tl::expected<ValuePtr, ParseError> parse_from(
             StreamReader& sr, ValuePool& pool, NodeId start,
             bool require_full_consume = true,
             const std::vector<Parser*>* initial_ignore = nullptr) const;
@@ -263,9 +277,9 @@ public:
     // Equivalent to `parse_from(sr, pool, g.rule_id("EXPR"))` with an
     // internally-allocated pool plus an explicit error on missing rule.
     tl::expected<ValuePtr, ParseError> parse_from(
-            StreamReader& sr, const std::string& start_name) const;
+            Stream& stream, const std::string& start_name) const;
     tl::expected<ValuePtr, ParseError> parse_from(
-            StreamReader& sr, ValuePool& pool, const std::string& start_name) const;
+            Stream& stream, ValuePool& pool, const std::string& start_name) const;
 
     // --- Driver: save direction ----------------------------------------
 

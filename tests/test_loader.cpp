@@ -20,9 +20,8 @@ Grammar make_json_target() {
 }
 
 ValuePtr parse_with(const Grammar& g, std::string input) {
-    std::istringstream is{std::move(input)};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(std::move(input));
+    auto r = g.parse(stream);
     REQUIRE(r);
     return *r;
 }
@@ -180,9 +179,8 @@ TEST_CASE("Loader recognizes {type:value, var:true} for emitting names") {
     auto r = load_json_grammar_from_string(g, schema);
     REQUIRE(r);
 
-    std::istringstream is{"42"};
-    StreamReader sr{is};
-    auto v = g.parse(sr);
+    auto stream = Stream::from_string("42");
+    auto v = g.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -239,9 +237,8 @@ TEST_CASE("Loaded .rawast grammar parses a single ref rule") {
     auto g = make_rawast_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
 
-    std::istringstream is{"start: <VALUE>"};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("start: <VALUE>");
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
@@ -281,9 +278,8 @@ TEST_CASE("Loaded .rawast grammar parses a choice of parser-name expressions") {
     auto g = make_rawast_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
 
-    std::istringstream is{"VALUE: choice { int, float, string }"};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("VALUE: choice { int, float, string }");
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
@@ -304,9 +300,8 @@ TEST_CASE("Loaded .rawast grammar parses a sequence with array container") {
     auto g = make_rawast_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
 
-    std::istringstream is{R"(LIST: sequence array { "[", repeat <VALUE> separator ",", "]" })"};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(R"(LIST: sequence array { "[", repeat <VALUE> separator ",", "]" })");
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
@@ -327,9 +322,8 @@ TEST_CASE("Loaded .rawast grammar parses a sequence without container") {
     auto g = make_rawast_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
 
-    std::istringstream is{R"(PAIR: sequence { string, ":", <VALUE> })"};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(R"(PAIR: sequence { string, ":", <VALUE> })");
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
@@ -359,9 +353,8 @@ TEST_CASE("End-to-end: .rawast definition produces a working parser") {
     auto r = load_rawast_grammar_from_string(target, rawast_source);
     REQUIRE(r);
 
-    std::istringstream is{"[1, 2, 3]"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string("[1, 2, 3]");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*v);
     REQUIRE(arr);
@@ -387,9 +380,8 @@ TEST_CASE("End-to-end: .rawast var-binding (X:=@) — string as dict key") {
     )";
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
-    std::istringstream is{R"({"a": 1, "b": 2, "c": 3})"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string(R"({"a": 1, "b": 2, "c": 3})");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -429,10 +421,9 @@ TEST_CASE("End-to-end: .rawast full JSON grammar — self-host through bindings"
     REQUIRE(load_rawast_grammar_from_string(target, json_in_rawast));
 
     // Smoke test: round-trip the JSON grammar's own torture input.
-    std::istringstream is{
-        R"({"items":[1, 2, {"k":"v"}], "flag": true, "none": null})"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string(
+        R"({"items":[1, 2, {"k":"v"}], "flag": true, "none": null})");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -460,9 +451,8 @@ TEST_CASE("End-to-end: .rawast named binding (X:name=@) — emits named field") 
     )";
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
-    std::istringstream is{R"("name" 42)"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string(R"("name" 42)");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -491,9 +481,8 @@ TEST_CASE("End-to-end: .rawast literal binding (X:name=\"literal\") — string c
     )";
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
-    std::istringstream is{R"("ignored" 5)"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string(R"("ignored" 5)");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -523,9 +512,8 @@ TEST_CASE("End-to-end: .rawast literal binding — int / float / bool / null") {
     )";
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
-    std::istringstream is{R"("a" "b" "c" "d" "e" 7)"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string(R"("a" "b" "c" "d" "e" 7)");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -567,9 +555,8 @@ TEST_CASE("End-to-end: .rawast-defined parser also handles mixed types") {
 
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
-    std::istringstream is{R"([1, 3.14, "hello"])"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string(R"([1, 3.14, "hello"])");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*v);
     REQUIRE(arr);
@@ -583,9 +570,8 @@ TEST_CASE("Loaded .rawast grammar parses key-with-null discriminator") {
     auto g = make_rawast_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/rawast.json"));
 
-    std::istringstream is{R"(NULL_KEY: "null":null)"};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(R"(NULL_KEY: "null":null)");
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
@@ -624,9 +610,8 @@ TEST_CASE("Loader auto-emits Keys with at-bindings (`'X':name=@`)") {
     )";
     REQUIRE(load_rawast_grammar_from_string(target, rawast_source));
 
-    std::istringstream is{"aaa foo"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string("aaa foo");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -658,9 +643,8 @@ TEST_CASE("Loader wraps optional with at-binding (`?<X>:name=@`) — skipped opt
 
     // Case 1: optional ABSENT — `a` field should not appear.
     {
-        std::istringstream is{"bbb foo"};
-        StreamReader sr{is};
-        auto v = target.parse(sr);
+        auto stream = Stream::from_string("bbb foo");
+        auto v = target.parse(stream);
         REQUIRE(v);
         auto d = std::dynamic_pointer_cast<DictValue>(*v);
         REQUIRE(d);
@@ -672,9 +656,8 @@ TEST_CASE("Loader wraps optional with at-binding (`?<X>:name=@`) — skipped opt
     }
     // Case 2: optional PRESENT — `a` is "aaa" (NOT "bbb" from the next field).
     {
-        std::istringstream is{"aaa bbb foo"};
-        StreamReader sr{is};
-        auto v = target.parse(sr);
+        auto stream = Stream::from_string("aaa bbb foo");
+        auto v = target.parse(stream);
         REQUIRE(v);
         auto d = std::dynamic_pointer_cast<DictValue>(*v);
         REQUIRE(d);
@@ -716,9 +699,8 @@ TEST_CASE("Repeat per-iteration mark — failing iteration rolls back to where i
     //   * Without the rollback fix, the cursor stays past `END` and
     //     TOP's `'END'` literal fails. With the fix, cursor restores to
     //     before `END` and TOP completes with exactly 1 successful iter.
-    std::istringstream is{"INT x; END"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string("INT x; END");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);
@@ -766,9 +748,8 @@ TEST_CASE("First-byte set propagates through leading optionals in a Sequence") {
     // `int x;` should match PROP even though `i` isn't in either of
     // the leading optionals' first-byte sets ({l}, {s}). With the fix,
     // PROP's first-byte set is {l, s, i, b}.
-    std::istringstream is{"C { int x; bool y; }"};
-    StreamReader sr{is};
-    auto v = target.parse(sr);
+    auto stream = Stream::from_string("C { int x; bool y; }");
+    auto v = target.parse(stream);
     REQUIRE(v);
     auto d = std::dynamic_pointer_cast<DictValue>(*v);
     REQUIRE(d);

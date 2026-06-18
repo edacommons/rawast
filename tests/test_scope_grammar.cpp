@@ -26,9 +26,8 @@ Grammar load(const char* src) {
 }
 
 ValuePtr parse_input(Grammar& g, const std::string& input) {
-    std::istringstream is{input};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(input);
+    auto r = g.parse(stream);
     REQUIRE_MESSAGE(r, "parse failed for '" << input << "': "
                        << (r ? "" : r.error().message));
     return *r;
@@ -367,9 +366,8 @@ TEST_CASE("scope: multi-stop via JSON-form grammar load") {
     })JSON";
     auto r = load_json_grammar_from_string(g, json);
     REQUIRE_MESSAGE(r, "JSON-form load failed: " << (r ? "" : r.error()));
-    std::istringstream is{"(a,b,c)"};
-    StreamReader sr{is};
-    auto p = g.parse(sr);
+    auto stream = Stream::from_string("(a,b,c)");
+    auto p = g.parse(stream);
     REQUIRE_MESSAGE(p, "parse failed: " << (p ? "" : p.error().message));
     auto arr = as_array(*p);
     REQUIRE(arr);
@@ -413,9 +411,8 @@ TEST_CASE("scope: #subparse re-entry produces structured AST (self-contained)") 
     )GRAM");
     REQUIRE_MESSAGE(r, "load failed: " << (r ? "" : r.error()));
 
-    std::istringstream is{"[ foo bar ]"};
-    StreamReader sr{is};
-    auto p = g.parse(sr);
+    auto stream = Stream::from_string("[ foo bar ]");
+    auto p = g.parse(stream);
     REQUIRE_MESSAGE(p, "parse failed: " << (p ? "" : p.error().message));
     // The scope captured " foo bar " as bytes, then #subparse re-ran
     // INNER on that string. INNER's own `ignore linespace` handles
@@ -459,9 +456,8 @@ TEST_CASE("scope: multi-stop grammar round-trips through to_value → load") {
 
     // First-load behaviour: multi-stop scope correctly splits args.
     {
-        std::istringstream is{"(a,b,c)"};
-        StreamReader sr{is};
-        auto p = g1.parse(sr);
+        auto stream = Stream::from_string("(a,b,c)");
+        auto p = g1.parse(stream);
         REQUIRE(p);
         auto arr = as_array(*p);
         REQUIRE(arr);
@@ -478,9 +474,8 @@ TEST_CASE("scope: multi-stop grammar round-trips through to_value → load") {
     REQUIRE_MESSAGE(r2, "round-trip load: " << (r2 ? "" : r2.error()));
 
     {
-        std::istringstream is{"(a,b,c)"};
-        StreamReader sr{is};
-        auto p = g2.parse(sr);
+        auto stream = Stream::from_string("(a,b,c)");
+        auto p = g2.parse(stream);
         REQUIRE_MESSAGE(p, "round-trip parse: "
                        << (p ? "" : p.error().message));
         auto arr = as_array(*p);
@@ -509,9 +504,8 @@ TEST_CASE("scope: stop_strict propagates from strict-Key sibling") {
     )GRAM");
     REQUIRE_MESSAGE(r, "load: " << (r ? "" : r.error()));
 
-    std::istringstream is{"begin some endpoint actually end"};
-    StreamReader sr{is};
-    auto p = g.parse(sr);
+    auto stream = Stream::from_string("begin some endpoint actually end");
+    auto p = g.parse(stream);
     REQUIRE_MESSAGE(p, "parse failed (strict-Key sibling didn't "
                        "propagate to scope's stop check): "
                        << (p ? "" : p.error().message));

@@ -29,9 +29,8 @@ Grammar load_grammar() {
 
 // Full PP_FILE parse result (an ArrayValue of PP_ITEMs).
 ValuePtr parse_file(Grammar& g, const std::string& src) {
-    std::istringstream is{src};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(src);
+    auto r = g.parse(stream);
     REQUIRE_MESSAGE(r, "parse failed for '" << src << "': "
                        << (r ? "" : r.error().message));
     return *r;

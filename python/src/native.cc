@@ -157,12 +157,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_file",
             [](rawast::Grammar& g, const std::string& path) {
-                std::ifstream fs(path, std::ios::binary);
-                if (!fs) {
-                    throw std::runtime_error("cannot open input: " + path);
-                }
-                rawast::StreamReader sr(fs);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_file(path);
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -179,9 +175,8 @@ NB_MODULE(_native, m) {
             [](rawast::Grammar& g, const std::string& path,
                rawast::Preprocessor& pp) {
                 auto preprocessed = pp.process_file(path);
-                std::istringstream is(preprocessed);
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(std::move(preprocessed));
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -193,12 +188,8 @@ NB_MODULE(_native, m) {
         .def("parse_file",
             [](rawast::Grammar& g, const std::string& path,
                const std::string& start) {
-                std::ifstream fs(path, std::ios::binary);
-                if (!fs) {
-                    throw std::runtime_error("cannot open input: " + path);
-                }
-                rawast::StreamReader sr(fs);
-                auto r = g.parse_from(sr, start);
+                auto stream = rawast::Stream::from_file(path);
+                auto r = g.parse_from(stream, start);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -209,9 +200,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content) {
-                std::istringstream is(content);
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(content);
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -222,9 +212,8 @@ NB_MODULE(_native, m) {
             [](rawast::Grammar& g, const std::string& content,
                rawast::Preprocessor& pp) {
                 auto preprocessed = pp.process(content);
-                std::istringstream is(preprocessed);
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(std::move(preprocessed));
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -234,9 +223,8 @@ NB_MODULE(_native, m) {
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content,
                const std::string& start) {
-                std::istringstream is(content);
-                rawast::StreamReader sr(is);
-                auto r = g.parse_from(sr, start);
+                auto stream = rawast::Stream::from_string(content);
+                auto r = g.parse_from(stream, start);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -245,10 +233,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b) {
-                std::string s(b.c_str(), b.size());
-                std::istringstream is(std::move(s));
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(std::string(b.c_str(), b.size()));
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -258,10 +244,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b, const std::string& start) {
-                std::string s(b.c_str(), b.size());
-                std::istringstream is(std::move(s));
-                rawast::StreamReader sr(is);
-                auto r = g.parse_from(sr, start);
+                auto stream = rawast::Stream::from_string(std::string(b.c_str(), b.size()));
+                auto r = g.parse_from(stream, start);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
