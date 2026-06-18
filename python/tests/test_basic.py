@@ -261,3 +261,17 @@ def test_preprocessor_three_mode_pipeline():
     smoke = rawast.Stream.from_string("42")
     json_g = rawast.Grammar("json")
     assert json_g.parse_stream(smoke) == 42
+
+
+def test_tcl_grammar_accepts_utf8_in_quoted_strings():
+    """Regression: ALL_BYTES first-byte macro previously capped at
+    0x7F, so the SEGMENTS subparse downstream of the quoted-string
+    parser refused to enter LITERAL_SEG on a non-ASCII byte. Fixed by
+    extending ALL_BYTES to cover 0x01-0xFF."""
+    g = rawast.Grammar("tcl")
+    ast = g.parse_string('foo "中國的漢字"')
+    cmd = ast["commands"][0]
+    assert cmd["type"] == "command"
+    quoted = cmd["words"][1]
+    assert quoted["type"] == "quoted"
+    assert quoted["value"] == [{"type": "literal", "value": "中國的漢字"}]

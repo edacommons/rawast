@@ -149,9 +149,13 @@ public:
 #define EXC_RANGE(lo, hi) "-" lo hi
 #define INC_CHAR(c)       "+" c c
 #define EXC_CHAR(c)       "-" c c
-// Start with every byte from 0x01 through 0x7F set. Useful as a base
-// for `… EXC_CHAR(…) EXC_CHAR(…) …` ("everything except these"). 0x00
-// is omitted since it isn't a legal grammar input byte.
-#define ALL_BYTES         "+\x01\x7f"
+// Start with every non-zero byte set (0x01 through 0xFF). Useful as
+// a base for `… EXC_CHAR(…) EXC_CHAR(…) …` ("everything except these").
+// Includes the 0x80-0xFF range so multi-byte UTF-8 sequences flow
+// through `ALL_BYTES`-based first-byte sets — without this, a
+// `tcl.literal_run` (or any other "all bytes minus a few specials"
+// parser) would reject the first byte of any non-ASCII character.
+// 0x00 is omitted since it isn't a legal grammar input byte.
+#define ALL_BYTES         "+\x01\xff"
 
 } // namespace rawast
