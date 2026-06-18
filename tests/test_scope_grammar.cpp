@@ -323,6 +323,61 @@ TEST_CASE("scope: bare scope wrapped in Choice fails at LOAD") {
         "pass can determine its stops.");
 }
 
+// ─── Multi-stop scope via JSON-grammar form ─────────────────────────────
+
+// Both `.rawast` and JSON-form grammars run through the same
+// `load_json_grammar_into` backend (the rawast loader is just a
+// front-end that parses .rawast text to the Value tree the JSON form
+// would supply directly). So the multi-stop resolver fires the same
+// way. This test verifies the JSON-form path end-to-end — same shape
+// the rawast tests exercise, but built as a Value tree manually so
+// the JSON load path is what's actually loading the grammar.
+TEST_CASE("scope: multi-stop via JSON-form grammar load") {
+    register_std_parser_group();
+    Grammar g;
+    // Equivalent .rawast:
+    //   PROG: sequence array {
+    //     "(",
+    //     repeat scope { std.string } separator ",",
+    //     ")"
+    //   }
+    // Build the same shape via JSON form.
+    const char* json = R"JSON({
+        "use": ["std"],
+        "start": "PROG",
+        "PROG": {
+            "type": "sequence",
+            "container": "array",
+            "value": [
+                { "expr": { "type": "key", "key": "(" } },
+                { "expr": {
+                    "type": "repeat",
+                    "value": { "expr": {
+                        "type": "scope",
+                        "value": [
+                            { "expr": { "type": "std.string" } }
+                        ]
+                    } },
+                    "separator": { "expr": { "type": "key", "key": "," } }
+                } },
+                { "expr": { "type": "key", "key": ")" } }
+            ]
+        }
+    })JSON";
+    auto r = load_json_grammar_from_string(g, json);
+    REQUIRE_MESSAGE(r, "JSON-form load failed: " << (r ? "" : r.error()));
+    std::istringstream is{"(a,b,c)"};
+    StreamReader sr{is};
+    auto p = g.parse(sr);
+    REQUIRE_MESSAGE(p, "parse failed: " << (p ? "" : p.error().message));
+    auto arr = as_array(*p);
+    REQUIRE(arr);
+    REQUIRE(arr->data().size() == 3);
+    CHECK(as_string(arr->data()[0])->data() == "a");
+    CHECK(as_string(arr->data()[1])->data() == "b");
+    CHECK(as_string(arr->data()[2])->data() == "c");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {
