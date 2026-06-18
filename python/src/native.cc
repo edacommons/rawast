@@ -121,6 +121,29 @@ NB_MODULE(_native, m) {
     rawast::register_lefdef_parser_group();
     rawast::register_tcl_parser_group();
 
+    // Stream — opaque Python type. The canonical Grammar input.
+    // Produced by Stream.from_string / Stream.from_file, or by
+    // Preprocessor.preprocess. Consumed by Grammar.parse_stream.
+    // Move-only on the C++ side; nanobind treats this as an opaque
+    // handle (Python sees one object, no copies).
+    nb::class_<rawast::Stream>(m, "Stream",
+        "Canonical parser input. Construct via from_string / from_file, "
+        "or receive one from Preprocessor.preprocess. Consume via "
+        "Grammar.parse_stream.")
+        .def_static("from_string",
+            [](std::string source) {
+                return rawast::Stream::from_string(std::move(source));
+            },
+            nb::arg("source"),
+            "Build a Stream backed by an in-memory string.")
+        .def_static("from_file",
+            [](const std::string& path) {
+                return rawast::Stream::from_file(path);
+            },
+            nb::arg("path"),
+            "Build a Stream that reads from a file path. Throws on open "
+            "failure.");
+
     nb::class_<rawast::Grammar>(m, "Grammar",
         "A loaded grammar — drives parse, save, and lint via its methods.")
         .def_static("load",
@@ -251,6 +274,30 @@ NB_MODULE(_native, m) {
             },
             nb::arg("data"), nb::arg("start"),
             "Parse a bytes object starting from the named rule.")
+
+        // Parse a Stream directly. The canonical entry point — the
+        // string/file/bytes overloads above are convenience wrappers
+        // that build a Stream internally. Used by callers who already
+        // hold a Stream (e.g. from Preprocessor.preprocess).
+        .def("parse_stream",
+            [](rawast::Grammar& g, rawast::Stream& stream) {
+                auto r = g.parse(stream);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("stream"),
+            "Parse a Stream from the grammar's default start. The Stream "
+            "is consumed; reuse is undefined.")
+
+        .def("parse_stream",
+            [](rawast::Grammar& g, rawast::Stream& stream,
+               const std::string& start) {
+                auto r = g.parse_from(stream, start);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("stream"), nb::arg("start"),
+            "Parse a Stream starting from the named rule.")
 
         .def("save",
             [](rawast::Grammar& g, nb::handle value, bool pretty,
@@ -463,20 +510,20 @@ NB_MODULE(_native, m) {
             "directives. Useful for tooling that wants to inspect macro / "
             "include / ifdef structure.")
 
-        // Mode 2: expand a Python-shaped AST and return the expanded
-        // bytes as a string. C++ callers get a Stream back; Python
-        // strings are the natural handoff to Grammar.parse_string.
+        // Mode 2: expand a Python-shaped AST into a Stream — same
+        // canonical handoff type as the C++ API. Feed it to
+        // Grammar.parse_stream for Mode 3.
         .def("preprocess",
             [](rawast::Preprocessor& pp, nb::handle ast,
                const std::string& source) {
                 auto v = python_to_value(ast);
-                return pp.process_ast(v, source);
+                return pp.preprocess(v, source);
             },
             nb::arg("ast"), nb::arg("source"),
             "Mode 2: expand a preprocessor AST (as returned by parse()) "
-            "into the preprocessed text. `source` is the original input "
-            "text the AST was parsed from. State (macros, includes, "
-            "warnings, spans) accumulates on this instance.")
+            "and return the expanded bytes as a Stream. `source` is the "
+            "original input text the AST was parsed from. State (macros, "
+            "includes, warnings, spans) accumulates on this instance.")
 
         .def("is_defined",
             [](const rawast::Preprocessor& pp, const std::string& name) {
