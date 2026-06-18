@@ -74,7 +74,7 @@ The in-memory `make_json_grammar()` (C++) is **JSONC by construction** — it ap
 
 ## Subparse — `:subparse="<RULE>"`
 
-A terminal parser captures a chunk of input as a string. With `:subparse="<RULE>"` on the binding, the engine immediately re-invokes the parse loop on the captured string with `<RULE>` as the start rule. Same grammar, fresh ignore-stack, fully recursive.
+A terminal parser captures a chunk of input as a string. With `:subparse="<RULE>"` on the binding, the engine immediately re-invokes the parse loop on the captured string with `<RULE>` as the start rule. Same grammar, fully recursive.
 
 Used by the Tcl grammar to handle word substitutions:
 - `tcl.quoted_string` captures `"foo $bar [baz]"` as one string.
@@ -82,7 +82,23 @@ Used by the Tcl grammar to handle word substitutions:
 - `WORD_SEGMENTS` recognizes variable references (`$bar`), bracket substitutions (`[baz]`), escapes, and literal runs.
 - For bracket subs, the body is itself a Tcl script — `BRACKET_SEG` uses `:subparse="SCRIPT"` to recursively parse it as a full Tcl script.
 
+**Self-contained re-entry.** A `:subparse` re-parse starts with a **fresh `ignore_stack`** — it does NOT inherit the surrounding context's ignore policy. The design intent: each `:subparse` target is its own self-contained mini-language (Tcl SCRIPT, sv_pp_expr PP_EXPR, lefdef sub-grammars) that declares its own ignore rules and processes the captured bytes on its own terms. This is **distinct** from the scope-INNER subparse path, which IS inheriting (see "scope INNER inheritance" below) — INNERs run *inside* the surrounding scope's parse, sharing context; `:subparse` re-parses are a *fresh top-level* on the captured bytes.
+
+A practical consequence: the subparse rule typically declares its own `ignore`. The captured body may carry leading/trailing whitespace from the surrounding scope, and the subparse rule's own ignore policy is what skips it. If the subparse rule has no `ignore` declaration, the captured whitespace is content and must be matched literally.
+
 The braced `{…}` case is structurally different: the grammar captures the brace body as a literal, no automatic subparse. The application re-parses it on demand by calling `g.parse_string(body, start="SCRIPT")` from host code — exactly how Tcl's runtime evaluates `if { … }` and `proc { … }` bodies.
+
+## Scope INNER inheritance
+
+When a `scope { OPEN, INNER..., CLOSE }` form dispatches a non-leaf INNER rule (a `<Ref>` to another rule), the INNER's parse runs as a **subparse from within `walk_scan`**. Unlike `:subparse="<RULE>"`, this subparse **inherits** the surrounding scope's ignore policy:
+
+- The caller's active ignore set is seeded onto the subparse's `ignore_stack` (entry-depth=0, persists for the whole subparse).
+- A first-content guard suppresses `run_ignore` at Key/Parse/Raw/scope sites until the INNER consumes its first byte of content — keeping leading whitespace in the surrounding scope's body capture instead of being absorbed into the INNER's span.
+- End-of-parse `run_ignore` is skipped for non-full-consume re-parses, preserving trailing-whitespace byte attribution the same way.
+
+Result: an INNER rule with no explicit `ignore` declaration behaves identically whether dispatched via a normal `<Ref>` or as a scope INNER. The asymmetric "works standalone but fails inside a scope" failure mode is gone.
+
+The contrast with `:subparse`: scope INNERs share context (they're matching bytes *inside* the surrounding rule); `:subparse` re-parses are conceptually a fresh parse of a captured value (a different language interpreting that value).
 
 ## The bidirectional walk
 
@@ -105,7 +121,7 @@ See `src/save_stack.cpp` for the engine. The entry point is `Grammar::save` (def
 
 - **LL(k) ambiguity on Choices.** A Choice whose alternatives share a first-token signature (and whose LL(k) lookahead can't prove disjointness within bounded depth) is flagged. The engine actually handles these cases correctly via always-on alt-failure recovery for Choice frames — the lint flags them as informational design feedback (the alt-failure cost is small but real; restructuring eliminates it). There is no silencer flag; either restructure the alternatives to diverge earlier or accept the warning as a permanent design note in the lint output.
 - **Wildcard-rule-with-nested-Choice-type-emit anti-pattern.** A `sequence dict` rule with no top-level `:type=…` discriminator whose body contains a nested Choice with `type=` emits. Save dispatch can't introspect through the nested Choice, so the rule looks like a catch-all and may swallow values destined for sibling alternatives, then fail on the inner Choice with "no matching grammar alternative for value at save". Fix: lift each nested-Choice alt to a sibling rule of the outer Choice.
-- **Raw-consume (`*`) misuse.** A `*` node not followed by a literal-key sibling in the same sequence. The literal sibling tells the engine where to stop the raw consumption.
+- **Byte-scan stop sanity (`*` and `scope { ... }`).** Both `*` (Raw) and `scope { … }` need at least one Key literal that bounds them in the surrounding context. Two valid shapes: (1) direct child of a Sequence with the next sibling Key carrying the stop, (2) inside a `repeat ... separator X` whose post-repeat sibling is a Key — both the separator and the post-repeat Key serve as multi-stop boundaries. Anything else (scope wrapped in Choice / optional / nested Repeat) is rejected: the resolver can't determine stops and the engine would error at parse time. The linter mirrors the loader's resolver — the same checks fire at lint time with friendlier diagnostics than the loader's hard error.
 
 The lint runs automatically when grammars are loaded for the test suite, so regressions surface at PR time.
 

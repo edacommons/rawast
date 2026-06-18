@@ -378,6 +378,62 @@ TEST_CASE("scope: multi-stop via JSON-form grammar load") {
     CHECK(as_string(arr->data()[2])->data() == "c");
 }
 
+// ─── Scope `#subparse` re-entry under the new inheritance path ──────────
+
+// A scope/Raw with `#subparse="RULE"` captures its body as a string,
+// then re-enters the parse engine on that body with RULE as the
+// start. The re-entry uses `parse_from(...)` with default args —
+// `require_full_consume=true`, `initial_ignore=nullptr` — by design.
+// Each `#subparse` rule is its own self-contained mini-language
+// (Tcl SCRIPT, sv_pp_expr PP_EXPR, etc.) that declares its own
+// ignore policy and doesn't inherit from the surrounding context.
+//
+// The symmetric-inheritance fix (0017380) only modifies behaviour
+// when `initial_ignore` is set; `#subparse` re-entry doesn't set it,
+// so the re-parse stays self-contained. This test locks the design
+// in: the subparse rule processes its own whitespace via its own
+// `ignore` declaration, and the produced structured value replaces
+// the original string body in the outer AST.
+TEST_CASE("scope: #subparse re-entry produces structured AST (self-contained)") {
+    register_std_parser_group();
+    Grammar g;
+    auto r = load_rawast_grammar_from_string(g, R"GRAM(
+        use: std
+        start: <PROG>
+        PROG ignore linespace: sequence dict {
+          "[",
+          scope { std.string }:body=@:#subparse="INNER",
+          "]"
+        }
+        INNER ignore linespace: sequence dict {
+          identifier:tag=@,
+          identifier:value=@
+        }
+    )GRAM");
+    REQUIRE_MESSAGE(r, "load failed: " << (r ? "" : r.error()));
+
+    std::istringstream is{"[ foo bar ]"};
+    StreamReader sr{is};
+    auto p = g.parse(sr);
+    REQUIRE_MESSAGE(p, "parse failed: " << (p ? "" : p.error().message));
+    // The scope captured " foo bar " as bytes, then #subparse re-ran
+    // INNER on that string. INNER's own `ignore linespace` handles
+    // the leading/trailing whitespace. The result replaces the body
+    // string in PROG's dict.
+    auto top_d = std::dynamic_pointer_cast<DictValue>(*p);
+    REQUIRE(top_d);
+    auto body_it = top_d->data().find("body");
+    REQUIRE(body_it != top_d->data().end());
+    auto d = std::dynamic_pointer_cast<DictValue>(body_it->second);
+    REQUIRE_MESSAGE(d, "scope+#subparse body didn't produce the INNER dict");
+    auto tag   = as_string(d->data()["tag"]);
+    auto value = as_string(d->data()["value"]);
+    REQUIRE(tag);
+    REQUIRE(value);
+    CHECK(tag->data()   == "foo");
+    CHECK(value->data() == "bar");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {
