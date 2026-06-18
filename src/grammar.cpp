@@ -1325,23 +1325,40 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         const std::vector<Parser*>* parsers;
     };
     std::vector<IgnoreScope> ignore_stack;
+    // Seed the caller's active ignore policy when invoked from a
+    // walk_scan INNER subparse. entry_depth=0 keeps the seed at the
+    // bottom of the stack for the lifetime of this parse — any rule
+    // that pushes its own override sits on top until popped, then
+    // the seed re-surfaces. With the seed, all run_ignore sites
+    // (predictive, between-items, end-of-parse) see the caller's
+    // policy uniformly — no asymmetry between optional-boundary
+    // checks and inter-item whitespace skipping.
+    if (initial_ignore && !initial_ignore->empty()) {
+        ignore_stack.push_back({/*entry_depth=*/0, initial_ignore});
+    }
     auto current_ignore = [&]() -> const std::vector<Parser*>& {
         return ignore_stack.empty() ? ignore() : *ignore_stack.back().parsers;
     };
-    // Caller's active ignore policy at the dispatch site of this
-    // sub-parse (set by walk_scan when an INNER rule is subparsed
-    // from within a scope/raw scan). Used ONLY by predictive checks
-    // at optional sites — `should_skip_optional` consults this when
-    // the local ignore_stack is empty. Crucially NOT used by the
-    // run_ignore calls in Key / Parse / Raw / Sequence steps: those
-    // would eat leading or trailing whitespace inside the INNER's
-    // span, shifting bytes from the surrounding scope's body capture
-    // into the INNER's match. The fix's intent is "INNERs make the
-    // SAME optional-dispatch decisions they would in the calling
-    // context, but their byte boundaries stay anchored at the
-    // cursor walk_scan handed them."
-    const std::vector<Parser*>* predictive_fallback =
-        (initial_ignore && !initial_ignore->empty()) ? initial_ignore : nullptr;
+    // First-content guard. When this parse_from is a walk_scan INNER
+    // subparse (initial_ignore set), the leading run_ignore calls
+    // at Key / Parse / Raw cases are suppressed until the rule has
+    // consumed its first byte of content. This keeps leading
+    // whitespace in the surrounding scope's body capture instead of
+    // being eaten by the INNER's leading run_ignore. After any
+    // terminal content match, the guard clears and subsequent
+    // run_ignore calls fire normally — INNERs with required
+    // inter-item whitespace tolerance (e.g. `"begin" ident "end"`)
+    // work as if dispatched via a normal Ref.
+    const bool is_subparse = (initial_ignore != nullptr);
+    bool has_consumed_content = !is_subparse;
+    // Wrapper for the per-cursor run_ignore at content sites
+    // (predictive checks, Key / Parse / Raw / scope entry). Defers
+    // to current_ignore() once content has been consumed; otherwise
+    // (subparse, before first content) becomes a no-op so leading
+    // whitespace stays in the surrounding scope's body capture.
+    auto run_ignore_guarded = [&]() {
+        if (has_consumed_content) run_ignore(sr, current_ignore());
+    };
     auto trim_ignore_stack = [&]() {
         while (!ignore_stack.empty()
                && ignore_stack.back().entry_depth > stack.size()) {
@@ -1381,12 +1398,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // LAYER_KEYWORD where ~97% of attempts on real LEFs rewind on
     // the first character of the key.
     auto choice_alt_cant_match = [this, &sr, &current_ignore,
-                                   &ensure_first_bytes](NodeId alt) -> bool {
+                                   &ensure_first_bytes,
+                                   &run_ignore_guarded](NodeId alt) -> bool {
         ensure_first_bytes();
         NodeId resolved = resolve_ref(alt);
         if (resolved.value() >= first_bytes_known_.size()) return false;
         if (!first_bytes_known_[resolved.value()])         return false;
-        run_ignore(sr, current_ignore());
+        run_ignore_guarded();
         auto c = sr.peek();
         if (!c) return false;
         return !first_bytes_[resolved.value()].test(
@@ -1407,25 +1425,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!first_bytes_known_[resolved.value()])         return false;
         // Peek the next byte after ignore-skip. Whitespace skipping
         // is idempotent; if we later push the frame, the inner
-        // terminal re-runs ignore harmlessly.
-        //
-        // Predictive-only inheritance: when this parse_from was
-        // entered as a walk_scan INNER subparse, the caller's
-        // ignore policy seeds the predictive decision (without
-        // it the optional would skip on inherited whitespace
-        // that the body never declared as syntactic). The
-        // run_ignore here is local to the predictive trial — if
-        // we end up pushing the frame, the rule's own terminals
-        // re-run ignore over the same bytes (no-op); if we skip
-        // the optional, the consumed whitespace stays consumed
-        // because it would have been eaten by any later child
-        // anyway. The seed is NOT used inside the rule's body,
-        // so INNER byte boundaries stay anchored at the cursor.
-        const auto& predictive_ignore =
-            (ignore_stack.empty() && predictive_fallback)
-                ? *predictive_fallback
-                : current_ignore();
-        run_ignore(sr, predictive_ignore);
+        // terminal re-runs ignore harmlessly. current_ignore()
+        // reflects the caller's seeded policy for subparses; the
+        // first-content guard suppresses the run_ignore until a
+        // terminal has matched, so optional-at-start of an INNER
+        // doesn't leak leading whitespace into the INNER's span.
+        run_ignore_guarded();
         auto c = sr.peek();
         if (!c) return false;   // EOF — let the engine handle
         bool skip = !strict_first_bytes_[resolved.value()].test(
@@ -1466,7 +1471,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         // applied at the boundary.
         if (!stack.empty()) {
             if (const auto* ovr = rule_ignore(stack.back().node_id())) {
-                run_ignore(sr, current_ignore());
+                run_ignore_guarded();
                 ignore_stack.push_back({stack.size(), ovr});
             }
         }
@@ -1771,6 +1776,8 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             sr.accept();
+            // Raw matched — first-content guard clears.
+            has_consumed_content = true;
             ValuePtr produced = *r;
             // Subparse hook: same as the Parse node branch — if this
             // Raw node carries a subparse_start, re-enter the engine
@@ -1831,7 +1838,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // walk_scan routine. Inside the body, ignore-set skipping
             // is bypassed — embedded whitespace / comments are part
             // of the captured payload.
-            run_ignore(sr, current_ignore());
+            run_ignore_guarded();
             const Node& n = nodes_[top.node_id().value()];
             if (trace_enabled) trace("  scope");
             sr.mark();
@@ -1867,6 +1874,8 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             sr.accept();
+            // Scope matched — first-content guard clears.
+            has_consumed_content = true;
             // walk_scan returns either StringValue (default string-body
             // mode) or ArrayValue (array container mode); pass through
             // verbatim. Subparse below is meaningful only for
@@ -1922,7 +1931,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
 
         case NodeKind::Key: {
-            run_ignore(sr, current_ignore());
+            run_ignore_guarded();
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
@@ -1960,9 +1969,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             if (r) {
-                // Key matched. The literal itself is not emitted; any
-                // Value-kind children, however, contribute their
-                // constants when iterated.
+                // Key matched — first-content guard clears so
+                // subsequent run_ignore sites (between-items,
+                // optional-boundary, end-of-parse) fire normally.
+                has_consumed_content = true;
+                // The literal itself is not emitted; any Value-kind
+                // children, however, contribute their constants when
+                // iterated.
                 if (top.has_current()) {
                     push_or_skip_optional(top.current_child());
                 } else {
@@ -1991,7 +2004,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
 
         case NodeKind::Parse: {
-            run_ignore(sr, current_ignore());
+            run_ignore_guarded();
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
@@ -2026,6 +2039,9 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             if (r) {
+                // Parse matched — first-content guard clears so
+                // subsequent run_ignore sites fire normally.
+                has_consumed_content = true;
                 ValuePtr produced = *r;
                 // Subparse hook: if this Parse node carries a
                 // subparse_start, re-enter the engine on the produced
@@ -2246,13 +2262,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         // gaps when the file has unmodeled content after the matched
         // portion. Sub-invocations from byte-scan INNER trials disable
         // the check via `require_full_consume=false`; they legitimately
-        // stop at the boundary the rule chose.
-        run_ignore(sr, current_ignore());
-        if (require_full_consume && !sr.eof()) {
-            return tl::unexpected(ParseError{
-                sr.position(),
-                "unexpected content after start rule completed"
-            });
+        // stop at the boundary the rule chose, and crucially MUST NOT
+        // eat trailing ignore bytes — those bytes belong to the
+        // surrounding scope's body capture, not to the INNER.
+        if (require_full_consume) {
+            run_ignore(sr, current_ignore());
+            if (!sr.eof()) {
+                return tl::unexpected(ParseError{
+                    sr.position(),
+                    "unexpected content after start rule completed"
+                });
+            }
         }
         // `#opchain` post-process: when the start rule body (or any
         // Ref along the chain to it) carries the flag, compact any

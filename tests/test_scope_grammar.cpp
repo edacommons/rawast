@@ -166,6 +166,55 @@ TEST_CASE("scope: INNER subparse inherits caller's ignore_stack") {
     CHECK(t_sv->data() == "bracket");
 }
 
+// ─── Scope INNER subparse inheritance is symmetric across all run_ignore sites ──
+
+// The predictive-only inheritance fix (12553ba) seeded the caller's
+// ignore into should_skip_optional but left run_ignore at Key/Parse/
+// Sequence sites stuck with the empty stack. So an INNER rule with
+// required inter-item whitespace tolerance (no optional boundary
+// between the tokens) parses standalone but fails when dispatched as
+// a scope INNER — semantic asymmetry between scope-INNER and normal
+// Ref dispatch.
+//
+// This test pins the symmetry. INNER has three required items
+// (`begin` identifier `end`) separated by spaces. The grammar's
+// `ignore linespace` policy must reach all three run_ignore sites
+// inside INNER, not just predictive ones.
+TEST_CASE("scope: INNER's inter-item whitespace works under inherited ignore") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <PROG>
+        PROG ignore linespace: sequence array {
+          "(", scope array { <INNER> }, ")"
+        }
+        INNER: sequence dict {
+          "begin":t="begin",
+          identifier:name=@,
+          "end"
+        }
+    )GRAM");
+    auto v = parse_input(g, "(begin foo end)");
+    auto outer = as_array(v);
+    REQUIRE(outer);
+    // PROG's sequence-array carries one element — the scope's array.
+    REQUIRE(outer->data().size() == 1);
+    auto segs = std::dynamic_pointer_cast<ArrayValue>(outer->data()[0]);
+    REQUIRE(segs);
+    // Scope's segments must contain exactly one INNER dict — INNER
+    // matched the whole span as one atomic structured value. With
+    // the asymmetry, INNER fails on the first inter-item space and
+    // walk_scan eats bytes raw, producing a StringValue text-run
+    // segment instead.
+    REQUIRE(segs->data().size() == 1);
+    auto inner = std::dynamic_pointer_cast<DictValue>(segs->data()[0]);
+    REQUIRE_MESSAGE(inner,
+        "INNER didn't produce a structured segment — its inter-item "
+        "run_ignore couldn't see the inherited linespace policy");
+    auto name = as_string(inner->data()["name"]);
+    REQUIRE(name);
+    CHECK(name->data() == "foo");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {
