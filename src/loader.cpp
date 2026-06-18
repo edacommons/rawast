@@ -1342,6 +1342,33 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
         }
     }
 
+    // Final validation: every Raw/Scope node MUST have stops resolved
+    // by the time the resolver finishes. Pass 1 + Pass 2 above cover
+    // the supported structural shapes (direct Sequence child or
+    // Repeat-wrapped via find_scan_node descent). A scope/Raw wrapped
+    // in anything else — Choice, optional `?<X>`, nested Repeat — is
+    // invisible to both passes and would silently keep empty stops;
+    // the parse driver later errors at run time with "no stop
+    // literals", far from the grammar source. Error here so the
+    // grammar author sees the problem at load.
+    for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
+        const Node& n = g.node(NodeId{idx});
+        if (n.kind != NodeKind::Raw && n.kind != NodeKind::Scope) continue;
+        if (!n.stops.empty()) continue;
+        const char* label = (n.kind == NodeKind::Raw) ? "raw consume (`*`)"
+                                                      : "scope";
+        return tl::unexpected(
+            std::string(label) +
+            " in this grammar has no stop literal — the resolver "
+            "couldn't find a Key sibling that bounds it. This happens "
+            "when scope/raw is wrapped in a Choice, optional `?<X>`, "
+            "or nested Repeat: the resolver only descends through "
+            "Sequence + Value (binding-marker) chains. Workaround: "
+            "wrap the scope in a Sequence with the stop literal as an "
+            "explicit sibling, or combine alternatives into a single "
+            "scope (its INNERs already act as alternation).");
+    }
+
     // Validate that every Parse-node references a registered parser.
     // Without this, an unresolved name (typo, wrong group, std parser
     // referenced before the `use:` declaration) is accepted by the

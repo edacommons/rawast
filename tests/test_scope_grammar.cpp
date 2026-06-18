@@ -275,6 +275,54 @@ TEST_CASE("scope: Choice-first INNER under leading whitespace dispatches correct
         "retry at the content position");
 }
 
+// ─── scope/Raw with unresolved stops must error at LOAD, not run ────────
+
+// `find_scan_node` only descends through Sequence/Value wrapping (the
+// binding-marker chains the meta-grammar synthesises). A scope/Raw
+// wrapped in other constructs — Choice, optional, nested Repeat —
+// is invisible to both single-stop and multi-stop resolver passes.
+// Without the final validation pass, the load silently completes
+// with empty `Node.stops` and the parser errors at run time with
+// "no stop literals" — far from the grammar source.
+//
+// These tests pin the load-time error behaviour. Workaround for the
+// grammar author: wrap the scope in a Sequence with the stop literal
+// as an explicit sibling, OR combine alternatives into a single
+// scope (its INNERs already act as alternation).
+
+TEST_CASE("scope: inside Choice inside Repeat fails at LOAD") {
+    Grammar g;
+    auto r = load_rawast_grammar_from_string(g, R"GRAM(
+        use: std
+        start: <PROG>
+        PROG: sequence array {
+          "(",
+          repeat choice { scope { std.string } } separator ",",
+          ")"
+        }
+    )GRAM");
+    REQUIRE_FALSE_MESSAGE(r,
+        "Load should reject scope wrapped in Choice — the resolver "
+        "can't find it, so stops never get set. Currently loads ok "
+        "and errors at parse time with 'no stop literals'.");
+}
+
+TEST_CASE("scope: bare scope wrapped in Choice fails at LOAD") {
+    Grammar g;
+    auto r = load_rawast_grammar_from_string(g, R"GRAM(
+        use: std
+        start: <PROG>
+        PROG: sequence {
+          "(",
+          choice { scope { std.string } },
+          ")"
+        }
+    )GRAM");
+    REQUIRE_FALSE_MESSAGE(r,
+        "Load should reject Choice-wrapped scope when no resolver "
+        "pass can determine its stops.");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {
