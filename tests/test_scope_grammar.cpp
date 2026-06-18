@@ -215,6 +215,66 @@ TEST_CASE("scope: INNER's inter-item whitespace works under inherited ignore") {
     CHECK(name->data() == "foo");
 }
 
+// ─── Choice-first INNER under leading whitespace ────────────────────────
+
+// Issue #6: when a scope-dispatched INNER's first item is a Choice and
+// the cursor is at whitespace (with the surrounding grammar's
+// ignore policy seeded into the subparse), the first-content guard
+// suppresses run_ignore before choice_alt_cant_match. The guard
+// raises the question: does this correctly preserve scope byte
+// boundaries, or does it cause silent misparse where alts get
+// wrongly skipped?
+//
+// Expected: walk_scan rejects the INNER at the whitespace position
+// (all alts skipped because none of their first-byte sets include
+// whitespace), eats the space as raw bytes into text_run, then
+// dispatches INNER again at the content position — where Choice
+// alts DO match. Final layout: leading whitespace as text segment,
+// INNER's structured value as next segment.
+TEST_CASE("scope: Choice-first INNER under leading whitespace dispatches correctly") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <PROG>
+        PROG ignore linespace: sequence array {
+          "(",
+          scope array { <ITEM> },
+          ")"
+        }
+        ITEM: choice {
+          <NUM>,
+          <IDENT>
+        }
+        NUM: sequence dict { std.int:type="num":value=@ }
+        IDENT: sequence dict { identifier:type="ident":value=@ }
+    )GRAM");
+    auto v = parse_input(g, "( foo )");
+    auto outer = as_array(v);
+    REQUIRE(outer);
+    REQUIRE(outer->data().size() == 1);
+    auto segs = std::dynamic_pointer_cast<ArrayValue>(outer->data()[0]);
+    REQUIRE(segs);
+    // Expected layout: leading " " text, IDENT segment, trailing " "
+    // text. The Choice-first INNER must match the identifier `foo`
+    // at the post-whitespace position, with the leading space
+    // captured as a scope text-run, not absorbed into the INNER.
+    bool found_ident = false;
+    for (const auto& seg : segs->data()) {
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
+            auto t = as_string(d->data()["type"]);
+            if (t && t->data() == "ident") {
+                auto val = as_string(d->data()["value"]);
+                REQUIRE(val);
+                CHECK(val->data() == "foo");
+                found_ident = true;
+            }
+        }
+    }
+    REQUIRE_MESSAGE(found_ident,
+        "Choice-first INNER didn't match — leading-whitespace guard may "
+        "have permanently skipped alts instead of letting walk_scan "
+        "retry at the content position");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {
