@@ -4,6 +4,7 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <string>
@@ -482,4 +483,130 @@ TEST_CASE("Linter: shared-leading-ref does NOT flag the linear pattern") {
         CHECK_MESSAGE(issue.description.find("shared-leading-ref") == std::string::npos,
                       "Linear pattern should not be flagged: " << issue.description);
     }
+}
+
+// ─── Byte-scan stop sanity (Raw + Scope, single-stop + multi-stop) ─────
+
+namespace {
+// Did at least one issue's description contain `fragment`?
+bool any_description_contains(const std::vector<LintIssue>& issues,
+                              const std::string& fragment) {
+    return std::any_of(issues.begin(), issues.end(),
+        [&](const LintIssue& i) {
+            return i.description.find(fragment) != std::string::npos;
+        });
+}
+} // namespace
+
+TEST_CASE("Linter: Raw without next sibling is flagged") {
+    Grammar g;
+    NodeId seq = g.new_sequence();
+    g.register_rule("BAD", seq);
+    g.new_raw();  // detached, but the rule body sequence has Raw as
+                  // its only child with no Key sibling after.
+    NodeId raw = g.new_raw();
+    g.node(seq).children.push_back(raw);
+    g.set_top(g.new_ref("BAD"));
+
+    auto issues = lint_grammar(g);
+    CHECK(any_description_contains(issues, "Raw consume (`*`)"));
+    CHECK(any_description_contains(issues, "nothing follows"));
+}
+
+TEST_CASE("Linter: Raw with non-Key next sibling is flagged") {
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+    NodeId seq = g.new_sequence();
+    g.register_rule("BAD", seq);
+    NodeId raw = g.new_raw();
+    g.node(seq).children.push_back(raw);
+    g.add_parse(seq, "int");  // Parse, not Key — invalid stop boundary.
+    g.set_top(g.new_ref("BAD"));
+
+    auto issues = lint_grammar(g);
+    CHECK(any_description_contains(issues, "Raw consume (`*`)"));
+    CHECK(any_description_contains(issues, "not a literal key"));
+}
+
+TEST_CASE("Linter: Raw inside repeat without separator + post-repeat Key is flagged") {
+    Grammar g;
+    NodeId raw = g.new_raw();
+    NodeId rep = g.new_repeat();
+    g.node(rep).children.push_back(raw);
+
+    NodeId seq = g.new_sequence();
+    g.register_rule("BAD", seq);
+    g.add_key(seq, "(");
+    g.node(seq).children.push_back(rep);
+    // Intentionally no closing Key after the repeat — multi-stop pass
+    // should flag the missing post-repeat sibling.
+    g.set_top(g.new_ref("BAD"));
+
+    auto issues = lint_grammar(g);
+    CHECK(any_description_contains(issues, "inside a repeat"));
+    CHECK(any_description_contains(issues, "nothing follows the repeat"));
+}
+
+TEST_CASE("Linter: Raw inside repeat with non-Key separator is flagged") {
+    Grammar g;
+    g.register_parser(std::make_unique<IntParser>());
+    NodeId raw = g.new_raw();
+    NodeId rep = g.new_repeat();
+    g.node(rep).children.push_back(raw);
+    // Non-Key separator — invalid as a multi-stop boundary.
+    NodeId sep_parse = g.new_parse("int");
+    g.set_separator(rep, sep_parse);
+
+    NodeId seq = g.new_sequence();
+    g.register_rule("BAD", seq);
+    g.add_key(seq, "(");
+    g.node(seq).children.push_back(rep);
+    g.add_key(seq, ")");  // post-repeat sibling IS a Key — good.
+    g.set_top(g.new_ref("BAD"));
+
+    auto issues = lint_grammar(g);
+    CHECK(any_description_contains(issues, "inside a repeat"));
+    CHECK(any_description_contains(issues, "repeat separator"));
+}
+
+TEST_CASE("Linter: Raw inside repeat with both bounds Key is clean") {
+    Grammar g;
+    NodeId raw = g.new_raw();
+    NodeId rep = g.new_repeat();
+    g.node(rep).children.push_back(raw);
+    NodeId sep_key = g.new_key(",");
+    g.set_separator(rep, sep_key);
+
+    NodeId seq = g.new_sequence();
+    g.register_rule("OK", seq);
+    g.add_key(seq, "(");
+    g.node(seq).children.push_back(rep);
+    g.add_key(seq, ")");
+    g.set_top(g.new_ref("OK"));
+
+    auto issues = lint_grammar(g);
+    // Either no issues, or none mentioning the Raw — Choice ambiguity
+    // checks may still emit other unrelated issues for synthetic
+    // grammars but the Raw-specific ones shouldn't fire.
+    CHECK_FALSE(any_description_contains(issues, "Raw consume"));
+}
+
+// Scope-shape sanity goes through the loader since there's no public
+// new_scope() — loaded grammars exercise the lint paths via integration.
+TEST_CASE("Linter: scope grammars from the loader pass clean") {
+    register_std_parser_group();
+    Grammar g;
+    auto r = load_rawast_grammar_from_string(g, R"GRAM(
+        use: std
+        start: <PROG>
+        PROG: sequence array {
+          "(",
+          repeat scope { std.string } separator ",",
+          ")"
+        }
+    )GRAM");
+    REQUIRE_MESSAGE(r, "load failed: " << (r ? "" : r.error()));
+
+    auto issues = lint_grammar(g);
+    CHECK_FALSE(any_description_contains(issues, "Scope"));
 }
