@@ -1417,7 +1417,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // big payoff is on 46-alt closed-keyword choices like
     // LAYER_KEYWORD where ~97% of attempts on real LEFs rewind on
     // the first character of the key.
-    auto choice_alt_cant_match = [this, &sr, &current_ignore,
+    auto choice_alt_cant_match = [this, &sr,
                                    &ensure_first_bytes,
                                    &run_ignore_guarded](NodeId alt) -> bool {
         ensure_first_bytes();
