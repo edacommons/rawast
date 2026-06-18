@@ -186,6 +186,9 @@
         "type": "REPEAT_EXPR"
       },
       {
+        "type": "SCOPE_EXPR"
+      },
+      {
         "type": "RAW_EXPR"
       },
       {
@@ -323,6 +326,33 @@
         "type": "key",
         "key": "}"
       }
+    ]
+  },
+  "SCOPE_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "type": "key",
+        "key": "scope",
+        "bindings": [
+          { "name": "type", "value": "scope" }
+        ]
+      },
+      {
+        "type": "CONTAINER_KIND",
+        "optional": true,
+        "bindings": [
+          { "name": "container", "value": "@" }
+        ]
+      },
+      { "type": "key", "key": "{" },
+      {
+        "type": "ITEMS",
+        "bindings": [
+          { "name": "value", "value": "@" }
+        ]
+      },
+      { "type": "key", "key": "}" }
     ]
   },
   "REPEAT_EXPR": {
@@ -638,6 +668,15 @@
           }
         ]
       },
+      {
+        "type": "RESERVED_VALUE_TAIL",
+        "optional": true
+      }
+    ]
+  },
+  "RESERVED_VALUE_TAIL": {
+    "type": "sequence",
+    "value": [
       {
         "type": "key",
         "key": "="

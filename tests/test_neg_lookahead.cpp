@@ -29,9 +29,8 @@ Grammar make_target() {
 }
 
 bool parses(Grammar& g, const std::string& input) {
-    std::istringstream is{input};
-    StreamReader sr{is};
-    return static_cast<bool>(g.parse(sr));
+    auto stream = Stream::from_string(input);
+    return static_cast<bool>(g.parse(stream));
 }
 
 } // namespace

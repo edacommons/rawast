@@ -68,9 +68,8 @@ TEST_CASE("GDSII: single record parse — HEADER (INT16)") {
     append_header(bytes, 6, 0x0002);
     append_i16(bytes, 5);
 
-    std::istringstream is(bytes);
-    StreamReader sr(is);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(bytes);
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto iv = std::dynamic_pointer_cast<IntValue>(*r);
     REQUIRE(iv);
@@ -89,9 +88,8 @@ TEST_CASE("GDSII: STR record decodes string with trailing null trim") {
     bytes += "MYLIB";
     bytes.push_back('\0');
 
-    std::istringstream is(bytes);
-    StreamReader sr(is);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(bytes);
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto sv = std::dynamic_pointer_cast<StringValue>(*r);
     REQUIRE(sv);
@@ -107,9 +105,8 @@ TEST_CASE("GDSII: NO_DATA record decodes to null_value") {
     std::string bytes;
     append_header(bytes, 4, 0x0400);   // 0x04 = ENDLIB, 0x00 = NO_DATA
 
-    std::istringstream is(bytes);
-    StreamReader sr(is);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(bytes);
+    auto r = g.parse(stream);
     REQUIRE(r);
     CHECK(*r == null_value());
 }
@@ -128,9 +125,8 @@ TEST_CASE("GDSII: REAL64 round-trip via encoder/decoder") {
     append_header(bytes, 12, 0x1B05);     // 0x1B = MAG, 0x05 = REAL64
     bytes += make_real64(original);
 
-    std::istringstream is(bytes);
-    StreamReader sr(is);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(bytes);
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto rv = std::dynamic_pointer_cast<RealValue>(*r);
     REQUIRE(rv);
@@ -151,9 +147,8 @@ TEST_CASE("GDSII: unparse produces wire-identical bytes (round-trip)") {
     NodeId top = g.new_parse("gdsii.libname");
     g.set_top(top);
 
-    std::istringstream is(original);
-    StreamReader sr(is);
-    auto parsed = g.parse(sr);
+    auto stream = Stream::from_string(original);
+    auto parsed = g.parse(stream);
     REQUIRE(parsed);
 
     std::ostringstream out;
@@ -206,9 +201,8 @@ TEST_CASE("GDSII: minimal library parses end-to-end via .rawast grammar") {
     append_header(bytes, 4, 0x0400);
 
     // Parse.
-    std::istringstream is(bytes);
-    StreamReader sr(is);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(bytes);
+    auto r = g.parse(stream);
     if (!r) {
         FAIL("parse failed at byte " << r.error().position.bytes
              << ": " << r.error().message);
@@ -242,9 +236,8 @@ TEST_CASE("GDSII: minimal library parses end-to-end via .rawast grammar") {
     // re-parsed AST should match the original.
     std::ostringstream out;
     REQUIRE(g.save(out, *r));
-    std::istringstream is2(out.str());
-    StreamReader sr2(is2);
-    auto r2 = g.parse(sr2);
+    auto stream2 = Stream::from_string(out.str());
+    auto r2 = g.parse(stream2);
     REQUIRE(r2);
     auto dict2 = std::dynamic_pointer_cast<DictValue>(*r2);
     REQUIRE(dict2);
@@ -334,9 +327,8 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
     append_header(bytes, 4, 0x0400);   // ENDLIB
 
     // Parse.
-    std::istringstream is(bytes);
-    StreamReader sr(is);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(bytes);
+    auto r = g.parse(stream);
     if (!r) {
         FAIL("parse failed at byte " << r.error().position.bytes
              << ": " << r.error().message);
@@ -388,9 +380,8 @@ TEST_CASE("GDSII: full grammar from grammars/gdsii.rawast — library with a bou
 
     // Re-parse the saved bytes; should produce an AST identical to
     // the original.
-    std::istringstream is2(out.str());
-    StreamReader sr2(is2);
-    auto r2 = g.parse(sr2);
+    auto stream2 = Stream::from_string(out.str());
+    auto r2 = g.parse(stream2);
     REQUIRE(r2);
     auto lib2 = std::dynamic_pointer_cast<DictValue>(*r2);
     REQUIRE(lib2);

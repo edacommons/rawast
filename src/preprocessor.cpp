@@ -149,9 +149,8 @@ std::string Preprocessor::process(const std::string& text) {
     // text through unchanged in that case.
     if (!pp_grammar_.top().valid()) return text;
 
-    std::istringstream is(text);
-    StreamReader sr{is};
-    auto parsed = pp_grammar_.parse(sr);
+    auto stream = Stream::from_string(text);
+    auto parsed = pp_grammar_.parse(stream);
     if (!parsed) {
         state_.warnings.push_back(
             {"preprocessor parse failed: " + parsed.error().message,
@@ -162,21 +161,46 @@ std::string Preprocessor::process(const std::string& text) {
         // handle the directives.
         return text;
     }
+    return process_ast(*parsed, text);
+}
+
+tl::expected<ValuePtr, ParseError>
+Preprocessor::parse(const std::string& source) {
+    if (!pp_grammar_.top().valid()) {
+        return tl::unexpected(ParseError{
+            {}, "Preprocessor::parse: pp_grammar has no top rule"});
+    }
+    auto stream = Stream::from_string(source);
+    return pp_grammar_.parse(stream);
+}
+
+Stream Preprocessor::preprocess(const ValuePtr& ast,
+                                 const std::string& source) {
+    // Eager expansion into a heap-owned string; the Stream owns the
+    // buffer via owner_, so the returned Stream is self-contained.
+    auto expanded = std::make_shared<std::string>(process_ast(ast, source));
+    auto is = std::make_unique<std::istringstream>(*expanded);
+    return Stream(std::move(is), std::move(expanded));
+}
+
+std::string Preprocessor::process_ast(const ValuePtr& ast,
+                                       const std::string& source) {
     // Reset the source map for this call. Spans are scoped to one
-    // process(); callers that need to retain a map across calls
-    // (multi-file workflows) snapshot the state themselves.
+    // process_*() invocation; callers that need to retain a map
+    // across calls (multi-file workflows) snapshot the state
+    // themselves.
     state_.spans.clear();
     // Root span: covers the entire input text. No parent. Source-
     // structure only (no output offset of its own — child spans
     // record output ranges).
     std::uint32_t root_id =
         record_span(Span::NoParent, /*parent_offset=*/0,
-                    text.size(), Span::NoOutput,
+                    source.size(), Span::NoOutput,
                     state_.current_file.empty() ? "<input>"
                                                 : state_.current_file);
     std::string out;
     std::size_t src_cursor = 0;
-    walk(*parsed, out, src_cursor, text, root_id);
+    walk(ast, out, src_cursor, source, root_id);
     return out;
 }
 
@@ -314,6 +338,50 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
             }
             return;
         }
+        if (type == "text_line") {
+            // sv_preprocessor.rawast TEXT_LINE produces
+            //   { type:"text_line", segments:[ ...mixed... ] }
+            // where each segment is either a bare StringValue (a
+            // run of literal text) or a DictValue for an embedded
+            // `\`NAME[(args)]` invocation. Iterate in order: text
+            // runs are appended verbatim, macro_use dicts go
+            // through handle_macro_use in mid-line mode (no line
+            // grab, no trailing newline). After the segments come
+            // the line's terminating `\n`, which we emit explicitly
+            // since the grammar's "\n" Key isn't preserved in the
+            // dict the way `segments` is.
+            auto segments_val = dict_value_or_null(*dict, "segments");
+            auto segments = std::dynamic_pointer_cast<ArrayValue>(segments_val);
+            if (segments) {
+                for (const auto& seg : segments->data()) {
+                    if (auto s = std::dynamic_pointer_cast<StringValue>(seg)) {
+                        if (s->data().empty()) continue;
+                        std::size_t origin =
+                            locate_item(source, src_cursor, s->data());
+                        record_span(parent_span_id, origin,
+                                    s->data().size(), out.size(),
+                                    "text");
+                        out.append(s->data());
+                        src_cursor = origin + s->data().size();
+                    } else if (auto sd = std::dynamic_pointer_cast<DictValue>(seg)) {
+                        auto seg_type = dict_string_or_empty(*sd, "type");
+                        if (seg_type == "macro_use") {
+                            handle_macro_use(*sd, out, src_cursor,
+                                             source, parent_span_id,
+                                             /*consume_line=*/false);
+                        }
+                    }
+                }
+            }
+            // Emit the trailing "\n" the grammar's sibling Key
+            // consumed. Source cursor lands at the next line.
+            std::size_t nl = source.find('\n', src_cursor);
+            if (nl != std::string::npos) {
+                out += '\n';
+                src_cursor = nl + 1;
+            }
+            return;
+        }
         if (type == "define") {
             // Position the cursor at the start of the directive
             // before consuming the line — leading whitespace
@@ -337,6 +405,10 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
         if (type == "ifndef") {
             handle_ifdef(*dict, out, src_cursor, source,
                          parent_span_id, /*invert=*/true);
+            return;
+        }
+        if (type == "if") {
+            handle_if(*dict, out, src_cursor, source, parent_span_id);
             return;
         }
         if (type == "macro_use") {
@@ -527,6 +599,130 @@ std::size_t scan_args(const std::string& text, std::size_t cursor,
     return cursor;
 }
 
+std::string render_segment(const ValuePtr& seg);   // forward decl
+
+// AST-level body substitution. Walks `body_segments` and produces a
+// new ArrayValue with parameter references replaced by arg ASTs.
+// Substitution rule:
+//
+//   ref segment in body finds its arg by NAME (the parameter name
+//   that the body author wrote in `\`define FOO(x) … x …`), and
+//   the arg's POSITION is the index of that name in the params list.
+//
+// Per segment:
+//
+//   - DictValue {type:"ref", value:"NAME"} where NAME is a
+//     parameter → insert args[idx] verbatim (no string conversion).
+//     args[idx] is a ValuePtr — typically StringValue (the current
+//     MACRO_ARGS grammar captures identifier args), but can be any
+//     AST node a richer args grammar produces. ArrayValue args are
+//     spliced flat so multi-token args land as siblings in the
+//     body, not as a nested array.
+//   - DictValue {type:"ref", value:"…"} where the name isn't a
+//     parameter → keep verbatim. It's a non-param identifier
+//     reference whose name appears in the expansion as-is.
+//   - StringValue (text run, or legacy whole-string body) → run
+//     substitute_params text-level: handles `\`"…\`"` stringify
+//     and `\`\`` token-paste markers, plus identifier-level param
+//     refs in legacy bodies that aren't separately AST-typed.
+//   - Other DictValues (macro_use, string literal, etc.) → keep
+//     verbatim. render_macro_body_segments handles them — macro_use
+//     recurses through render_macro_use_inline, so nested expansion
+//     stays in AST land.
+//
+// `args` is positional; arity-mismatched calls pass an empty list
+// from handle_macro_use to disable per-name substitution while
+// still firing stringify/paste markers in text segments.
+std::shared_ptr<ArrayValue> substitute_segments(
+        const ArrayValue& body_segs,
+        const std::vector<std::string>& params,
+        const std::vector<ValuePtr>& args) {
+    std::unordered_map<std::string, std::size_t> param_idx;
+    bool has_params = (params.size() == args.size()) && !params.empty();
+    if (has_params) {
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            param_idx[params[i]] = i;
+        }
+    }
+
+    // Text-segment substitution still wants the args as strings
+    // (it does identifier-level token paste / stringify on flat
+    // text). Render once here so each text segment doesn't pay the
+    // conversion repeatedly. Empty when has_params is false.
+    std::vector<std::string> args_text;
+    if (has_params) {
+        args_text.reserve(args.size());
+        for (const auto& a : args) {
+            if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
+                args_text.push_back(sv->data());
+            } else {
+                args_text.push_back(render_segment(a));
+            }
+        }
+    }
+
+    // Splice an arg AST into `out` — Array args flatten so multi-token
+    // args appear inline rather than as a nested array.
+    auto splice = [](std::vector<ValuePtr>& out, const ValuePtr& arg) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(arg)) {
+            for (const auto& e : arr->data()) out.push_back(e);
+        } else {
+            out.push_back(arg);
+        }
+    };
+
+    auto result = std::make_shared<ArrayValue>();
+    for (const auto& seg : body_segs.data()) {
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+            std::string sub = substitute_params(sv->data(), params, args_text);
+            result->data().push_back(make_string(std::move(sub)));
+            continue;
+        }
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
+            auto type = dict_string_or_empty(*d, "type");
+            if (type == "ref" && has_params) {
+                auto name = dict_string_or_empty(*d, "value");
+                auto it = param_idx.find(name);
+                if (it != param_idx.end()) {
+                    splice(result->data(), args[it->second]);
+                    continue;
+                }
+            }
+            // Nested macro_use: substitute outer params into its arg
+            // list before the inner call expands. LRM §22.5.1 / C99
+            // §6.10.3.1: argument substitution is textual and reaches
+            // into the args of nested invocations.
+            if (type == "macro_use" && has_params) {
+                auto inner_args = std::dynamic_pointer_cast<ArrayValue>(
+                    dict_value_or_null(*d, "args"));
+                if (inner_args && !inner_args->data().empty()) {
+                    auto new_args = std::make_shared<ArrayValue>();
+                    for (const auto& a : inner_args->data()) {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
+                            auto it = param_idx.find(sv->data());
+                            if (it != param_idx.end()) {
+                                splice(new_args->data(), args[it->second]);
+                                continue;
+                            }
+                        }
+                        new_args->data().push_back(a);
+                    }
+                    auto new_use = std::make_shared<DictValue>();
+                    for (const auto& [k, v] : d->data()) {
+                        new_use->data()[k] = (k == "args") ? new_args : v;
+                    }
+                    result->data().push_back(new_use);
+                    continue;
+                }
+            }
+            result->data().push_back(seg);
+            continue;
+        }
+        result->data().push_back(seg);
+    }
+    return result;
+}
+
 } // namespace
 
 std::string Preprocessor::expand_recursive(const std::string& text) {
@@ -593,25 +789,31 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
             }
         }
 
-        std::string body = macro.body;
-        if (macro.is_function_like) {
-            if (macro.params.size() == args.size()) {
-                body = substitute_params(body, macro.params, args);
-            } else {
-                state_.warnings.push_back(
-                    {"macro `" + name + " expects " +
-                     std::to_string(macro.params.size()) +
-                     " args, got " + std::to_string(args.size()),
-                     state_.current_file, state_.current_line});
-                // emit substituted-anyway body verbatim — caller
-                // can decide whether this is acceptable.
-            }
+        // AST-level substitution; render walks segments and
+        // recurses through any nested macro_use AST entries. args
+        // arrived from a text scan of the surrounding body (this
+        // is the legacy text-recursion path), so wrap each into
+        // a StringValue for the AST substituter.
+        std::vector<ValuePtr> args_ast;
+        args_ast.reserve(args.size());
+        for (const auto& a : args) args_ast.push_back(make_string(a));
+
+        std::shared_ptr<ArrayValue> substituted;
+        if (macro.is_function_like && macro.params.size() != args.size()) {
+            state_.warnings.push_back(
+                {"macro `" + name + " expects " +
+                 std::to_string(macro.params.size()) +
+                 " args, got " + std::to_string(args.size()),
+                 state_.current_file, state_.current_line});
+            substituted = substitute_segments(*macro.body_segments, {}, {});
+        } else {
+            substituted = substitute_segments(*macro.body_segments,
+                                              macro.params, args_ast);
         }
 
-        // Recurse with blue paint on this name.
         state_.active_expansions.insert(name);
         ++state_.current_depth;
-        std::string expanded = expand_recursive(body);
+        std::string expanded = render_macro_body_segments(*substituted);
         --state_.current_depth;
         state_.active_expansions.erase(name);
 
@@ -621,10 +823,213 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
     return out;
 }
 
+namespace { std::string render_segment(const ValuePtr& seg); }
+
+std::string MacroDef::body_text() const {
+    std::string out;
+    if (!body_segments) return out;
+    for (const auto& seg : body_segments->data()) {
+        out += render_segment(seg);
+    }
+    return out;
+}
+
+std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
+    std::string out;
+    for (const auto& seg : segs.data()) {
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+            // Text may carry literal `\`NAME` patterns that
+            // weren't AST-typed at parse time (legacy text-only
+            // bodies, or expanded-arg text that introduced new
+            // macro references). Run them through the text-based
+            // scan in expand_recursive so they expand naturally.
+            out += expand_recursive(sv->data());
+            continue;
+        }
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
+            auto type = dict_string_or_empty(*d, "type");
+            if (type == "macro_use") {
+                out += render_macro_use_inline(*d);
+                continue;
+            }
+            // ref / string / other typed segments — render leaf.
+            out += render_segment(seg);
+        }
+    }
+    return out;
+}
+
+std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
+    auto name = dict_string_or_empty(d, "name");
+    if (name.empty()) return {};
+
+    std::vector<ValuePtr> args;
+    if (auto args_val = dict_value_or_null(d, "args")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(args_val)) {
+            for (const auto& a : arr->data()) {
+                args.push_back(a);
+            }
+        }
+    }
+
+    auto verbatim = [&]() {
+        std::string s = "`" + name;
+        if (!args.empty()) {
+            s += "(";
+            for (std::size_t i = 0; i < args.size(); ++i) {
+                if (i > 0) s += ",";
+                s += render_segment(args[i]);
+            }
+            s += ")";
+        }
+        return s;
+    };
+
+    // Blue-paint: if this name is already being expanded, emit
+    // verbatim to break the cycle.
+    if (state_.active_expansions.count(name)) return verbatim();
+
+    auto it = state_.macros.find(name);
+    if (it == state_.macros.end()) {
+        // Undefined nested use — leave verbatim. The on_undefined
+        // policy fires at the source-mapped handle_macro_use entry,
+        // not for synthesised inner uses arising from expansion.
+        return verbatim();
+    }
+    const auto& macro = it->second;
+
+    std::shared_ptr<ArrayValue> substituted;
+    if (macro.is_function_like && macro.params.size() != args.size()) {
+        state_.warnings.push_back(
+            {"macro `" + name + " expects " +
+             std::to_string(macro.params.size()) +
+             " args, got " + std::to_string(args.size()),
+             state_.current_file, state_.current_line});
+        substituted = substitute_segments(*macro.body_segments, {}, {});
+    } else {
+        substituted = substitute_segments(*macro.body_segments,
+                                          macro.params, args);
+    }
+
+    state_.active_expansions.insert(name);
+    ++state_.current_depth;
+    std::string result = render_macro_body_segments(*substituted);
+    --state_.current_depth;
+    state_.active_expansions.erase(name);
+    return result;
+}
+
+// Render a segmented macro body (ArrayValue produced by
+// sv_preprocessor.rawast's scope-array INNERs) back to text.
+// Used by handle_define to convert the structured body shape into
+// the legacy string form macros expansion machinery already
+// consumes. Lossy in one direction (segment-type info is dropped on
+// store) but correct: the re-rendered text is what the original
+// `\`define` line said. A future expansion path that walks segments
+// directly — instead of re-tokenizing the stored string — would
+// preserve the structural advantage; for now this keeps the new
+// grammar wireable into the existing walker.
+namespace {
+
+std::string render_segment(const ValuePtr& seg);
+
+std::string render_macro_args(const ArrayValue& args) {
+    std::string out = "(";
+    for (std::size_t i = 0; i < args.data().size(); ++i) {
+        if (i > 0) out += ',';
+        if (auto s = as_string(args.data()[i])) out += s->data();
+    }
+    out += ')';
+    return out;
+}
+
+std::string render_segment(const ValuePtr& seg) {
+    if (!seg) return {};
+    if (auto sv = as_string(seg)) return sv->data();
+    auto d = as_dict(seg);
+    if (!d) return {};
+    auto it = d->data().find("type");
+    if (it == d->data().end()) return {};
+    auto type_sv = as_string(it->second);
+    if (!type_sv) return {};
+    const std::string& type = type_sv->data();
+    if (type == "ref") {
+        if (auto v = d->data().find("value"); v != d->data().end()) {
+            if (auto s = as_string(v->second)) return s->data();
+        }
+    } else if (type == "string") {
+        std::string out = "\"";
+        if (auto v = d->data().find("value"); v != d->data().end()) {
+            if (auto s = as_string(v->second)) out += s->data();
+        }
+        out += '"';
+        return out;
+    } else if (type == "macro_use") {
+        std::string out = "`";
+        if (auto n = d->data().find("name"); n != d->data().end()) {
+            if (auto s = as_string(n->second)) out += s->data();
+        }
+        if (auto a = d->data().find("args"); a != d->data().end()) {
+            if (auto arr = as_array(a->second)) out += render_macro_args(*arr);
+        }
+        return out;
+    }
+    return {};
+}
+
+} // namespace
+
 void Preprocessor::handle_define(const DictValue& d) {
+    // Suppressed when walking a not-taken `\`ifdef` branch — the
+    // grammar/walker still see the directive (so src_cursor advances
+    // and source-map machinery stays consistent), but the macro table
+    // is not mutated.
+    if (suppress_side_effects_) return;
+
     MacroDef m;
-    m.name = dict_string_or_empty(d, "name");
+
+    // sv_preprocessor.rawast nests name + params under a `decl` field
+    // (DECL sub-rule with `ignore:` empty enforces LRM adjacency).
+    // Older grammars use flat top-level `name`/`params` — pick whichever
+    // shape is present.
+    const DictValue* decl = &d;
+    if (auto it = d.data().find("decl"); it != d.data().end()) {
+        if (auto dd = std::dynamic_pointer_cast<DictValue>(it->second)) {
+            decl = dd.get();
+        }
+    }
+
+    m.name = dict_string_or_empty(*decl, "name");
     if (m.name.empty()) return;
+
+    auto body_it = d.data().find("body");
+    if (body_it != d.data().end()) {
+        if (auto body_arr = as_array(body_it->second)) {
+            if (auto params_it = decl->data().find("params");
+                params_it != decl->data().end()) {
+                if (auto pa = as_array(params_it->second)) {
+                    for (const auto& p : pa->data()) {
+                        if (auto s = as_string(p)) {
+                            m.params.push_back(s->data());
+                        }
+                    }
+                    m.is_function_like = true;
+                }
+            }
+            // Store the segments AST directly — substitution at
+            // expansion time walks segments and replaces typed `ref`
+            // entries with the corresponding arg value, no string
+            // round-trip.
+            m.body_segments = std::dynamic_pointer_cast<ArrayValue>(
+                body_it->second);
+            state_.macros[m.name] = std::move(m);
+            return;
+        }
+    }
+
+    // Legacy grammars (mini_preprocessor, etc.): `body` is a string;
+    // params come from a `(...)` prefix on the body itself. Existing
+    // detection logic follows.
     auto raw_body = dict_string_or_empty(d, "body");
 
     // sv_line_text preserves `\<newline>` continuations literally so
@@ -676,19 +1081,27 @@ void Preprocessor::handle_define(const DictValue& d) {
             m.params = split_params(raw_body.substr(1, i - 1));
             std::string body = raw_body.substr(i + 1);
             trim_horiz(body);
-            m.body = std::move(body);
+            // Legacy text body: wrap in a single-segment array.
+            // substitute_segments treats StringValue segments via
+            // substitute_params (text-level), so stringification +
+            // token-paste + identifier-level param substitution
+            // continue to work.
+            m.body_segments = std::make_shared<ArrayValue>();
+            m.body_segments->data().push_back(make_string(std::move(body)));
             m.is_function_like = true;
             state_.macros[m.name] = std::move(m);
             return;
         }
     }
     // Object-like: body is the captured text verbatim.
-    m.body = std::move(raw_body);
+    m.body_segments = std::make_shared<ArrayValue>();
+    m.body_segments->data().push_back(make_string(std::move(raw_body)));
     m.is_function_like = false;
     state_.macros[m.name] = std::move(m);
 }
 
 void Preprocessor::handle_undef(const DictValue& d) {
+    if (suppress_side_effects_) return;
     auto name = dict_string_or_empty(d, "name");
     if (!name.empty()) state_.macros.erase(name);
 }
@@ -696,19 +1109,26 @@ void Preprocessor::handle_undef(const DictValue& d) {
 void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
                                     std::size_t& src_cursor,
                                     const std::string& source,
-                                    std::uint32_t parent_span_id) {
+                                    std::uint32_t parent_span_id,
+                                    bool consume_line) {
     auto name = dict_string_or_empty(d, "name");
     if (name.empty()) return;
 
-    // Pull raw argument strings out of the AST. PP_MACRO_ARGS
-    // captures them as an array of sv_balanced_arg strings —
-    // each arg is the raw text between commas at paren depth 0.
-    std::vector<std::string> args;
+    // Pull args out of the AST as ValuePtrs — the substitution path
+    // splices them directly into the body AST at ref positions.
+    // For source-mapped emission we also keep a string view of each
+    // arg (most are identifier StringValues from MACRO_ARGS, so the
+    // string view is the same data without conversion).
+    std::vector<ValuePtr> args;
+    std::vector<std::string> args_text;
     if (auto args_val = dict_value_or_null(d, "args")) {
         if (auto arr = std::dynamic_pointer_cast<ArrayValue>(args_val)) {
             for (const auto& a : arr->data()) {
+                args.push_back(a);
                 if (auto s = std::dynamic_pointer_cast<StringValue>(a)) {
-                    args.push_back(s->data());
+                    args_text.push_back(s->data());
+                } else {
+                    args_text.push_back(render_segment(a));
                 }
             }
         }
@@ -741,9 +1161,18 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
         }
         after_name = p;
     }
-    std::size_t use_src_end = scan_past_directive_line(source, after_name);
+    // Line-based callers (mini_preprocessor, top-level PP_FILE) want
+    // `\`MACRO` to own the trailing newline so handle_macro_use leaves
+    // the cursor on the next line. For mid-text use surfaced by the
+    // sv_preprocessor.rawast text_line iterator, the macro call sits
+    // inside surrounding bytes — consuming the newline would lose any
+    // text after the macro on the same line.
+    std::size_t use_src_end = consume_line
+        ? scan_past_directive_line(source, after_name)
+        : after_name;
     std::size_t use_src_len = use_src_end - use_src_start;
-    bool consumed_newline = use_src_end > use_src_start
+    bool consumed_newline = consume_line
+        && use_src_end > use_src_start
         && (source[use_src_end - 1] == '\n' || source[use_src_end - 1] == '\r');
 
     auto emit_expansion = [&](const std::string& body, const std::string& span_name) {
@@ -762,31 +1191,33 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     auto it = state_.macros.find(name);
     if (it != state_.macros.end()) {
         const auto& macro = it->second;
-        std::string substituted;
+        std::shared_ptr<ArrayValue> substituted;
         if (macro.is_function_like && macro.params.size() != args.size()) {
-            // Arity mismatch — warn; still run substitute_params to
-            // process \`"…\`" stringification and \`\` token paste,
-            // which should fire regardless of param substitution.
+            // Arity mismatch — warn; still substitute (with empty
+            // param/arg lists) so `\`"…\`"` stringification and
+            // `\`\`` token-paste markers fire regardless.
             state_.warnings.push_back(
                 {"macro `" + name + " expects " +
                  std::to_string(macro.params.size()) +
                  " args, got " + std::to_string(args.size()),
                  state_.current_file, state_.current_line});
-            substituted = substitute_params(macro.body, {}, {});
+            substituted = substitute_segments(*macro.body_segments, {}, {});
         } else {
-            // Function-like with matching arity OR object-like
-            // (no params). The substitution helper handles both
-            // cases — empty params means identifier passes through
-            // but token operators still fire.
-            substituted = substitute_params(macro.body, macro.params, args);
+            // Matching arity OR object-like (no params). Empty
+            // params means identifier-shaped refs in text segments
+            // pass through but stringify / paste markers still
+            // fire, and typed `ref` segments stay verbatim (which
+            // is what we want — they were never parameter refs).
+            substituted = substitute_segments(*macro.body_segments,
+                                              macro.params, args);
         }
-        // Recursively expand inline macro uses inside the body.
-        // The current macro's own name is added to active_expansions
-        // before recursing so `\`A`-in-`\`A`-body becomes a verbatim
-        // emit instead of infinite recursion.
+        // Render the substituted segments. macro_use segments
+        // recurse through render_macro_use_inline — no string
+        // round-trip, no re-parse. Blue-paint guard prevents
+        // `\`A`-in-`\`A`-body infinite recursion.
         state_.active_expansions.insert(name);
         ++state_.current_depth;
-        std::string emitted = expand_recursive(substituted);
+        std::string emitted = render_macro_body_segments(*substituted);
         --state_.current_depth;
         state_.active_expansions.erase(name);
         emit_expansion(emitted, "macro " + name + " expansion");
@@ -794,14 +1225,32 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
         return;
     }
 
-    // Undefined — apply policy.
+    // Undefined — give the host's undefined_handler first refusal.
+    // If it returns a value, that's the expansion (recursively
+    // re-expanded so the host can return text containing macro
+    // uses). If it returns nullopt, fall through to the static
+    // on_undefined policy.
+    if (opts_.undefined_handler) {
+        if (auto replacement = opts_.undefined_handler(name, args_text)) {
+            state_.active_expansions.insert(name);
+            ++state_.current_depth;
+            std::string emitted = expand_recursive(*replacement);
+            --state_.current_depth;
+            state_.active_expansions.erase(name);
+            emit_expansion(emitted,
+                            "undefined_handler expansion of " + name);
+            src_cursor = use_src_end;
+            return;
+        }
+    }
+
     auto leave_emit = [&]() {
         std::string emit = "`" + name;
-        if (!args.empty()) {
+        if (!args_text.empty()) {
             emit += "(";
-            for (std::size_t i = 0; i < args.size(); ++i) {
+            for (std::size_t i = 0; i < args_text.size(); ++i) {
                 if (i > 0) emit += ",";
-                emit += args[i];
+                emit += args_text[i];
             }
             emit += ")";
         }
@@ -845,62 +1294,90 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
         return;
     }
 
-    // Resolve path. Try each include_paths entry in order, then the
-    // current_file's directory (so relative `\`include "foo.svh"`
-    // works when foo.svh is alongside the including file), then the
-    // path as given (covers absolute paths and CWD-relative).
-    namespace fs = std::filesystem;
-    fs::path resolved;
-    bool found = false;
-    fs::path requested = path;
-    auto try_candidate = [&](const fs::path& base) {
-        fs::path candidate = base.empty() ? requested : (base / requested);
-        std::error_code ec;
-        if (fs::exists(candidate, ec) && !ec) {
-            resolved = candidate;
-            found = true;
-            return true;
+    // Suppressed inside a not-taken `\`ifdef` branch: the directive
+    // line was already skipped via src_cursor advance above; we just
+    // need to NOT actually open / parse / walk the included file
+    // (which would mutate the macro table and included_files).
+    if (suppress_side_effects_) return;
+
+    std::string canonical;
+    std::string include_text;
+
+    // Host-supplied include source takes priority. If the callback
+    // is set and returns a value, we use its (canonical_id, content)
+    // directly — no filesystem walk needed. nullopt means "I can't
+    // resolve this, try the built-in fallback."
+    if (opts_.include_source) {
+        auto host = opts_.include_source(path, state_.current_file);
+        if (host) {
+            canonical    = std::move(host->canonical_id);
+            include_text = std::move(host->content);
         }
-        return false;
-    };
-    for (const auto& dir : opts_.include_paths) {
-        if (try_candidate(dir)) break;
-    }
-    if (!found && !state_.current_file.empty()) {
-        fs::path parent = fs::path(state_.current_file).parent_path();
-        try_candidate(parent);
-    }
-    if (!found) try_candidate(fs::path{});
-    if (!found) {
-        state_.warnings.push_back(
-            {"`include: file not found: '" + path + "'",
-             state_.current_file, state_.current_line});
-        return;
     }
 
-    std::string canonical = resolved.lexically_normal().string();
+    // Built-in fallback: walk `include_paths`, then the including
+    // file's directory, then the path as given. Engaged when no
+    // callback was set, or when the callback returned nullopt.
+    if (canonical.empty() && include_text.empty()) {
+        namespace fs = std::filesystem;
+        fs::path resolved;
+        bool found = false;
+        fs::path requested = path;
+        auto try_candidate = [&](const fs::path& base) {
+            fs::path candidate = base.empty() ? requested : (base / requested);
+            std::error_code ec;
+            if (fs::exists(candidate, ec) && !ec) {
+                resolved = candidate;
+                found = true;
+                return true;
+            }
+            return false;
+        };
+        for (const auto& dir : opts_.include_paths) {
+            if (try_candidate(dir)) break;
+        }
+        if (!found && !state_.current_file.empty()) {
+            fs::path parent = fs::path(state_.current_file).parent_path();
+            try_candidate(parent);
+        }
+        if (!found) try_candidate(fs::path{});
+        if (!found) {
+            state_.warnings.push_back(
+                {"`include: file not found: '" + path + "'",
+                 state_.current_file, state_.current_line});
+            return;
+        }
+
+        canonical = resolved.lexically_normal().string();
+
+        std::ifstream f(resolved);
+        if (!f.is_open()) {
+            state_.warnings.push_back(
+                {"`include: failed to open '" + canonical + "'",
+                 state_.current_file, state_.current_line});
+            return;
+        }
+        std::ostringstream buf;
+        buf << f.rdbuf();
+        include_text = buf.str();
+    }
+
+    // `included_files` is a deduped manifest used by build systems
+    // for incremental-rebuild dependency tracking. Same logical
+    // source included multiple times (e.g. with redefines between
+    // them) lists once. This does NOT gate processing — every
+    // `\`include` is parsed + walked freshly with the current macro
+    // table; the dedup is purely about the query result.
     bool already_seen = false;
     for (const auto& p : state_.included_files) {
         if (p == canonical) { already_seen = true; break; }
     }
     if (!already_seen) state_.included_files.push_back(canonical);
 
-    std::ifstream f(resolved);
-    if (!f.is_open()) {
-        state_.warnings.push_back(
-            {"`include: failed to open '" + canonical + "'",
-             state_.current_file, state_.current_line});
-        return;
-    }
-    std::ostringstream buf;
-    buf << f.rdbuf();
-    std::string include_text = buf.str();
-
     // Parse the included file with the same preprocessor grammar.
     // (No depth-of-includes check yet — Phase 3 polish.)
-    std::istringstream is(include_text);
-    StreamReader sr{is};
-    auto parsed = pp_grammar_.parse(sr);
+    auto include_stream = Stream::from_string(include_text);
+    auto parsed = pp_grammar_.parse(include_stream);
     if (!parsed) {
         state_.warnings.push_back(
             {"`include: parse failed in '" + canonical + "': " +
@@ -970,7 +1447,16 @@ void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
         } else {
             std::string discard;
             std::size_t saved = state_.spans.size();
+            // Suppress state mutations (macro register/erase,
+            // included_files push) for the not-taken branch — SV LRM
+            // says directives inside an untaken `\`ifdef` don't
+            // execute. Save and restore on top of any outer suppress
+            // already in effect (nested ifdef inside a skipped block
+            // must stay suppressed regardless of inner take/skip).
+            bool saved_suppress = suppress_side_effects_;
+            suppress_side_effects_ = true;
             walk(branch, discard, src_cursor, source, parent_span_id);
+            suppress_side_effects_ = saved_suppress;
             // Discarded branch's spans aren't in the output stream.
             state_.spans.resize(saved);
         }
@@ -986,6 +1472,101 @@ void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
     }
 
     // Position past `\`endif`.
+    src_cursor = locate_item(source, src_cursor, "`endif");
+    src_cursor = scan_past_directive_line(source, src_cursor);
+}
+
+void Preprocessor::handle_if(const DictValue& d, std::string& out,
+                              std::size_t& src_cursor,
+                              const std::string& source,
+                              std::uint32_t parent_span_id) {
+    // Branches AST shape (flat):
+    //   { type:"if",
+    //     branches: [ {cond:"EXPR", body:[...]},
+    //                 {cond:"EXPR", body:[...]} ],
+    //     else_branch: [...] }
+    // The first `if` is branches[0]; subsequent entries are `elsif`s.
+    // Grammar producers normalize their nested `\`if/\`elsif/\`else/
+    // \`endif` syntax into this shape so the walker stays linear.
+
+    src_cursor = locate_item(source, src_cursor, "`if");
+    src_cursor = scan_past_directive_line(source, src_cursor);
+
+    auto walk_or_discard = [&](const ValuePtr& branch, bool emit) {
+        if (!branch) return;
+        if (emit) {
+            walk(branch, out, src_cursor, source, parent_span_id);
+        } else {
+            std::string discard;
+            std::size_t saved = state_.spans.size();
+            // Same side-effect suppression as handle_ifdef — not-taken
+            // branches must not register/erase macros or push includes.
+            bool saved_suppress = suppress_side_effects_;
+            suppress_side_effects_ = true;
+            walk(branch, discard, src_cursor, source, parent_span_id);
+            suppress_side_effects_ = saved_suppress;
+            state_.spans.resize(saved);
+        }
+    };
+
+    bool any_taken = false;
+    if (auto branches_val = dict_value_or_null(d, "branches")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(branches_val)) {
+            std::size_t branch_idx = 0;
+            for (const auto& b : arr->data()) {
+                auto bd = std::dynamic_pointer_cast<DictValue>(b);
+                if (!bd) continue;
+                auto cond = dict_value_or_null(*bd, "cond");
+                // sv_preprocessor.rawast captures cond with `*:cond=@`
+                // (Raw). Raw bypasses the ignore-set, so the leading
+                // space between the keyword and the expression lands
+                // inside cond. Trim before handing to expr_eval.
+                if (auto sv = std::dynamic_pointer_cast<StringValue>(cond)) {
+                    const auto& s = sv->data();
+                    std::size_t i = 0;
+                    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+                    std::size_t j = s.size();
+                    while (j > i && (s[j-1] == ' ' || s[j-1] == '\t')) --j;
+                    if (i > 0 || j < s.size()) {
+                        cond = make_string(s.substr(i, j - i));
+                    }
+                }
+                bool take = false;
+                if (!opts_.expr_eval) {
+                    state_.warnings.push_back(
+                        {"`if encountered without expr_eval callback; "
+                         "treating branch as false",
+                         state_.current_file, state_.current_line});
+                } else if (auto v = opts_.expr_eval(cond)) {
+                    take = *v;
+                } else {
+                    state_.warnings.push_back(
+                        {"expr_eval could not evaluate `if condition; "
+                         "treating as false",
+                         state_.current_file, state_.current_line});
+                }
+                // Position past `\`elsif` line for branches beyond the
+                // first — only walks if the first branch hasn't
+                // already taken; otherwise the locator scan will
+                // skip ahead through suppressed text.
+                if (branch_idx > 0) {
+                    src_cursor = locate_item(source, src_cursor, "`elsif");
+                    src_cursor = scan_past_directive_line(source, src_cursor);
+                }
+                bool emit = take && !any_taken;
+                walk_or_discard(dict_value_or_null(*bd, "body"), emit);
+                if (take) any_taken = true;
+                ++branch_idx;
+            }
+        }
+    }
+
+    if (auto eb = dict_value_or_null(d, "else_branch")) {
+        src_cursor = locate_item(source, src_cursor, "`else");
+        src_cursor = scan_past_directive_line(source, src_cursor);
+        walk_or_discard(eb, !any_taken);
+    }
+
     src_cursor = locate_item(source, src_cursor, "`endif");
     src_cursor = scan_past_directive_line(source, src_cursor);
 }

@@ -89,6 +89,7 @@ EXPR: choice {
   <SEQUENCE_EXPR>,
   <CHOICE_EXPR>,
   <REPEAT_EXPR>,
+  <SCOPE_EXPR>,
   <RAW_EXPR>,
   <KEY_EXPR>,
   <KEY_STRICT_EXPR>,
@@ -113,6 +114,26 @@ CONTAINER_KIND: choice { "array":@, "dict":@ }
 
 CHOICE_EXPR: sequence {
   "choice":type="choice",
+  "{", <ITEMS>:value=@, "}"
+}
+
+// `scope { INNER... }` — string-aware byte scanner. Scope has no
+// delimiters of its own; siblings in the surrounding sequence supply
+// the start and stop literals (same shape as `*`/Raw). INNERs are
+// atomic spans (embedded strings, comments, sub-rules can't trigger
+// a false stop). Returns body bytes between the previous sibling
+// and the next sibling Key (exclusive) as a StringValue by default;
+// `scope array { ... }` instead returns an ArrayValue of segments —
+// each INNER match becomes one entry (the INNER's own typed value),
+// and raw text gaps between INNERs become StringValue entries. See
+// §4.5b of docs/rawast-format.md.
+//
+// Strict (word-bounded) delimiter matching comes from the sibling
+// Key's own strict flag — write `'begin'` instead of `"begin"` on
+// the surrounding sequence sibling, no scope-level attribute needed.
+SCOPE_EXPR: sequence {
+  "scope":type="scope",
+  ?<CONTAINER_KIND>:container=@,
   "{", <ITEMS>:value=@, "}"
 }
 
@@ -211,6 +232,14 @@ NAME_BIND: sequence {
 RESERVED_VALUE_BIND: sequence {
   "#",
   identifier:name=@:reserved=true,
+  ?<RESERVED_VALUE_TAIL>
+}
+
+// Optional value tail. Bare `:#name` (no `=value`) is a flag-style
+// annotation; the loader's per-annotation dispatch decides whether
+// each particular name requires a value (`#subparse`, `#role`,
+// `#field`) or is a pure flag (`#opchain`).
+RESERVED_VALUE_TAIL: sequence {
   "=",
   <BIND_VAL>:value=@
 }

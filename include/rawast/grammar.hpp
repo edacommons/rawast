@@ -68,6 +68,22 @@ public:
     void set_separator(NodeId parent, NodeId sep);
     void set_backtrack(NodeId id);
     void set_fixed_schema(NodeId id);
+    // `#opchain` reserved flag — when a rule body carries this
+    // annotation, parse-side post-processing compacts always-wrap
+    // `{lhs, tail:[{op,rhs},...]}` shapes into `{op, args[]}` (same-op
+    // runs collapse flat, mixed-op boundaries nest). Save-side
+    // reverses the transform before normal dispatch. Shape-based —
+    // the engine doesn't track which subtree node produced which dict;
+    // it walks the AST under the marked rule and applies the
+    // transform wherever the shape matches.
+    void set_opchain(NodeId id);
+    bool has_opchain(NodeId id) const noexcept;
+    // Walk the Ref chain starting at `id` and return true if any
+    // node along the way carries the opchain flag. resolve_ref jumps
+    // to the chain's end and misses intermediate Refs (e.g. the
+    // `start:` top_ Ref → EXPR Ref → ADD body where EXPR carries
+    // the flag).
+    bool has_opchain_in_chain(NodeId id) const noexcept;
     // Key-only: opt the KeyParser into word-boundary strict matching at
     // parse time. The literal still matches byte-by-byte; the strict
     // flag additionally requires the byte after the match to be non-word
@@ -211,14 +227,45 @@ public:
     // The pool-aware overload uses the caller-provided pool. After parse
     // returns, the caller owns the pool and can query its back-references
     // (find_containers_of) to do value search across the produced tree.
-    tl::expected<ValuePtr, ParseError> parse(StreamReader& sr) const;
-    tl::expected<ValuePtr, ParseError> parse(StreamReader& sr, ValuePool& pool) const;
+    tl::expected<ValuePtr, ParseError> parse(Stream& stream) const;
+    tl::expected<ValuePtr, ParseError> parse(Stream& stream, ValuePool& pool) const;
+
+    // Convenience overloads: build a Stream from a string and parse it.
+    // Equivalent to `parse(Stream::from_string(text), ...)`. The Stream
+    // is constructed, consumed, and destroyed within the call.
+    tl::expected<ValuePtr, ParseError> parse(std::string text) const;
+    tl::expected<ValuePtr, ParseError> parse(std::string text, ValuePool& pool) const;
     // Parse from an explicit start node — used by the subparse hook to
     // re-enter the engine on an item's captured string with a different
     // entry rule. The same grammar is reused; only the starting point
     // changes.
+    //
+    // `require_full_consume` (default true) enforces that the stream is
+    // exhausted after the start rule completes — the standard contract
+    // for a top-level parse or subparse. Set false for sub-invocations
+    // that may legitimately consume only a prefix (the byte-scan INNER
+    // trial path in walk_scan, for example).
+    //
+    // `initial_ignore` seeds the parse driver's ignore_stack with the
+    // caller's active policy. Used by walk_scan when subparsing an
+    // INNER rule from within a scope/raw scan — without it the INNER
+    // would lose any ignore policy inherited from the calling context
+    // (e.g. PP_FILE's `ignore linespace`), and predictive checks at
+    // optional boundaries would see raw whitespace. nullptr means
+    // "no seed" — the parse starts with an empty ignore_stack and
+    // falls back to the grammar's default ignore set.
     tl::expected<ValuePtr, ParseError> parse_from(
-            StreamReader& sr, ValuePool& pool, NodeId start) const;
+            Stream& stream, ValuePool& pool, NodeId start,
+            bool require_full_consume = true,
+            const std::vector<Parser*>* initial_ignore = nullptr) const;
+    // Internal entry — engine's walk_scan calls this directly with the
+    // outer parse's StreamReader to keep stream marks coherent across
+    // INNER subparses. Not part of the public API; use the Stream
+    // overload above for external subparse calls.
+    tl::expected<ValuePtr, ParseError> parse_from(
+            StreamReader& sr, ValuePool& pool, NodeId start,
+            bool require_full_consume = true,
+            const std::vector<Parser*>* initial_ignore = nullptr) const;
 
     // Convenience: parse from a rule name. Looks up the named rule's
     // body NodeId via the registry; fails if the rule doesn't exist.
@@ -230,9 +277,9 @@ public:
     // Equivalent to `parse_from(sr, pool, g.rule_id("EXPR"))` with an
     // internally-allocated pool plus an explicit error on missing rule.
     tl::expected<ValuePtr, ParseError> parse_from(
-            StreamReader& sr, const std::string& start_name) const;
+            Stream& stream, const std::string& start_name) const;
     tl::expected<ValuePtr, ParseError> parse_from(
-            StreamReader& sr, ValuePool& pool, const std::string& start_name) const;
+            Stream& stream, ValuePool& pool, const std::string& start_name) const;
 
     // --- Driver: save direction ----------------------------------------
 
@@ -347,6 +394,15 @@ private:
     // method (called lazily by parse_from on first use).
     mutable std::vector<std::bitset<256>> first_bytes_;
     mutable std::vector<bool>             first_bytes_known_;
+    // Strict CONTENT first-byte set — what bytes the node's body
+    // actually starts with, ignoring nullability. `first_bytes_`
+    // (above) is set-all when the node is nullable so the Choice
+    // peek-and-skip never wrongly rejects a nullable alternative.
+    // `should_skip_optional` uses THIS strict set: an `?<X>` whose
+    // content can't start at the next byte can be cleanly skipped
+    // even if X is nullable (skipping is equivalent to matching
+    // empty in that case).
+    mutable std::vector<std::bitset<256>> strict_first_bytes_;
     // Per-NodeId flag: this node is at an `?<...>` use-site optional
     // position (its own is_optional is set, OR it's a Ref into a
     // chain where some link carries is_optional). The parse-loop

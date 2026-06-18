@@ -1,0 +1,211 @@
+// SystemVerilog preprocessor grammar.
+//
+// Whitespace model:
+//
+//   - `ignore linespace` declared ONCE at PP_FILE. Every rule reached
+//     from PP_FILE inherits this policy unless it declares its own.
+//     `RULE ignore:` (empty list) OVERRIDES the inherited policy for
+//     that rule's scope.
+//
+//   - The engine runs the OUTER (caller's) `run_ignore` at every
+//     rule-frame boundary BEFORE pushing the rule's own override. So
+//     whitespace between two tokens gets eaten by the caller's policy
+//     even when the next token is inside a sub-rule with empty ignore.
+//
+//   - Postfix `space` / `newline` attributes drive save-side
+//     canonicalisation (each item emits its content followed by the
+//     attribute's whitespace). Parse ignores them.
+//
+// Rules that OVERRIDE the inherited ignore:
+//
+//   DECL                — `ignore:` (empty). Preserves LRM adjacency
+//                         between `identifier` and `(`:
+//                         `\`define FOO(x)` vs `\`define FOO (x)`
+//                         parse as parameterised vs object-like.
+//   TEXT_LINE           — line content captured verbatim by scope.
+
+use: std
+
+start: <PP_FILE>
+
+PP_FILE ignore linespace: sequence array {
+  repeat <PP_ITEM>
+}
+
+PP_ITEM: choice {
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
+  <IF>,
+  <TEXT_LINE>
+}
+
+IFDEF: sequence dict {
+  "`ifdef":type="ifdef" space,
+  identifier:cond=@,
+  "\n",
+  <BODY>:body=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif",
+  "\n"
+}
+
+IFNDEF: sequence dict {
+  "`ifndef":type="ifndef" space,
+  identifier:cond=@,
+  "\n",
+  <BODY>:body=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif",
+  "\n"
+}
+
+BODY: sequence array {
+  repeat <PP_ITEM>
+}
+
+ELSE_BRANCH: sequence dict {
+  "`else",
+  "\n",
+  <BODY>:body=@
+}
+
+IF: sequence dict {
+  <IF_HEAD>:branches[]=@,
+  repeat <ELSIF>:branches[]=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif":type="if",
+  "\n"
+}
+
+// IF_HEAD/ELSIF capture cond as Raw. The inherited `ignore linespace`
+// eats whitespace before each Key/Parse but Raw bypasses ignore, so
+// the leading space after the keyword would land in the captured cond.
+// The walker trims it before passing to expr_eval.
+IF_HEAD: sequence dict {
+  "`if" space,
+  *:cond=@,
+  "\n",
+  <BODY>:body=@
+}
+
+ELSIF: sequence dict {
+  "`elsif" space,
+  *:cond=@,
+  "\n",
+  <BODY>:body=@
+}
+
+UNDEF: sequence dict {
+  "`undef":type="undef" space,
+  identifier:name=@,
+  "\n"
+}
+
+INCLUDE: sequence dict {
+  "`include":type="include" space,
+  std.string:path=@,
+  "\n"
+}
+
+// A single line of arbitrary text. Line content captured as
+// `scope array { <MACRO_USE> }` so embedded `\`NAME` calls surface
+// as macro_use dicts in segments; everything else stays as bare
+// StringValue text runs. The walker iterates segments.
+//
+// `ignore:` overrides the inherited policy — line whitespace is
+// content. Leading negative-lookaheads keep TEXT_LINE from claiming
+// structural close tokens.
+TEXT_LINE ignore: sequence dict {
+  !"`endif",
+  !"`else",
+  !"`elsif",
+  scope array { <MACRO_USE> }:segments=@,
+  "\n":type="text_line"
+}
+
+// `\`define NAME [(p1, …)] body`. The name + optional params sits
+// inside DECL with empty ignore so the LRM adjacency rule survives:
+//
+//   `\`define FOO(x) bar`    → parameterised: params=["x"], body=[bar]
+//   `\`define FOO (x) bar`   → object-like:   no params,   body=[(x) bar]
+DEFINE: sequence dict {
+  "`define":type="define" space,
+  <DECL>:decl=@ space,
+  scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
+  "\n"
+}
+
+// `ignore:` empty — the engine runs the OUTER PP_FILE's `ignore
+// linespace` at DECL's boundary (eats the space after `\`define`),
+// then DECL's empty policy takes effect for its internal items.
+// `?<PARAMS>` predictive uses DECL's empty: peek raw cursor — `(`
+// takes PARAMS, space skips it.
+DECL ignore: sequence dict {
+  identifier:name=@,
+  ?<PARAMS>:params=@
+}
+
+// PARAMS overrides with its own `ignore linespace` so internal
+// whitespace works — DECL above has empty ignore which would
+// otherwise propagate into PARAMS via inheritance.
+PARAMS ignore linespace: sequence array {
+  "(",
+  repeat identifier separator ",",
+  ")"
+}
+
+// `\`NAME[(args)]` use site. No explicit ignore — inherit from
+// caller. LRM §22.5.1 allows whitespace between macro name and the
+// opening `(` of args at the use site (asymmetric to `\`define`,
+// where no whitespace is allowed). Inside a macro body MACRO_USE
+// inherits PP_FILE's `ignore linespace`, so `\`INC (Y)` captures
+// (Y) as args. Inside TEXT_LINE (empty ignore), line content stays
+// verbatim — `\`FOO (5)` at the top level treats `(5)` as text.
+MACRO_USE: sequence dict {
+  "`":type="macro_use",
+  identifier:name=@,
+  ?<MACRO_ARGS>:args=@
+}
+
+// Args at the use site. LRM §22.5.1: each arg is a balanced-paren
+// token run terminating at the top-level `,` or `)`. The scope
+// captures each arg's raw bytes (StringValue), with nested PAREN /
+// BRACKET / BRACE / std.string as atomic INNERs so embedded commas
+// and closing parens inside nested structures don't end the arg.
+//
+// Multi-stop on the scope (load-time resolver): stops at `,` (the
+// repeat separator) for non-final args and `)` (the post-repeat
+// sibling) for the final arg.
+//
+// Result shape: ArrayValue<StringValue>. Each StringValue holds the
+// raw bytes of one arg — the same flat-text shape the substitution
+// pipeline already consumes; the structural improvement is purely
+// in which call sites the grammar accepts.
+//
+// `ignore linespace` applies between structural items (around `,`,
+// before `)`); whitespace INSIDE an arg span (e.g. `a + 1`) is part
+// of the captured bytes — scope's byte-scan bypasses the ignore set.
+MACRO_ARGS ignore linespace: sequence array {
+  "(",
+  repeat scope { <PAREN>, <BRACKET>, <BRACE>, std.string } separator ",",
+  ")"
+}
+
+// Balanced-paren INNER for MACRO_ARGS. Self-referential via INNERs
+// so arbitrary nesting like `((a, b), c)` captures atomically. The
+// scope's body bytes are folded into the surrounding arg span
+// verbatim — these rules exist for atomicity, not for AST shape.
+PAREN:   sequence { "(", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, ")" }
+BRACKET: sequence { "[", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, "]" }
+BRACE:   sequence { "{", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, "}" }
+
+STRING: sequence dict {
+  std.string:type="string":value=@
+}
+
+PARAM_REF: sequence dict {
+  identifier:type="ref":value=@
+}

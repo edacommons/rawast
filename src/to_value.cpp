@@ -131,6 +131,22 @@ ValuePtr node_to_value(const Grammar& g, NodeId id) {
         break;
     }
 
+    case NodeKind::Scope: {
+        // `{type: "scope", container: "array", value: [INNER...]}`.
+        // Scope has no start/stop attributes — those come from the
+        // surrounding sequence's siblings. Loader's `type == "scope"`
+        // branch reads container + INNERs back; `resolve_raw_stops`
+        // populates the sibling-driven stop at load time.
+        put_str(*d, "type", "scope");
+        if (n.container == Container::Array) put_str(*d, "container", "array");
+        auto items = std::make_shared<ArrayValue>();
+        for (NodeId child : n.children) {
+            items->data().push_back(node_to_value(g, child));
+        }
+        put(*d, "value", items);
+        break;
+    }
+
     case NodeKind::Repeat: {
         put_str(*d, "type", "repeat");
         if (n.min > 0) put_int(*d, "min", static_cast<std::int64_t>(n.min));

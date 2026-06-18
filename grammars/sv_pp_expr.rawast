@@ -1,0 +1,177 @@
+// SystemVerilog preprocessor `\`if` / `\`elsif` expression subset.
+//
+// Operator set: logical ||, &&, !; equality ==, !=; comparison
+// <, >, <=, >=; arithmetic +, -, *, /, %. Primaries are decimal
+// integer literals, bare identifiers (macro references), generic
+// `name(...)` calls (most commonly `defined(NAME)`), and parens.
+//
+// Out of scope: bitwise, sized literals, ternary, shift operators.
+//
+// AST contract (uniform `{op, args[]}` plus `{type, ...}` leaves):
+//
+//   Leaves — discriminated by `type`
+//     {type:"ref",       value:"FOO"}      // bare identifier — the
+//                                           // consumer's expr_eval
+//                                           // decides whether to
+//                                           // resolve, test, or pass
+//                                           // through
+//     {type:"int",       value:42}
+//     {type:"call",      name:"defined", args:[…]}
+//     {type:"paren",     value:<expr>}
+//
+//   Operations — discriminated by `op`, evaluated left-to-right
+//     {op:"||", args:[a, b, …]}    // n-ary, same-op collapse
+//     {op:"&&", args:[a, b, …]}    // n-ary, same-op collapse
+//     {op:"==", args:[a, b]}       // binary (mixed-op nests at boundary)
+//     {op:"!=", args:[a, b]}       // binary
+//     {op:"<",  args:[a, b]}       // binary
+//     {op:">",  args:[a, b]}       // binary
+//     {op:"<=", args:[a, b]}       // binary
+//     {op:">=", args:[a, b]}       // binary
+//     {op:"+",  args:[a, b, …]}    // n-ary same-op runs collapse
+//     {op:"-",  args:[a, b, …]}    // same; mixed-op nests
+//     {op:"*",  args:[a, b, …]}
+//     {op:"/",  args:[a, b, …]}
+//     {op:"%",  args:[a, b]}
+//     {op:"!",  args:[x]}          // unary
+//
+// Each precedence level uses the `choice { CHAIN, NEXT }` pattern.
+// CHAIN matches the always-wrap shape (`<NEXT>:lhs=@, repeat+
+// <TAIL>:tail[]=@`) with at least one tail entry — so a bare atom
+// falls through to <NEXT> and propagates down the ladder without
+// any wrapper. Chains produce always-wrap AST; the `#opchain` mark
+// on PP_EXPR triggers post-parse compaction to `{op, args[]}`. Save
+// reverses.
+//
+// Precedence (low → high), matching C/SV conventions:
+//   ||  <  &&  <  ==/!=  <  </>/<=/>=  <  +/-  <  */ / /%  <  !  <  PRIMARY
+
+use: std
+
+start: <PP_EXPR>
+
+PP_EXPR: <OR_EXPR>:#opchain
+
+// ─── Precedence ladder ─────────────────────────────────────────
+
+OR_EXPR ignore whitespace: choice { <OR_CHAIN>, <AND_EXPR> }
+OR_CHAIN: sequence dict {
+    <AND_EXPR>:lhs=@,
+    repeat+ <OR_TAIL>:tail[]=@
+}
+OR_TAIL: sequence dict {
+    '||':op="||",
+    <AND_EXPR>:rhs=@
+}
+
+AND_EXPR: choice { <AND_CHAIN>, <EQ_EXPR> }
+AND_CHAIN: sequence dict {
+    <EQ_EXPR>:lhs=@,
+    repeat+ <AND_TAIL>:tail[]=@
+}
+AND_TAIL: sequence dict {
+    '&&':op="&&",
+    <EQ_EXPR>:rhs=@
+}
+
+EQ_EXPR: choice { <EQ_CHAIN>, <COMPARE_EXPR> }
+EQ_CHAIN: sequence dict {
+    <COMPARE_EXPR>:lhs=@,
+    repeat+ <EQ_TAIL>:tail[]=@
+}
+EQ_TAIL: sequence dict {
+    choice { '==':op="==", '!=':op="!=" },
+    <COMPARE_EXPR>:rhs=@
+}
+
+// Comparison operator separators: longer literal first so `<=`
+// doesn't get partially matched as `<` followed by a stray `=`.
+COMPARE_EXPR: choice { <COMPARE_CHAIN>, <ADD_EXPR> }
+COMPARE_CHAIN: sequence dict {
+    <ADD_EXPR>:lhs=@,
+    repeat+ <COMPARE_TAIL>:tail[]=@
+}
+COMPARE_TAIL: sequence dict {
+    choice {
+        '<=':op="<=",
+        '>=':op=">=",
+        '<':op="<",
+        '>':op=">"
+    },
+    <ADD_EXPR>:rhs=@
+}
+
+ADD_EXPR: choice { <ADD_CHAIN>, <MUL_EXPR> }
+ADD_CHAIN: sequence dict {
+    <MUL_EXPR>:lhs=@,
+    repeat+ <ADD_TAIL>:tail[]=@
+}
+ADD_TAIL: sequence dict {
+    choice { '+':op="+", '-':op="-" },
+    <MUL_EXPR>:rhs=@
+}
+
+MUL_EXPR: choice { <MUL_CHAIN>, <UNARY_EXPR> }
+MUL_CHAIN: sequence dict {
+    <UNARY_EXPR>:lhs=@,
+    repeat+ <MUL_TAIL>:tail[]=@
+}
+MUL_TAIL: sequence dict {
+    choice { '*':op="*", '/':op="/", '%':op="%" },
+    <UNARY_EXPR>:rhs=@
+}
+
+// Unary `!` recurses on itself (right-associative `!!FOO`). Output
+// is already in `{op, args[1]}` form; compact leaves args.size==1
+// dicts alone (they aren't chains).
+UNARY_EXPR: choice {
+    <NOT_EXPR>,
+    <PRIMARY>
+}
+NOT_EXPR: sequence dict {
+    "!":op="!",
+    <UNARY_EXPR>:args[]=@
+}
+
+// ─── Primaries ──────────────────────────────────────────────────
+
+PRIMARY: choice {
+    <INT>,
+    <CALL_EXPR>,
+    <REF>,
+    <PAREN_EXPR>
+}
+
+CALL_EXPR: sequence dict {
+    identifier:type="call":name=@,
+    "(",
+    repeat <PP_EXPR>:args[]=@ separator ",",
+    ")"
+}
+
+REF: sequence dict {
+    identifier:type="ref":value=@
+}
+
+INT: sequence dict {
+    int:type="int":value=@
+}
+
+// `scope { "(", <PAREN_EXPR>, std.string, ")" }` captures the body
+// of `(...)` as a string and `#subparse="PP_EXPR"` re-parses it
+// through PP_EXPR as an independent sub-tree. Self-Ref INNER makes
+// nested parens transparent (the body of `(a (b) c)` is `a (b) c`);
+// `std.string` INNER keeps embedded `"...(...)..."` strings atomic
+// so a `)` inside a string can't close the scope.
+//
+// Decouples PAREN's body from the outer parse: the sub-parse
+// triggers its own `#opchain` compaction at its own frame exit,
+// and save serializes the sub-tree through the subparse hook.
+// Avoids the nested `{lhs:{lhs:..., tail:[...]}, tail:[...]}`
+// shapes the engine's dispatcher struggles with when the body is
+// consumed inline via `<PP_EXPR>:value=@`.
+PAREN_EXPR: sequence dict {
+    "(":type="paren",
+    scope { <PAREN_EXPR>, std.string }:value=@:#subparse="PP_EXPR",
+    ")"
+}

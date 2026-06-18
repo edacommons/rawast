@@ -7,11 +7,44 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 namespace rawast {
 
 namespace {
+
+// Unescape standard C-style backslash sequences in a Key literal.
+// The meta-grammar's string parser delivers `"\n"` as the two-byte
+// sequence `\` `n`; for Key literals we want it to mean a real
+// newline byte so users can write `"\n"` as the literal-newline
+// terminator after a `*` or scope. Standard escapes: \n \t \r \\ \"
+// \' \0. Unrecognised escapes pass through (literal backslash + char)
+// so any grammar that intentionally stored e.g. `\X` as two bytes
+// keeps working.
+std::string unescape_key_literal(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        char c = in[i];
+        if (c != '\\' || i + 1 >= in.size()) {
+            out.push_back(c);
+            continue;
+        }
+        char nx = in[i + 1];
+        switch (nx) {
+        case 'n':  out.push_back('\n'); ++i; break;
+        case 't':  out.push_back('\t'); ++i; break;
+        case 'r':  out.push_back('\r'); ++i; break;
+        case '\\': out.push_back('\\'); ++i; break;
+        case '"':  out.push_back('"');  ++i; break;
+        case '\'': out.push_back('\''); ++i; break;
+        case '0':  out.push_back('\0'); ++i; break;
+        default:   out.push_back(c);    break;  // pass through verbatim
+        }
+    }
+    return out;
+}
 
 // Helpers --------------------------------------------------------------
 
@@ -881,9 +914,20 @@ populate(Grammar& g, NodeId target, const Value& body) {
                 // on the same pattern.
                 continue;
             }
+            if (e.name == "opchain") {
+                // Bare flag — no value expected. Marks the rule body
+                // for parse-side always-wrap → {op, args[]} compaction
+                // (and save-side reversal). See Grammar::set_opchain.
+                if (e.value) {
+                    return tl::unexpected(
+                        "#opchain: takes no value (use bare `:#opchain`)");
+                }
+                g.set_opchain(target);
+                continue;
+            }
             return tl::unexpected(
                 "unknown engine annotation '#" + e.name +
-                "' on rule body; valid: #role, #field");
+                "' on rule body; valid: #role, #field, #opchain");
         }
     }
 
@@ -903,6 +947,26 @@ populate(Grammar& g, NodeId target, const Value& body) {
     if (type == "sequence" || type == "choice") {
         // Accept the canonical `value` field (the field name the .rawast
         // meta-grammar emits) alongside the legacy `items` JSON shape.
+        auto items_val = dict_value(*dv, "value");
+        if (!items_val) items_val = dict_value(*dv, "items");
+        return append_items_array(g, target, items_val, type);
+    }
+
+    if (type == "scope") {
+        // `scope [array] { INNER... }`. Children are exactly the INNERs.
+        // `container:"array"` selects segment-array output (each INNER
+        // match → its typed value, text gaps → StringValue entries);
+        // the default (no container) emits a single concatenated
+        // StringValue body. The stop literal is resolved later by
+        // `resolve_raw_stops` from the next sibling in the surrounding
+        // sequence — scope has no start/stop attributes of its own.
+        n.kind = NodeKind::Scope;
+        if (auto c = dict_string_opt(*dv, "container")) {
+            if      (*c == "array") n.container = Container::Array;
+            else if (*c == "none")  n.container = Container::None;
+            else return tl::unexpected(
+                "scope: container must be 'array' (got '" + *c + "')");
+        }
         auto items_val = dict_value(*dv, "value");
         if (!items_val) items_val = dict_value(*dv, "items");
         return append_items_array(g, target, items_val, type);
@@ -947,7 +1011,8 @@ populate(Grammar& g, NodeId target, const Value& body) {
         n.kind = NodeKind::Key;
         auto key_r = dict_string(*dv, "key");
         if (!key_r) return tl::unexpected(key_r.error());
-        n.value = make_string(*key_r);
+        const std::string literal = unescape_key_literal(*key_r);
+        n.value = make_string(literal);
         // Word-boundary strict matching. The DSL surface forms `"X"` and
         // `'X'` arrive at the loader as `type: "key"` vs `type: "strict_key"`
         // respectively — both produce a Key node, with the strict_key
@@ -959,7 +1024,7 @@ populate(Grammar& g, NodeId target, const Value& body) {
         // text as the emitted value." Equivalent at runtime to
         // `{key: "X", value: "X"}`.
         if (dict_bool(*dv, "emit")) {
-            NodeId val_child = g.new_value(make_string(*key_r));
+            NodeId val_child = g.new_value(make_string(literal));
             g.node(target).children.push_back(val_child);
         } else if (auto val = dict_value(*dv, "value")) {
             NodeId val_child = g.new_value(val);
@@ -1132,39 +1197,210 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
     auto sub_r = g.resolve_subparse_refs();
     if (!sub_r) return tl::unexpected(sub_r.error());
 
-    // Resolve stop literals for every `Raw` node by walking every
-    // Sequence's children and copying the next sibling's Key literal
-    // onto the Raw node's `value`. Errors out if the next sibling
-    // isn't a Key (or doesn't exist) — the engine has no way to know
-    // when to stop scanning otherwise.
+    // Resolve stop literals for every Raw and Scope node by walking
+    // every Sequence's children. The stops set on the byte-scan
+    // node's `n.stops` is the set of Key literals at the boundaries
+    // where the scan can legitimately exit its enclosing context:
+    //
+    //   sequence { OPEN, scope { ... }, CLOSE }
+    //     → stops = [CLOSE]               (1 stop, the historical form)
+    //
+    //   sequence { OPEN, repeat scope { ... } separator SEP, CLOSE }
+    //     → stops = [SEP, CLOSE]          (2 stops; SEP ends non-final
+    //                                     iterations, CLOSE ends the final)
+    //
+    //   sequence { OPEN, repeat scope { ... }, CLOSE }
+    //     → stops = [CLOSE]               (no separator → same as bare)
+    //
+    // Errors out if any boundary that should carry a stop literal
+    // isn't a Key (the byte-scan needs a literal byte string to test
+    // against; rule-based stops would require an in-engine parse trial
+    // and aren't supported today).
+    auto kind_label = [](NodeKind k) {
+        return k == NodeKind::Raw ? "raw consume (`*`)" : "scope";
+    };
+    // Extract the literal byte string + strict flag of a Key node
+    // (must be non-empty). Used both for direct next-sibling stops
+    // and for repeat-separator / post-repeat-sibling stops in the
+    // multi-stop case. The strict bit propagates to the scan node's
+    // stops_strict so a sibling `'X'` (strict) bounds the scope with
+    // word-boundary checking.
+    struct KeyLit { std::string literal; bool strict; };
+    auto key_literal =
+        [&g](NodeId id, const char* boundary_label,
+             const char* node_label_str) -> tl::expected<KeyLit, std::string> {
+        const Node& n = g.node(g.resolve_ref(id));
+        if (n.kind != NodeKind::Key) {
+            return tl::unexpected(
+                std::string(node_label_str) + " " + boundary_label +
+                " must be a literal Key (got non-Key node)");
+        }
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv || sv->data().empty()) {
+            return tl::unexpected(
+                std::string(node_label_str) + " " + boundary_label +
+                " Key has no literal or empty literal");
+        }
+        return KeyLit{sv->data(), n.strict};
+    };
+
+    // Descend through wrapping Sequence / Value chains to find the
+    // load-bearing Raw/Scope at the bottom of a Repeat's body. The
+    // meta-grammar wraps an item with bindings in an enclosing
+    // Sequence + Value chain, so a `repeat scope { ... }:items[]=@`
+    // produces Repeat → Sequence(Value, Scope), not Repeat → Scope.
+    // Returns the deepest Raw/Scope id, or invalid if none found.
+    auto find_scan_node = [&g](NodeId start) -> NodeId {
+        NodeId cur = g.resolve_ref(start);
+        while (cur.valid()) {
+            const Node& n = g.node(cur);
+            if (n.kind == NodeKind::Raw || n.kind == NodeKind::Scope) {
+                return cur;
+            }
+            // Descend the LAST non-Value child of a Sequence — Value
+            // children are binding markers (constants emitted into the
+            // catcher); the actual scan node is the structural item.
+            if (n.kind == NodeKind::Sequence) {
+                NodeId next{};
+                for (auto cid : n.children) {
+                    NodeId rid = g.resolve_ref(cid);
+                    if (g.node(rid).kind != NodeKind::Value) next = rid;
+                }
+                if (!next.valid()) return {};
+                cur = next;
+                continue;
+            }
+            return {};
+        }
+        return {};
+    };
+
+    // Pass 1: walk every Sequence's children looking for Repeat kids.
+    // For each Repeat whose body resolves to a Raw/Scope, set that
+    // scan node's stops from [separator (if any), post-repeat sibling].
+    // Track which scan nodes were filled here so Pass 2 doesn't try
+    // to set them again from their immediate Sequence sibling (which
+    // doesn't exist — they're the only structural child of their
+    // wrapping Sequence).
+    std::unordered_set<std::uint32_t> multi_stop_filled;
     for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
-        NodeId nid{idx};
-        Node& parent = g.node(nid);
+        Node& parent = g.node(NodeId{idx});
         if (parent.kind != NodeKind::Sequence) continue;
         const auto& kids = parent.children;
         for (std::size_t k = 0; k < kids.size(); ++k) {
-            Node& child = g.node(g.resolve_ref(kids[k]));
-            if (child.kind != NodeKind::Raw) continue;
+            Node& kid = g.node(g.resolve_ref(kids[k]));
+            if (kid.kind != NodeKind::Repeat) continue;
+            const std::size_t item_idx = kid.has_separator ? 1 : 0;
+            if (item_idx >= kid.children.size()) continue;
+            NodeId body_id = find_scan_node(kid.children[item_idx]);
+            if (!body_id.valid()) continue;
+            Node& body = g.node(body_id);
+            const char* label = kind_label(body.kind);
+            std::vector<std::string> stops;
+            bool any_strict = false;
+            if (kid.has_separator && !kid.children.empty()) {
+                auto sep_r = key_literal(kid.children[0],
+                                         "repeat separator", label);
+                if (!sep_r) return tl::unexpected(sep_r.error());
+                stops.push_back(sep_r->literal);
+                if (sep_r->strict) any_strict = true;
+            }
             if (k + 1 >= kids.size()) {
                 return tl::unexpected(
-                    "raw consume (`*`) must be followed by a literal "
+                    std::string(label) + " in a repeat must be followed "
+                    "by a literal key in the surrounding sequence; "
+                    "nothing follows the repeat here");
+            }
+            auto post_r = key_literal(kids[k + 1],
+                                      "post-repeat sibling", label);
+            if (!post_r) return tl::unexpected(post_r.error());
+            stops.push_back(post_r->literal);
+            if (post_r->strict) any_strict = true;
+            body.stops = std::move(stops);
+            body.value = make_string(body.stops.front());
+            body.stops_strict = any_strict;
+            multi_stop_filled.insert(body_id.value());
+        }
+    }
+
+    // Pass 2: single-stop direct Raw/Scope children. Skip nodes Pass 1
+    // already filled (they're inside a Repeat-wrapping Sequence whose
+    // immediate sibling structure doesn't carry the stop).
+    for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
+        Node& parent = g.node(NodeId{idx});
+        if (parent.kind != NodeKind::Sequence) continue;
+        const auto& kids = parent.children;
+        for (std::size_t k = 0; k < kids.size(); ++k) {
+            NodeId kid_id = g.resolve_ref(kids[k]);
+            Node& kid = g.node(kid_id);
+            if (kid.kind != NodeKind::Raw
+                && kid.kind != NodeKind::Scope) continue;
+            if (multi_stop_filled.count(kid_id.value())) continue;
+            const char* label = kind_label(kid.kind);
+            if (k + 1 >= kids.size()) {
+                return tl::unexpected(
+                    std::string(label) + " must be followed by a literal "
                     "key in the same sequence; nothing follows here");
             }
-            const Node& next = g.node(g.resolve_ref(kids[k + 1]));
-            if (next.kind != NodeKind::Key) {
-                return tl::unexpected(
-                    "raw consume (`*`) must be followed by a literal "
-                    "key in the same sequence; next sibling is not a "
-                    "Key node");
-            }
-            auto stop_sv = std::dynamic_pointer_cast<StringValue>(next.value);
-            if (!stop_sv || stop_sv->data().empty()) {
-                return tl::unexpected(
-                    "raw consume (`*`) next-sibling Key has no literal "
-                    "or empty literal");
-            }
-            child.value = stop_sv;
+            auto lit_r = key_literal(kids[k + 1],
+                                     "next sibling", label);
+            if (!lit_r) return tl::unexpected(lit_r.error());
+            kid.stops = {lit_r->literal};
+            kid.stops_strict = lit_r->strict;
+            kid.value = make_string(lit_r->literal);  // legacy / save-side
         }
+    }
+
+    // Final validation: every Raw/Scope node MUST have stops resolved
+    // by the time the resolver finishes. Pass 1 + Pass 2 above cover
+    // the supported structural shapes (direct Sequence child or
+    // Repeat-wrapped via find_scan_node descent). A scope/Raw wrapped
+    // in anything else — Choice, optional `?<X>`, nested Repeat — is
+    // invisible to both passes and would silently keep empty stops;
+    // the parse driver later errors at run time with "no stop
+    // literals", far from the grammar source. Error here so the
+    // grammar author sees the problem at load.
+    for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
+        const Node& n = g.node(NodeId{idx});
+        if (n.kind != NodeKind::Raw && n.kind != NodeKind::Scope) continue;
+        if (!n.stops.empty()) continue;
+        const char* label = (n.kind == NodeKind::Raw) ? "raw consume (`*`)"
+                                                      : "scope";
+        return tl::unexpected(
+            std::string(label) +
+            " in this grammar has no stop literal — the resolver "
+            "couldn't find a Key sibling that bounds it. This happens "
+            "when scope/raw is wrapped in a Choice, optional `?<X>`, "
+            "or nested Repeat: the resolver only descends through "
+            "Sequence + Value (binding-marker) chains. Workaround: "
+            "wrap the scope in a Sequence with the stop literal as an "
+            "explicit sibling, or combine alternatives into a single "
+            "scope (its INNERs already act as alternation).");
+    }
+
+    // Validate that every Parse-node references a registered parser.
+    // Without this, an unresolved name (typo, wrong group, std parser
+    // referenced before the `use:` declaration) is accepted by the
+    // loader and only blows up at parse time with a null deref on the
+    // parser pointer — a hostile failure mode for grammar authors,
+    // since the diagnostic is "segfault" with no context. By the time
+    // we reach this point, `use:` groups have been applied and all
+    // host-side `register_parser()` calls that ran before load have
+    // landed; any remaining unresolved name is a real bug in the
+    // grammar text.
+    for (std::size_t idx = 0; idx < g.node_count(); ++idx) {
+        NodeId nid{idx};
+        const Node& n = g.node(nid);
+        if (n.kind != NodeKind::Parse) continue;
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv) continue;            // shouldn't happen — Parse always has a name
+        const std::string& name = sv->data();
+        if (g.parser(name) != nullptr) continue;
+        return tl::unexpected(
+            "unknown parser '" + name + "' referenced by grammar; "
+            "either register it on the Grammar before load, or add the "
+            "appropriate `use: <group>` line if it comes from a parser "
+            "group (e.g. `use: std` for `int` / `identifier` / etc.)");
     }
 
     return {};
@@ -1172,9 +1408,8 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
 
 tl::expected<void, std::string>
 load_json_grammar_from_string(Grammar& g, std::string_view content) {
-    std::istringstream is{std::string{content}};
-    StreamReader sr{is};
-    auto parsed = json_meta_grammar().parse(sr);
+    auto stream = Stream::from_string(std::string{content});
+    auto parsed = json_meta_grammar().parse(stream);
     if (!parsed) {
         return tl::unexpected(
             "failed to parse JSON-grammar text at byte " +
@@ -1229,9 +1464,8 @@ load_rawast_grammar_from_string(Grammar& g, std::string_view content) {
     const auto& meta = rawast_meta_grammar();
     if (!meta) return tl::unexpected(meta.error());
 
-    std::istringstream is{std::string{content}};
-    StreamReader sr{is};
-    auto parsed = meta->parse(sr);
+    auto stream = Stream::from_string(std::string{content});
+    auto parsed = meta->parse(stream);
     if (!parsed) {
         return tl::unexpected(
             "failed to parse .rawast text at byte " +

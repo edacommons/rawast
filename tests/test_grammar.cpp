@@ -91,9 +91,8 @@ TEST_CASE("Choice handles shared-prefix alternatives by default") {
 
     g.set_top(g.new_ref("TOP"));
 
-    std::istringstream is{"ac"};
-    StreamReader sr{is};
-    CHECK(g.parse(sr));
+    auto stream = Stream::from_string("ac");
+    CHECK(g.parse(stream));
 }
 
 TEST_CASE("Choice with backtrack handles shared-prefix alternatives") {
@@ -113,19 +112,16 @@ TEST_CASE("Choice with backtrack handles shared-prefix alternatives") {
     g.set_top(g.new_ref("TOP"));
 
     SUBCASE("input matches first alternative") {
-        std::istringstream is{"ab"};
-        StreamReader sr{is};
-        CHECK(g.parse(sr));
+        auto stream = Stream::from_string("ab");
+        CHECK(g.parse(stream));
     }
     SUBCASE("input matches second alternative (requires backtrack)") {
-        std::istringstream is{"ac"};
-        StreamReader sr{is};
-        CHECK(g.parse(sr));
+        auto stream = Stream::from_string("ac");
+        CHECK(g.parse(stream));
     }
     SUBCASE("input matches no alternative") {
-        std::istringstream is{"ad"};
-        StreamReader sr{is};
-        CHECK_FALSE(g.parse(sr));
+        auto stream = Stream::from_string("ad");
+        CHECK_FALSE(g.parse(stream));
     }
 }
 
@@ -149,11 +145,10 @@ TEST_CASE("Backtracking Choice rewinds the stream between attempts") {
 
     g.set_top(g.new_ref("TOP"));
 
-    std::istringstream is{"ac"};
-    StreamReader sr{is};
-    REQUIRE(g.parse(sr));
+    auto stream = Stream::from_string("ac");
+    REQUIRE(g.parse(stream));
     // After successful parse, the stream should be at EOF.
-    CHECK(sr.eof());
+    CHECK(stream.reader().eof());
 }
 
 TEST_CASE("Nested backtracking Choices rewind correctly") {
@@ -186,14 +181,12 @@ TEST_CASE("Nested backtracking Choices rewind correctly") {
     g.set_top(g.new_ref("OUTER"));
 
     SUBCASE("axb works") {
-        std::istringstream is{"axb"};
-        StreamReader sr{is};
-        CHECK(g.parse(sr));
+        auto stream = Stream::from_string("axb");
+        CHECK(g.parse(stream));
     }
     SUBCASE("axcdg requires backtrack through nested choice") {
-        std::istringstream is{"axcdg"};
-        StreamReader sr{is};
-        CHECK(g.parse(sr));
+        auto stream = Stream::from_string("axcdg");
+        CHECK(g.parse(stream));
     }
 }
 
@@ -216,9 +209,8 @@ TEST_CASE("Loader recognises the backtrack flag on Choice") {
     REQUIRE(top.valid());
     CHECK(g.node(top).backtrack);
 
-    std::istringstream is{"ac"};
-    StreamReader sr{is};
-    CHECK(g.parse(sr));
+    auto stream = Stream::from_string("ac");
+    CHECK(g.parse(stream));
 }
 
 TEST_CASE("Value-kind nodes honour is_name in the catcher absorber") {
@@ -251,9 +243,8 @@ TEST_CASE("Value-kind nodes honour is_name in the catcher absorber") {
 
     g.set_top(g.new_ref("TOP"));
 
-    std::istringstream is{"42"};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("42");
+    auto r = g.parse(stream);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);

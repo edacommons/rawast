@@ -21,18 +21,29 @@ class Grammar;
 class LefdefIdentifierParser final : public Parser {
 public:
     LefdefIdentifierParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        // Any byte except the lefdef identifier stops (whitespace and
+        // `;()"+`). See is_identifier_stop in parsers_lefdef.cpp.
+        return ALL_BYTES
+               EXC_CHAR(" ") EXC_CHAR("\t") EXC_CHAR("\n") EXC_CHAR("\r")
+               EXC_CHAR(";") EXC_CHAR("(") EXC_CHAR(")") EXC_CHAR("\"")
+               EXC_CHAR("+");
+    }
 };
 
 // LEF/DEF line-comment parser. Matches `#` then everything up to (and
 // including) the next newline. Intended for use only on a grammar's
 // `ignore:` list; unparse is not implemented (comments are not
-// reconstructible from value trees).
+// reconstructible from value trees). value() returns null (the
+// comment carries no payload to round-trip).
 class LefdefLineCommentParser final : public Parser {
 public:
     LefdefLineCommentParser();
-    ParseResult parse(StreamReader& sr) override;
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
+    std::string_view first_bytes() const override { return INC_CHAR("#"); }
 };
 
 // Retired: `LefdefLef58NameParser`. The LEF58_-prefixed name

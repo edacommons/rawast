@@ -27,8 +27,12 @@ add_executable(rawast_tests
     test_pretty.cpp
     test_gdsii.cpp
     test_preprocessor.cpp
+    test_preprocessor_eval.cpp
     test_neg_lookahead.cpp
-    test_scope_parsers.cpp
+    test_scope_grammar.cpp
+    test_opchain.cpp
+    test_sv_pp_expr.cpp
+    test_sv_preprocessor.cpp
 )
 
 set_target_properties(rawast_tests PROPERTIES

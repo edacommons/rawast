@@ -35,10 +35,15 @@ class Grammar;
 // follow-on if desired.
 class GdsiiRecordParser final : public Parser {
     std::uint16_t expected_rec_id_;
+    // Decoded payload stashed by walk() — value() returns it without
+    // re-decoding. reset() clears.
+    ValuePtr decoded_;
 public:
     GdsiiRecordParser(std::string name, std::uint16_t rec_id);
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
+    void       reset() override;
+    SaveResult unparse(const Value& value) const override;
 };
 
 // Register the "gdsii" parser group in the global registry. Grammars

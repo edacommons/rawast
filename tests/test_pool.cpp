@@ -112,9 +112,8 @@ TEST_CASE("find_containers_of returns empty for an unregistered value") {
 TEST_CASE("Grammar::parse interns repeated string values across a dict") {
     auto g = make_json_grammar();
     ValuePool pool;
-    std::istringstream is{R"({"a": "x", "b": "x", "c": "x"})"};
-    StreamReader sr{is};
-    auto r = g.parse(sr, pool);
+    auto stream = Stream::from_string(R"({"a": "x", "b": "x", "c": "x"})");
+    auto r = g.parse(stream, pool);
     REQUIRE(r);
     auto d = std::dynamic_pointer_cast<DictValue>(*r);
     REQUIRE(d);
@@ -129,9 +128,8 @@ TEST_CASE("Grammar::parse interns repeated string values across a dict") {
 TEST_CASE("Grammar::parse interns repeated int values across an array") {
     auto g = make_json_grammar();
     ValuePool pool;
-    std::istringstream is{"[7, 7, 7, 8, 8, 9]"};
-    StreamReader sr{is};
-    auto r = g.parse(sr, pool);
+    auto stream = Stream::from_string("[7, 7, 7, 8, 8, 9]");
+    auto r = g.parse(stream, pool);
     REQUIRE(r);
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*r);
     REQUIRE(arr);
@@ -150,9 +148,8 @@ TEST_CASE("Grammar::parse interns repeated int values across an array") {
 TEST_CASE("Grammar::parse populates back-references via the pool") {
     auto g = make_json_grammar();
     ValuePool pool;
-    std::istringstream is{R"({"a": "clk", "b": "clk"})"};
-    StreamReader sr{is};
-    auto r = g.parse(sr, pool);
+    auto stream = Stream::from_string(R"({"a": "clk", "b": "clk"})");
+    auto r = g.parse(stream, pool);
     REQUIRE(r);
 
     // Find every container that holds the "clk" string.
@@ -167,9 +164,8 @@ TEST_CASE("Grammar::parse populates back-references via the pool") {
 TEST_CASE("Grammar::parse — pool reports unique primitive count") {
     auto g = make_json_grammar();
     ValuePool pool;
-    std::istringstream is{R"({"name": "clk", "frequency": 100, "type": "clock", "period": 10})"};
-    StreamReader sr{is};
-    auto r = g.parse(sr, pool);
+    auto stream = Stream::from_string(R"({"name": "clk", "frequency": 100, "type": "clock", "period": 10})");
+    auto r = g.parse(stream, pool);
     REQUIRE(r);
 
     // Unique primitives in this input:

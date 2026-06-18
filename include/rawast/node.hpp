@@ -27,6 +27,17 @@ enum class NodeKind {
                // StringValue; ignore-set skipping is bypassed so embedded
                // whitespace and newlines round-trip verbatim. The stop
                // literal is stashed on `value` (StringValue) at load time.
+    Scope,     // `scope { OPEN, INNER..., CLOSE }` — string-aware bracket
+               // scanner. children[0] is OPEN (must be a Key), children.back()
+               // is CLOSE (must be a Key); intermediate children are INNERs
+               // (rule Refs or terminal-Parser invocations) that consume
+               // atomic spans where embedded close bytes must not trigger
+               // a false CLOSE match. The scan loop tries CLOSE first at
+               // each step, then each INNER in order; on no match it
+               // advances one raw byte. The captured body bytes (between
+               // OPEN end and CLOSE start, exclusive) are emitted as a
+               // StringValue. Ignore-set skipping is bypassed inside the
+               // scope body so embedded whitespace round-trips verbatim.
 };
 
 // What kind of container the surrounding level materialises at end-of-frame.
@@ -128,6 +139,14 @@ public:
     // by the grammar via `"fixed_schema": true` in JSON form.
     bool fixed_schema  = false;
 
+    // `#opchain` reserved flag — when set on a rule body's node, the
+    // parse engine post-processes the produced AST: any dict in the
+    // subtree matching always-wrap shape `{lhs, tail:[{op,rhs}, ...]}`
+    // is compacted to `{op, args[]}` (same-op runs collapse flat,
+    // mixed-op boundaries nest). Save-side reverses the transform
+    // before normal dispatch. See `Grammar::set_opchain`.
+    bool opchain       = false;
+
     // Key-only: word-boundary strict matching. When set on a Key node,
     // the KeyParser additionally checks that the byte immediately after
     // the matched literal is NOT a word character (alphanumeric or
@@ -139,11 +158,54 @@ public:
     // or `'token'` (single-quote literal) in `.rawast` DSL form.
     bool strict        = false;
 
+    // Scope's stop literal is sibling-driven: `resolve_raw_stops`
+    // (which also handles Scope nodes) copies the next sibling Key's
+    // literal onto Node.value at load time — the same field Raw uses
+    // for its sibling-stop. Scope has no opening delimiter of its
+    // own; the surrounding sequence's siblings carry the start and
+    // stop literals. Strict (word-bounded) matching is selected by
+    // the sibling Key's `strict` flag, not by any attribute on the
+    // scope itself. Net: scope is structurally "Raw with INNERs and
+    // optional array container."
+
     // Carried for Key, Parse, Value kinds.
     //   Key   - StringValue holding the literal token to match.
     //   Parse - StringValue holding the name of the terminal parser to invoke.
     //   Value - any Value, emitted directly when the surrounding branch fires.
     ValuePtr value;
+
+    // Raw/Scope stop literals — the set of Key-literal byte strings that
+    // terminate the byte-scan when matched at the cursor. Populated by
+    // the load-time stop resolver (see `resolve_raw_stops` in
+    // src/loader.cpp).
+    //
+    // Single-stop case (`sequence { OPEN, scope { ... }, CLOSE }`) → one
+    // entry: the next sibling Key's literal.
+    //
+    // Multi-stop case (`sequence { OPEN, repeat scope { ... } separator
+    // SEP, CLOSE }`) → two entries: the repeat's separator literal and
+    // the post-repeat Key literal. Either marks a legitimate boundary
+    // — non-final iterations terminate at SEP, the final iteration at
+    // CLOSE.
+    //
+    // For backward-compatible introspection / save round-trip, `value`
+    // is also kept set to the FIRST stop literal in the single-stop
+    // case (the dominant historical form). Multi-stop save round-trip
+    // is a separate piece — preprocessor-side grammars own their files,
+    // so it isn't on the critical path.
+    std::vector<std::string> stops;
+
+    // Raw/Scope stops_strict — word-boundary check on the matching
+    // stop literal, mirroring the Key node's `strict` flag. Set by
+    // the load-time resolver when any of the sibling Keys that
+    // supply the stops carries the strict bit (`'X'` surface form
+    // vs `"X"`). Uniform across all stops in the multi-stop case —
+    // strict word-boundary checking applies to every stop literal
+    // whose last byte is a word character; for punctuation stops
+    // (`,`, `)`, `;`) the check is a no-op since no word
+    // continuation is possible, so making the flag uniform doesn't
+    // affect mixed punctuation+word stop sets.
+    bool stops_strict = false;
 
     // Save-direction pretty-print metadata. All ignored by parse.
     //

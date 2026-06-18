@@ -3,6 +3,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -117,6 +118,13 @@ FirstSet first_of(const Grammar& g, NodeId id, std::set<std::size_t>& visited) {
         // consumes at least zero bytes followed by a fail/EOF check
         // — treat as non-nullable for ambiguity purposes.
         result.tokens.insert("R:*");
+        break;
+    }
+    case NodeKind::Scope: {
+        // Scope has no opening delimiter (the surrounding sequence's
+        // previous sibling carries any start literal); first byte is
+        // unconstrained, same shape as Raw. Synthetic wildcard marker.
+        result.tokens.insert("S:*");
         break;
     }
     }
@@ -322,8 +330,10 @@ void key_paths_sequence(const Grammar& g,
         break;
     case NodeKind::Ref:
     case NodeKind::Raw:
-        // Ref already resolved above; Raw consumes opaque bytes and
-        // doesn't contribute a Key. Walk past.
+    case NodeKind::Scope:
+        // Ref already resolved above; Raw consumes opaque bytes; Scope
+        // consumes a bracketed span as a single StringValue — none
+        // contribute a Key path. Walk past.
         key_paths_sequence(g, children, start_idx + 1, visited,
                            max_depth, prefix, out);
         break;
@@ -912,49 +922,170 @@ std::vector<LintIssue> lint_grammar(const Grammar& g) {
         }
     }
 
-    // Raw-consume sanity: every `*` node must sit inside a Sequence
-    // and have a Key-with-literal as its immediate-next sibling.
-    // The loader enforces the same rule and would have rejected the
-    // grammar already by the time we get here — but the lint pass
-    // surfaces the issue with a friendlier message during
-    // `rawast lint <grammar>` instead of waiting for a load failure.
+    // Byte-scan stop sanity: every Raw (`*`) and Scope (`scope { ... }`)
+    // node needs at least one Key-literal that bounds it in the
+    // surrounding context, so the engine knows where to stop scanning.
+    // The loader enforces the same rule via `resolve_raw_stops` and
+    // would have rejected the grammar already by the time we get here —
+    // but the lint pass surfaces the issue with a friendlier message
+    // during `rawast lint <grammar>` than the loader's hard error.
+    //
+    // Two structural shapes are valid:
+    //
+    //   1. Direct child of a Sequence — single-stop, the immediate
+    //      next sibling must be a Key with a non-empty literal.
+    //
+    //   2. Inside a Repeat that's itself a Sequence child — multi-stop.
+    //      The Repeat's separator (if any) AND the post-repeat sibling
+    //      must both be Keys with literals; either marks a legitimate
+    //      boundary (separator ends non-final iterations, post-repeat
+    //      sibling ends the final iteration).
+    //
+    // The same Sequence/Value descent that `find_scan_node` in the
+    // loader uses applies here — bindings wrap items in
+    // Sequence(Value..., scan_node), so we descend the last non-Value
+    // child of any wrapping Sequence to find the Raw/Scope.
+
+    // Extract the Key literal from `id` (must resolve to a Key node).
+    // Returns empty optional with a populated reason if not a valid
+    // Key-with-literal.
+    struct KeyCheck { bool ok; std::string reason; };
+    auto check_key = [&g](NodeId id) -> KeyCheck {
+        NodeId resolved = g.resolve_ref(id);
+        const Node& n = g.node(resolved);
+        if (n.kind != NodeKind::Key) {
+            return {false, "not a literal key"};
+        }
+        auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+        if (!sv || sv->data().empty()) {
+            return {false, "key has no literal"};
+        }
+        return {true, {}};
+    };
+
+    // Mirror of `find_scan_node` in src/loader.cpp: descend the last
+    // non-Value child of wrapping Sequences to find the scan node.
+    auto find_scan = [&g](NodeId start) -> NodeId {
+        NodeId cur = g.resolve_ref(start);
+        while (cur.valid()) {
+            const Node& n = g.node(cur);
+            if (n.kind == NodeKind::Raw || n.kind == NodeKind::Scope) {
+                return cur;
+            }
+            if (n.kind == NodeKind::Sequence) {
+                NodeId next{};
+                for (auto cid : n.children) {
+                    NodeId rid = g.resolve_ref(cid);
+                    if (g.node(rid).kind != NodeKind::Value) next = rid;
+                }
+                if (!next.valid()) return {};
+                cur = next;
+                continue;
+            }
+            return {};
+        }
+        return {};
+    };
+
+    auto kind_label = [](NodeKind k) -> const char* {
+        return k == NodeKind::Raw ? "Raw consume (`*`)" : "Scope";
+    };
+    auto issue_token = [](NodeKind k) -> const char* {
+        return k == NodeKind::Raw ? "*" : "scope";
+    };
+
+    // Track scan nodes that the multi-stop pass already validated, so
+    // the single-stop pass doesn't re-flag them on their wrapping-
+    // Sequence's broken next-sibling (which is the Repeat container,
+    // not a Key — by design).
+    std::unordered_set<std::uint32_t> multi_stop_flagged_or_ok;
+
+    // Pass 1 — multi-stop: every Repeat that's a Sequence kid and
+    // wraps a Raw/Scope body needs separator (if any) AND post-repeat
+    // sibling validated.
     for (std::size_t i = 0; i < g.node_count(); ++i) {
-        NodeId parent_id{i};
-        const Node& parent = g.node(parent_id);
+        const Node& parent = g.node(NodeId{i});
+        if (parent.kind != NodeKind::Sequence) continue;
+        const auto& kids = parent.children;
+        for (std::size_t k = 0; k < kids.size(); ++k) {
+            const Node& kid = g.node(g.resolve_ref(kids[k]));
+            if (kid.kind != NodeKind::Repeat) continue;
+            const std::size_t item_idx = kid.has_separator ? 1 : 0;
+            if (item_idx >= kid.children.size()) continue;
+            NodeId scan_id = find_scan(kid.children[item_idx]);
+            if (!scan_id.valid()) continue;
+            const Node& scan = g.node(scan_id);
+            const char* label = kind_label(scan.kind);
+
+            std::string reason;
+            if (kid.has_separator && !kid.children.empty()) {
+                auto sep = check_key(kid.children[0]);
+                if (!sep.ok) {
+                    reason = "repeat separator " + sep.reason;
+                }
+            }
+            if (reason.empty()) {
+                if (k + 1 >= kids.size()) {
+                    reason = "nothing follows the repeat";
+                } else {
+                    auto post = check_key(kids[k + 1]);
+                    if (!post.ok) {
+                        reason = "post-repeat sibling " + post.reason;
+                    }
+                }
+            }
+            multi_stop_flagged_or_ok.insert(scan_id.value());
+            if (reason.empty()) continue;
+
+            LintIssue issue;
+            issue.choice_node = scan_id;
+            issue.token       = issue_token(scan.kind);
+            issue.description =
+                std::string(label) + " inside a repeat needs literal-key "
+                "boundaries at BOTH the repeat's separator (if any) and "
+                "the next sibling after the repeat — those literals tell "
+                "the engine where each iteration's scan stops. Here: " +
+                reason + ".";
+            issues.push_back(std::move(issue));
+        }
+    }
+
+    // Pass 2 — single-stop: direct Raw/Scope children of a Sequence
+    // need the immediate next sibling Key. Skip nodes the multi-stop
+    // pass already handled (those live inside a Repeat-wrapping
+    // Sequence whose own next-sibling structure doesn't carry the stop).
+    for (std::size_t i = 0; i < g.node_count(); ++i) {
+        const Node& parent = g.node(NodeId{i});
         if (parent.kind != NodeKind::Sequence) continue;
         const auto& kids = parent.children;
         for (std::size_t k = 0; k < kids.size(); ++k) {
             NodeId child_id = g.resolve_ref(kids[k]);
             const Node& child = g.node(child_id);
-            if (child.kind != NodeKind::Raw) continue;
-            bool ok = false;
+            if (child.kind != NodeKind::Raw
+                && child.kind != NodeKind::Scope) continue;
+            if (multi_stop_flagged_or_ok.count(child_id.value())) continue;
+            const char* label = kind_label(child.kind);
+
             std::string reason;
             if (k + 1 >= kids.size()) {
                 reason = "nothing follows";
             } else {
-                NodeId next_id = g.resolve_ref(kids[k + 1]);
-                const Node& next = g.node(next_id);
-                if (next.kind != NodeKind::Key) {
-                    reason = "next sibling is not a literal key";
-                } else {
-                    auto sv = std::dynamic_pointer_cast<StringValue>(next.value);
-                    if (!sv || sv->data().empty()) {
-                        reason = "next-sibling key has no literal";
-                    } else {
-                        ok = true;
-                    }
+                auto post = check_key(kids[k + 1]);
+                if (!post.ok) {
+                    reason = "next sibling " + post.reason;
                 }
             }
-            if (ok) continue;
+            if (reason.empty()) continue;
+
             LintIssue issue;
             issue.choice_node = child_id;
-            issue.token       = "*";
+            issue.token       = issue_token(child.kind);
             issue.description =
-                "Raw consume (`*`) needs a literal-key sibling "
+                std::string(label) + " needs a literal-key sibling "
                 "immediately after it in the same Sequence — that "
                 "literal tells the engine where to stop scanning. "
                 "Here: " + reason + ". Add a `\"...\"` key after the "
-                "`*` (e.g. `*:body=@, \"END\" newline`).";
+                + issue.token + " (e.g. `*:body=@, \"END\" newline`).";
             issues.push_back(std::move(issue));
         }
     }

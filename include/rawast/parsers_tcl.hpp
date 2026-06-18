@@ -20,23 +20,31 @@ class Grammar;
 // Horizontal whitespace + `\<newline>` line continuation. Listed in
 // SCRIPT context's ignore list. Greedy: consumes runs of spaces, tabs,
 // and backslash-newline pairs as one match. Fails if no horizontal-ws
-// is present at the current position.
+// is present at the current position. value() returns null (ignore-list
+// terminal — no payload).
 class TclHspaceParser final : public Parser {
 public:
     TclHspaceParser();
-    ParseResult parse(StreamReader& sr) override;
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR(" ") INC_CHAR("\t") INC_CHAR("\\");
+    }
 };
 
 // A single `\n` byte. Used as a structural command separator.
+// value() returns null (no payload).
 class TclNewlineParser final : public Parser {
 public:
     TclNewlineParser();
-    ParseResult parse(StreamReader& sr) override;
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
     // Emits "\n" unconditionally. The parse side returns null_value
     // (so nothing is captured into the AST), but a SEP choice in the
     // grammar may dispatch this alternative on save; without unparse
     // the dispatch would fail.
-    SaveResult  unparse(const Value& value) const override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\n"); }
 };
 
 // Command separator that accepts either `\n` or `;`. Per Dodekalogue
@@ -47,8 +55,12 @@ public:
 class TclCommandSepParser final : public Parser {
 public:
     TclCommandSepParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_CHAR("\n") INC_CHAR(";");
+    }
 };
 
 // `#` followed by everything up to (and including) the next newline.
@@ -60,8 +72,9 @@ public:
 class TclCommentParser final : public Parser {
 public:
     TclCommentParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("#"); }
 };
 
 // `{...}` with brace-depth counting. Returns the inner content
@@ -70,8 +83,9 @@ public:
 class TclBraceGroupParser final : public Parser {
 public:
     TclBraceGroupParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("{"); }
 };
 
 // `"..."` with backslash escapes. Returns the inner content
@@ -80,8 +94,9 @@ public:
 class TclQuotedStringParser final : public Parser {
 public:
     TclQuotedStringParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\""); }
 };
 
 // `[...]` with bracket nesting. Inside, `"..."` and `{...}` are
@@ -91,8 +106,9 @@ public:
 class TclBracketSubParser final : public Parser {
 public:
     TclBracketSubParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("["); }
 };
 
 // Maximal run of non-special chars. Specials are whitespace (space,
@@ -102,8 +118,16 @@ public:
 class TclBareWordParser final : public Parser {
 public:
     TclBareWordParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        // Any byte except the bare-word stops (whitespace and
+        // `;[]{}"`).
+        return ALL_BYTES
+               EXC_CHAR(" ") EXC_CHAR("\t") EXC_CHAR("\n")
+               EXC_CHAR(";") EXC_CHAR("[") EXC_CHAR("]")
+               EXC_CHAR("{") EXC_CHAR("}") EXC_CHAR("\"");
+    }
 };
 
 // `{*}` followed by non-whitespace (Dodekalogue rule 5 — argument
@@ -113,12 +137,14 @@ public:
 class TclExpandMarkerParser final : public Parser {
 public:
     TclExpandMarkerParser();
-    ParseResult parse(StreamReader& sr) override;
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
     // Emits "{*}" unconditionally. The parse side returned null_value
     // (the marker is purely structural — the AST encodes its presence
     // via the bound `expand=true` flag on EXPAND_WORD), but save
     // dispatch still routes some value through here.
-    SaveResult  unparse(const Value& value) const override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("{"); }
 };
 
 // Variable name — either `name` (bare) or `{name}` (braced). For the
@@ -128,11 +154,15 @@ public:
 class TclVarNameParser final : public Parser {
 public:
     TclVarNameParser();
-    ParseResult parse(StreamReader& sr) override;
+    WalkResult walk(StreamReader& sr) override;
     // Note: the parser accepts both bare `name` and braced `{name}` forms
     // but stores only the bare name; unparse picks the form by checking
     // whether every byte is a valid bare-form char.
-    SaveResult  unparse(const Value& value) const override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return INC_RANGE("A", "Z") INC_RANGE("a", "z") INC_RANGE("0", "9")
+               INC_CHAR("_") INC_CHAR(":") INC_CHAR("{");
+    }
 };
 
 // Retired: `TclUntilParenParser`. Replaced by the grammar-level
@@ -147,8 +177,9 @@ public:
 class TclEscapeParser final : public Parser {
 public:
     TclEscapeParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override { return INC_CHAR("\\"); }
 };
 
 // Run of chars that aren't `$`, `[`, `\`, or `"`. At least one char;
@@ -157,8 +188,12 @@ public:
 class TclLiteralRunParser final : public Parser {
 public:
     TclLiteralRunParser();
-    ParseResult parse(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
+    WalkResult walk(StreamReader& sr) override;
+    SaveResult unparse(const Value& value) const override;
+    std::string_view first_bytes() const override {
+        return ALL_BYTES
+               EXC_CHAR("$") EXC_CHAR("[") EXC_CHAR("\\") EXC_CHAR("\"");
+    }
 };
 
 // Register the "tcl" parser group in the global registry. Grammars

@@ -1,6 +1,9 @@
 #include <rawast/stream.hpp>
 
 #include <cassert>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
 
 namespace rawast {
 
@@ -75,6 +78,41 @@ void StreamReader::reject() {
 
 Position StreamReader::position() const noexcept {
     return {consumed_ + pos_, line_, column_};
+}
+
+std::string StreamReader::bytes_from(const Position& start) const {
+    // buf_ holds bytes [consumed_, consumed_+buf_.size()). Bytes
+    // before consumed_ were trimmed when the retained-buffer
+    // window slid past them.
+    if (start.bytes < consumed_) return {};         // out of window
+    std::size_t off = start.bytes - consumed_;
+    if (off >= pos_) return {};                     // past cursor
+    return std::string(buf_.data() + off, pos_ - off);
+}
+
+// ─── Stream (public handoff type) ────────────────────────────────────────
+
+Stream::Stream(std::unique_ptr<std::istream> is,
+               std::shared_ptr<void> owner)
+    : is_(std::move(is)),
+      reader_(std::make_unique<StreamReader>(*is_)),
+      owner_(std::move(owner)) {}
+
+Stream::Stream(Stream&&) noexcept = default;
+Stream& Stream::operator=(Stream&&) noexcept = default;
+Stream::~Stream() = default;
+
+Stream Stream::from_string(std::string source) {
+    auto is = std::make_unique<std::istringstream>(std::move(source));
+    return Stream(std::move(is), {});
+}
+
+Stream Stream::from_file(const std::string& path) {
+    auto fs = std::make_unique<std::ifstream>(path, std::ios::binary);
+    if (!*fs) {
+        throw std::runtime_error("Stream::from_file: cannot open '" + path + "'");
+    }
+    return Stream(std::move(fs), {});
 }
 
 } // namespace rawast

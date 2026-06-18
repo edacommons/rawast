@@ -58,7 +58,7 @@ SaveResult expect_string(const Value& v, const std::string& who) {
 
 TclHspaceParser::TclHspaceParser() : Parser("hspace") {}
 
-ParseResult TclHspaceParser::parse(StreamReader& sr) {
+WalkResult TclHspaceParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -97,14 +97,16 @@ ParseResult TclHspaceParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{start, "expected horizontal whitespace"});
     }
     sr.accept();
-    return null_value();   // ignore-list parsers don't produce values
+    return {};
 }
+
+ValuePtr TclHspaceParser::value() const { return null_value(); }
 
 // --- TclNewlineParser ---------------------------------------------------
 
 TclNewlineParser::TclNewlineParser() : Parser("newline") {}
 
-ParseResult TclNewlineParser::parse(StreamReader& sr) {
+WalkResult TclNewlineParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto c = sr.peek();
@@ -114,8 +116,10 @@ ParseResult TclNewlineParser::parse(StreamReader& sr) {
     }
     sr.get();
     sr.accept();
-    return null_value();
+    return {};
 }
+
+ValuePtr TclNewlineParser::value() const { return null_value(); }
 
 SaveResult TclNewlineParser::unparse(const Value& /*v*/) const {
     // Structural separator with no payload. Emit "\n" unconditionally —
@@ -128,7 +132,7 @@ SaveResult TclNewlineParser::unparse(const Value& /*v*/) const {
 
 TclCommandSepParser::TclCommandSepParser() : Parser("command_sep") {}
 
-ParseResult TclCommandSepParser::parse(StreamReader& sr) {
+WalkResult TclCommandSepParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto c = sr.peek();
@@ -138,8 +142,10 @@ ParseResult TclCommandSepParser::parse(StreamReader& sr) {
     }
     sr.get();
     sr.accept();
-    return null_value();
+    return {};
 }
+
+ValuePtr TclCommandSepParser::value() const { return null_value(); }
 
 SaveResult TclCommandSepParser::unparse(const Value& /*v*/) const {
     // Canonicalize to "\n" on save. The AST doesn't track which form
@@ -151,7 +157,7 @@ SaveResult TclCommandSepParser::unparse(const Value& /*v*/) const {
 
 TclCommentParser::TclCommentParser() : Parser("comment") {}
 
-ParseResult TclCommentParser::parse(StreamReader& sr) {
+WalkResult TclCommentParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto first = sr.peek();
@@ -161,24 +167,19 @@ ParseResult TclCommentParser::parse(StreamReader& sr) {
     }
     sr.get();   // consume `#`
 
-    std::string body;
     while (true) {
         auto c = sr.peek();
         if (!c) break;          // EOF ends the comment
         if (*c == '\n') break;  // newline is the structural terminator;
                                 // leave it for tcl.newline to consume
-        body.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
     sr.accept();
-    return make_string(std::move(body));
+    return {};
 }
 
 SaveResult TclCommentParser::unparse(const Value& v) const {
-    // Parse stores the body without the leading `#` and without the
-    // trailing newline (the newline is left for tcl.newline to consume
-    // via SEP). Save mirrors that: emit `#` + body. The structural
-    // newline comes back from the surrounding SEP_RUN.
     auto body = expect_string(v, "comment");
     if (!body) return body;
     return "#" + *body;
@@ -188,7 +189,7 @@ SaveResult TclCommentParser::unparse(const Value& v) const {
 
 TclBraceGroupParser::TclBraceGroupParser() : Parser("brace_group") {}
 
-ParseResult TclBraceGroupParser::parse(StreamReader& sr) {
+WalkResult TclBraceGroupParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto first = sr.peek();
@@ -198,7 +199,6 @@ ParseResult TclBraceGroupParser::parse(StreamReader& sr) {
     }
     sr.get();   // consume opening `{`
 
-    std::string content;
     int depth = 1;
     while (true) {
         auto c = sr.peek();
@@ -208,21 +208,20 @@ ParseResult TclBraceGroupParser::parse(StreamReader& sr) {
         }
         char ch = *c;
         if (ch == '\\') {
-            // Escape: consume `\` + next byte verbatim; depth unchanged.
             sr.get();
-            content.push_back('\\');
+            accum_.push_back('\\');
             auto next = sr.get();
             if (!next) {
                 sr.reject();
                 return tl::unexpected(ParseError{
                     start, "unterminated escape in brace group"});
             }
-            content.push_back(*next);
+            accum_.push_back(*next);
             continue;
         }
         if (ch == '{') {
             ++depth;
-            content.push_back(ch);
+            accum_.push_back(ch);
             sr.get();
             continue;
         }
@@ -231,19 +230,17 @@ ParseResult TclBraceGroupParser::parse(StreamReader& sr) {
             sr.get();
             if (depth == 0) {
                 sr.accept();
-                return make_string(std::move(content));
+                return {};
             }
-            content.push_back(ch);
+            accum_.push_back(ch);
             continue;
         }
-        content.push_back(ch);
+        accum_.push_back(ch);
         sr.get();
     }
 }
 
 SaveResult TclBraceGroupParser::unparse(const Value& v) const {
-    // Parse stores the body between the outer braces with `\{`/`\}`
-    // escapes preserved verbatim. Save just wraps it back up.
     auto body = expect_string(v, "brace_group");
     if (!body) return body;
     return "{" + *body + "}";
@@ -253,7 +250,7 @@ SaveResult TclBraceGroupParser::unparse(const Value& v) const {
 
 TclQuotedStringParser::TclQuotedStringParser() : Parser("quoted_string") {}
 
-ParseResult TclQuotedStringParser::parse(StreamReader& sr) {
+WalkResult TclQuotedStringParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto first = sr.peek();
@@ -263,7 +260,6 @@ ParseResult TclQuotedStringParser::parse(StreamReader& sr) {
     }
     sr.get();   // consume opening `"`
 
-    std::string content;
     while (true) {
         auto c = sr.peek();
         if (!c) {
@@ -273,32 +269,27 @@ ParseResult TclQuotedStringParser::parse(StreamReader& sr) {
         char ch = *c;
         if (ch == '\\') {
             sr.get();
-            content.push_back('\\');
+            accum_.push_back('\\');
             auto next = sr.get();
             if (!next) {
                 sr.reject();
                 return tl::unexpected(ParseError{
                     start, "unterminated escape in quoted string"});
             }
-            content.push_back(*next);
+            accum_.push_back(*next);
             continue;
         }
         if (ch == '"') {
             sr.get();
             sr.accept();
-            return make_string(std::move(content));
+            return {};
         }
-        content.push_back(ch);
+        accum_.push_back(ch);
         sr.get();
     }
 }
 
 SaveResult TclQuotedStringParser::unparse(const Value& v) const {
-    // Parse stores the body between `"..."` with backslash escapes
-    // preserved verbatim. When the binding carries #subparse, the
-    // engine first re-serialises the sub-tree through that rule
-    // (save_stack.cpp:1191) and hands the resulting bytes here as
-    // a StringValue, so this code path is identical in both cases.
     auto body = expect_string(v, "quoted_string");
     if (!body) return body;
     return "\"" + *body + "\"";
@@ -308,7 +299,7 @@ SaveResult TclQuotedStringParser::unparse(const Value& v) const {
 
 TclBracketSubParser::TclBracketSubParser() : Parser("bracket_sub") {}
 
-ParseResult TclBracketSubParser::parse(StreamReader& sr) {
+WalkResult TclBracketSubParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto first = sr.peek();
@@ -318,7 +309,6 @@ ParseResult TclBracketSubParser::parse(StreamReader& sr) {
     }
     sr.get();   // consume opening `[`
 
-    std::string content;
     int bracket_depth = 1;
     int brace_depth   = 0;
     bool in_string    = false;
@@ -335,25 +325,25 @@ ParseResult TclBracketSubParser::parse(StreamReader& sr) {
         // Escapes apply in all sub-contexts (Tcl rule 9).
         if (ch == '\\') {
             sr.get();
-            content.push_back('\\');
+            accum_.push_back('\\');
             auto next = sr.get();
             if (!next) {
                 sr.reject();
                 return tl::unexpected(ParseError{
                     start, "unterminated escape in bracket-sub"});
             }
-            content.push_back(*next);
+            accum_.push_back(*next);
             continue;
         }
 
         if (in_string) {
-            content.push_back(ch);
+            accum_.push_back(ch);
             sr.get();
             if (ch == '"') in_string = false;
             continue;
         }
         if (brace_depth > 0) {
-            content.push_back(ch);
+            accum_.push_back(ch);
             sr.get();
             if (ch == '{') ++brace_depth;
             else if (ch == '}') --brace_depth;
@@ -363,19 +353,19 @@ ParseResult TclBracketSubParser::parse(StreamReader& sr) {
         // Normal bracket-sub context.
         if (ch == '"') {
             in_string = true;
-            content.push_back(ch);
+            accum_.push_back(ch);
             sr.get();
             continue;
         }
         if (ch == '{') {
             brace_depth = 1;
-            content.push_back(ch);
+            accum_.push_back(ch);
             sr.get();
             continue;
         }
         if (ch == '[') {
             ++bracket_depth;
-            content.push_back(ch);
+            accum_.push_back(ch);
             sr.get();
             continue;
         }
@@ -384,20 +374,17 @@ ParseResult TclBracketSubParser::parse(StreamReader& sr) {
             sr.get();
             if (bracket_depth == 0) {
                 sr.accept();
-                return make_string(std::move(content));
+                return {};
             }
-            content.push_back(ch);
+            accum_.push_back(ch);
             continue;
         }
-        content.push_back(ch);
+        accum_.push_back(ch);
         sr.get();
     }
 }
 
 SaveResult TclBracketSubParser::unparse(const Value& v) const {
-    // Parse stores the body between `[...]`. Same subparse re-entry
-    // contract as TclQuotedStringParser::unparse — the engine collapses
-    // the nested SCRIPT sub-tree to bytes before calling this.
     auto body = expect_string(v, "bracket_sub");
     if (!body) return body;
     return "[" + *body + "]";
@@ -407,10 +394,9 @@ SaveResult TclBracketSubParser::unparse(const Value& v) const {
 
 TclBareWordParser::TclBareWordParser() : Parser("bare_word") {}
 
-ParseResult TclBareWordParser::parse(StreamReader& sr) {
+WalkResult TclBareWordParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
-    std::string word;
     while (true) {
         auto c = sr.peek();
         if (!c) break;
@@ -428,30 +414,27 @@ ParseResult TclBareWordParser::parse(StreamReader& sr) {
                 // Trailing backslash at EOF — preserve as part of
                 // the word and let WORD_SEGMENTS raise the error
                 // there if it matters.
-                word.push_back('\\');
+                accum_.push_back('\\');
                 break;
             }
-            word.push_back('\\');
-            word.push_back(*next);
+            accum_.push_back('\\');
+            accum_.push_back(*next);
             sr.get();           // consume the escaped byte
             continue;
         }
         if (is_bare_word_stop(*c)) break;
-        word.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
-    if (word.empty()) {
+    if (accum_.empty()) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected bare word"});
     }
     sr.accept();
-    return make_string(std::move(word));
+    return {};
 }
 
 SaveResult TclBareWordParser::unparse(const Value& v) const {
-    // No delimiters: bare word is raw bytes verbatim. Same subparse
-    // contract as the bracketed variants — by the time we get here the
-    // sub-tree (if any) has already been collapsed.
     return expect_string(v, "bare_word");
 }
 
@@ -459,7 +442,7 @@ SaveResult TclBareWordParser::unparse(const Value& v) const {
 
 TclExpandMarkerParser::TclExpandMarkerParser() : Parser("expand_marker") {}
 
-ParseResult TclExpandMarkerParser::parse(StreamReader& sr) {
+WalkResult TclExpandMarkerParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -479,14 +462,12 @@ ParseResult TclExpandMarkerParser::parse(StreamReader& sr) {
             start, "'{*}' must be followed by a non-whitespace character"});
     }
     sr.accept();
-    return null_value();
+    return {};
 }
 
+ValuePtr TclExpandMarkerParser::value() const { return null_value(); }
+
 SaveResult TclExpandMarkerParser::unparse(const Value& /*v*/) const {
-    // Structural marker; AST carries `expand=true` on EXPAND_WORD as
-    // the actual flag. Emit the canonical "{*}" so the next byte
-    // (a non-whitespace word start) re-triggers the parser on
-    // re-parse.
     return std::string{"{*}"};
 }
 
@@ -494,7 +475,7 @@ SaveResult TclExpandMarkerParser::unparse(const Value& /*v*/) const {
 
 TclVarNameParser::TclVarNameParser() : Parser("var_name") {}
 
-ParseResult TclVarNameParser::parse(StreamReader& sr) {
+WalkResult TclVarNameParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -508,7 +489,6 @@ ParseResult TclVarNameParser::parse(StreamReader& sr) {
         // Braced form: ${name} — name can contain anything except `}`.
         // No nesting (per Tcl spec).
         sr.get();   // consume `{`
-        std::string name;
         while (true) {
             auto c = sr.peek();
             if (!c) {
@@ -519,27 +499,26 @@ ParseResult TclVarNameParser::parse(StreamReader& sr) {
             if (*c == '}') {
                 sr.get();
                 sr.accept();
-                return make_string(std::move(name));
+                return {};
             }
-            name.push_back(*c);
+            accum_.push_back(*c);
             sr.get();
         }
     }
 
     // Bare form: [A-Za-z0-9_:]+
-    std::string name;
     while (true) {
         auto c = sr.peek();
         if (!c || !is_var_name_char(*c)) break;
-        name.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
-    if (name.empty()) {
+    if (accum_.empty()) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected variable name"});
     }
     sr.accept();
-    return make_string(std::move(name));
+    return {};
 }
 
 SaveResult TclVarNameParser::unparse(const Value& v) const {
@@ -574,7 +553,7 @@ SaveResult TclVarNameParser::unparse(const Value& v) const {
 
 TclEscapeParser::TclEscapeParser() : Parser("escape") {}
 
-ParseResult TclEscapeParser::parse(StreamReader& sr) {
+WalkResult TclEscapeParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
     auto c1 = sr.peek();
@@ -589,16 +568,13 @@ ParseResult TclEscapeParser::parse(StreamReader& sr) {
         return tl::unexpected(ParseError{
             start, "unterminated escape sequence at end of input"});
     }
-    std::string esc;
-    esc.push_back('\\');
-    esc.push_back(*c2);
+    accum_.push_back('\\');
+    accum_.push_back(*c2);
     sr.accept();
-    return make_string(std::move(esc));
+    return {};
 }
 
 SaveResult TclEscapeParser::unparse(const Value& v) const {
-    // Parse stores the two-byte sequence `\` + char verbatim. Save
-    // emits the stored bytes as-is; no extra delimiters needed.
     return expect_string(v, "escape");
 }
 
@@ -606,29 +582,24 @@ SaveResult TclEscapeParser::unparse(const Value& v) const {
 
 TclLiteralRunParser::TclLiteralRunParser() : Parser("literal_run") {}
 
-ParseResult TclLiteralRunParser::parse(StreamReader& sr) {
+WalkResult TclLiteralRunParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
-    std::string run;
     while (true) {
         auto c = sr.peek();
         if (!c || is_literal_run_stop(*c)) break;
-        run.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
-    if (run.empty()) {
+    if (accum_.empty()) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected literal run"});
     }
     sr.accept();
-    return make_string(std::move(run));
+    return {};
 }
 
 SaveResult TclLiteralRunParser::unparse(const Value& v) const {
-    // Verbatim literal run between substitution markers — emit bytes
-    // as stored. Parse already excluded the structural chars (`$`,
-    // `[`, `\`, `"`), so the body can't accidentally re-trigger them
-    // on a round-trip.
     return expect_string(v, "literal_run");
 }
 

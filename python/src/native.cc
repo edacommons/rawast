@@ -16,7 +16,6 @@
 #include <rawast/parsers_gdsii.hpp>
 #include <rawast/parsers_lefdef.hpp>
 #include <rawast/parsers_tcl.hpp>
-#include <rawast/parsers_scope.hpp>
 #include <rawast/parsers_registry.hpp>
 #include <rawast/preprocessor.hpp>
 #include <rawast/to_value.hpp>
@@ -121,7 +120,29 @@ NB_MODULE(_native, m) {
     rawast::register_gdsii_parser_group();
     rawast::register_lefdef_parser_group();
     rawast::register_tcl_parser_group();
-    rawast::register_scope_parser_group();
+
+    // Stream — opaque Python type. The canonical Grammar input.
+    // Produced by Stream.from_string / Stream.from_file, or by
+    // Preprocessor.preprocess. Consumed by Grammar.parse_stream.
+    // Move-only on the C++ side; nanobind treats this as an opaque
+    // handle (Python sees one object, no copies).
+    nb::class_<rawast::Stream>(m, "Stream",
+        "Canonical parser input. Construct via from_string / from_file, "
+        "or receive one from Preprocessor.preprocess. Consume via "
+        "Grammar.parse_stream.")
+        .def_static("from_string",
+            [](std::string source) {
+                return rawast::Stream::from_string(std::move(source));
+            },
+            nb::arg("source"),
+            "Build a Stream backed by an in-memory string.")
+        .def_static("from_file",
+            [](const std::string& path) {
+                return rawast::Stream::from_file(path);
+            },
+            nb::arg("path"),
+            "Build a Stream that reads from a file path. Throws on open "
+            "failure.");
 
     nb::class_<rawast::Grammar>(m, "Grammar",
         "A loaded grammar — drives parse, save, and lint via its methods.")
@@ -159,12 +180,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_file",
             [](rawast::Grammar& g, const std::string& path) {
-                std::ifstream fs(path, std::ios::binary);
-                if (!fs) {
-                    throw std::runtime_error("cannot open input: " + path);
-                }
-                rawast::StreamReader sr(fs);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_file(path);
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -181,9 +198,8 @@ NB_MODULE(_native, m) {
             [](rawast::Grammar& g, const std::string& path,
                rawast::Preprocessor& pp) {
                 auto preprocessed = pp.process_file(path);
-                std::istringstream is(preprocessed);
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(std::move(preprocessed));
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -195,12 +211,8 @@ NB_MODULE(_native, m) {
         .def("parse_file",
             [](rawast::Grammar& g, const std::string& path,
                const std::string& start) {
-                std::ifstream fs(path, std::ios::binary);
-                if (!fs) {
-                    throw std::runtime_error("cannot open input: " + path);
-                }
-                rawast::StreamReader sr(fs);
-                auto r = g.parse_from(sr, start);
+                auto stream = rawast::Stream::from_file(path);
+                auto r = g.parse_from(stream, start);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -211,9 +223,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content) {
-                std::istringstream is(content);
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(content);
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -224,9 +235,8 @@ NB_MODULE(_native, m) {
             [](rawast::Grammar& g, const std::string& content,
                rawast::Preprocessor& pp) {
                 auto preprocessed = pp.process(content);
-                std::istringstream is(preprocessed);
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(std::move(preprocessed));
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -236,9 +246,8 @@ NB_MODULE(_native, m) {
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content,
                const std::string& start) {
-                std::istringstream is(content);
-                rawast::StreamReader sr(is);
-                auto r = g.parse_from(sr, start);
+                auto stream = rawast::Stream::from_string(content);
+                auto r = g.parse_from(stream, start);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -247,10 +256,8 @@ NB_MODULE(_native, m) {
 
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b) {
-                std::string s(b.c_str(), b.size());
-                std::istringstream is(std::move(s));
-                rawast::StreamReader sr(is);
-                auto r = g.parse(sr);
+                auto stream = rawast::Stream::from_string(std::string(b.c_str(), b.size()));
+                auto r = g.parse(stream);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
@@ -260,15 +267,37 @@ NB_MODULE(_native, m) {
 
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b, const std::string& start) {
-                std::string s(b.c_str(), b.size());
-                std::istringstream is(std::move(s));
-                rawast::StreamReader sr(is);
-                auto r = g.parse_from(sr, start);
+                auto stream = rawast::Stream::from_string(std::string(b.c_str(), b.size()));
+                auto r = g.parse_from(stream, start);
                 if (!r) throw std::runtime_error(format_parse_error(r.error()));
                 return value_to_python(*r);
             },
             nb::arg("data"), nb::arg("start"),
             "Parse a bytes object starting from the named rule.")
+
+        // Parse a Stream directly. The canonical entry point — the
+        // string/file/bytes overloads above are convenience wrappers
+        // that build a Stream internally. Used by callers who already
+        // hold a Stream (e.g. from Preprocessor.preprocess).
+        .def("parse_stream",
+            [](rawast::Grammar& g, rawast::Stream& stream) {
+                auto r = g.parse(stream);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("stream"),
+            "Parse a Stream from the grammar's default start. The Stream "
+            "is consumed; reuse is undefined.")
+
+        .def("parse_stream",
+            [](rawast::Grammar& g, rawast::Stream& stream,
+               const std::string& start) {
+                auto r = g.parse_from(stream, start);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("stream"), nb::arg("start"),
+            "Parse a Stream starting from the named rule.")
 
         .def("save",
             [](rawast::Grammar& g, nb::handle value, bool pretty,
@@ -466,6 +495,36 @@ NB_MODULE(_native, m) {
             "duplicates suppressed) and sets the internal current-file "
             "context for warning attribution.")
 
+        // Three-mode API ------------------------------------------------
+        // Mode 1: parse only — return the preprocessor AST without
+        // expanding macros, includes, or conditionals.
+        .def("parse",
+            [](rawast::Preprocessor& pp, const std::string& source) {
+                auto r = pp.parse(source);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return value_to_python(*r);
+            },
+            nb::arg("source"),
+            "Mode 1: parse the source through the preprocessor grammar "
+            "and return the raw AST as a Python value, without expanding "
+            "directives. Useful for tooling that wants to inspect macro / "
+            "include / ifdef structure.")
+
+        // Mode 2: expand a Python-shaped AST into a Stream — same
+        // canonical handoff type as the C++ API. Feed it to
+        // Grammar.parse_stream for Mode 3.
+        .def("preprocess",
+            [](rawast::Preprocessor& pp, nb::handle ast,
+               const std::string& source) {
+                auto v = python_to_value(ast);
+                return pp.preprocess(v, source);
+            },
+            nb::arg("ast"), nb::arg("source"),
+            "Mode 2: expand a preprocessor AST (as returned by parse()) "
+            "and return the expanded bytes as a Stream. `source` is the "
+            "original input text the AST was parsed from. State (macros, "
+            "includes, warnings, spans) accumulates on this instance.")
+
         .def("is_defined",
             [](const rawast::Preprocessor& pp, const std::string& name) {
                 return pp.is_defined(name);
@@ -480,7 +539,7 @@ NB_MODULE(_native, m) {
                 if (!m) return nb::none();
                 nb::dict d;
                 d["name"] = m->name;
-                d["body"] = m->body;
+                d["body"] = m->body_text();
                 nb::list params;
                 for (const auto& p : m->params) params.append(p);
                 d["params"] = params;
@@ -502,7 +561,7 @@ NB_MODULE(_native, m) {
                 for (const auto& [name, m] : pp.macros()) {
                     nb::dict d;
                     d["name"] = m.name;
-                    d["body"] = m.body;
+                    d["body"] = m.body_text();
                     nb::list params;
                     for (const auto& p : m.params) params.append(p);
                     d["params"] = params;
@@ -577,5 +636,5 @@ NB_MODULE(_native, m) {
             "root last). Empty list if the offset is outside any recorded "
             "span.");
 
-    m.attr("__version__") = "0.1.8";
+    m.attr("__version__") = "0.1.9";
 }

@@ -1,16 +1,19 @@
 #include <rawast/grammar.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_registry.hpp>
+#include <rawast/scan_context.hpp>
 
 #include "save_stack.hpp"
 
 #include "frame.hpp"
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <unordered_set>
 #include <map>
 #include <memory>
 #include <ostream>
@@ -196,55 +199,39 @@ FirstByteResult compute_node_first_bytes(
         break;
     }
     case NodeKind::Parse: {
-        // Some standard terminal parsers have well-defined first-byte
-        // sets that we can hardcode here — `int`/`uint`/`float`
-        // accept only `[0-9+-]` (plus `.` for float), and `string`
-        // requires a leading `"`. Knowing those lets the engine
-        // skip ?<X> optionals like `?<STEP_PATTERN>` (4 int/float
-        // arguments) when the input cursor is on `;` or any other
-        // non-numeric byte. Tested on the LEF corpus: profiles
-        // showed STEP_PATTERN burning 4.7% of parse time at 100%
-        // fail rate, almost entirely from `;`-position dispatches.
-        //
-        // Bare `identifier` / `qualified_identifier` are NOT hardcoded
-        // because they may resolve to either std (strict
-        // `[A-Za-z_]…`) or lefdef (permissive — accepts dots,
-        // hyphens, brackets, digits) — taking the union would be
-        // too permissive to optimize, and being stricter than the
-        // active parser would wrongly skip valid input. Leave them
-        // as "any" until the bare-alias resolution is deterministic
-        // at compute time.
+        // Ask the parser itself for its first-byte set via the
+        // Parser::first_bytes() spec string. Each shipped parser
+        // overrides this with a compile-time-concatenated spec built
+        // from the INC_RANGE/EXC_RANGE/INC_CHAR/EXC_CHAR/ALL_BYTES
+        // macros in parser.hpp. Default (unknown / user-defined
+        // parsers that don't override) returns an empty spec, which
+        // we treat as the conservative "any byte" fallback — matches
+        // the legacy behaviour for parsers without a known first-byte
+        // set.
         std::string pname;
         if (auto sv = std::dynamic_pointer_cast<StringValue>(n.value)) {
             pname = sv->data();
         }
-        auto set_digit_signs = [](std::bitset<256>& b, bool with_plus,
-                                   bool with_dot) {
-            b.set(static_cast<unsigned char>('-'));
-            if (with_plus) b.set(static_cast<unsigned char>('+'));
-            if (with_dot)  b.set(static_cast<unsigned char>('.'));
-            for (char c = '0'; c <= '9'; ++c) {
-                b.set(static_cast<unsigned char>(c));
-            }
-        };
-        if (pname == "int" || pname == "std.int") {
-            set_digit_signs(result.bytes, /*with_plus=*/false,
-                            /*with_dot=*/false);
-            result.known = true;
-        } else if (pname == "uint" || pname == "std.uint") {
-            for (char c = '0'; c <= '9'; ++c) {
-                result.bytes.set(static_cast<unsigned char>(c));
-            }
-            result.known = true;
-        } else if (pname == "float" || pname == "std.float") {
-            set_digit_signs(result.bytes, /*with_plus=*/true,
-                            /*with_dot=*/true);
-            result.known = true;
-        } else if (pname == "string" || pname == "std.string") {
-            result.bytes.set(static_cast<unsigned char>('"'));
-            result.known = true;
-        } else {
+        Parser* p = g.parser(pname);
+        std::string_view spec = p ? p->first_bytes() : std::string_view{};
+        if (spec.empty()) {
             result = any_byte_result();
+        } else {
+            // Decode the spec: consecutive 3-byte entries
+            //   byte[0] = '+' include or '-' exclude
+            //   byte[1] = lo (range low, inclusive)
+            //   byte[2] = hi (range high, inclusive)
+            for (std::size_t i = 0; i + 2 < spec.size(); i += 3) {
+                char op = spec[i];
+                unsigned lo = static_cast<unsigned char>(spec[i + 1]);
+                unsigned hi = static_cast<unsigned char>(spec[i + 2]);
+                if (op == '+') {
+                    for (unsigned c = lo; c <= hi; ++c) result.bytes.set(c);
+                } else if (op == '-') {
+                    for (unsigned c = lo; c <= hi; ++c) result.bytes.reset(c);
+                }
+            }
+            result.known = true;
         }
         break;
     }
@@ -253,6 +240,14 @@ FirstByteResult compute_node_first_bytes(
         // unconstrained.
         result = any_byte_result();
         break;
+    case NodeKind::Scope: {
+        // Scope has no opening delimiter of its own (the surrounding
+        // sequence's previous sibling supplies any start literal);
+        // first byte is unconstrained, same as Raw.
+        result = any_byte_result();
+        result.nullable = false;
+        break;
+    }
     case NodeKind::Choice: {
         // Union of children's first-byte sets. Nullable iff any
         // alternative is nullable.
@@ -314,6 +309,16 @@ FirstByteResult compute_node_first_bytes(
         break;
     }
 
+    // (Earlier attempt to fold rule-local ignore parsers' first-byte
+    // sets into the rule's predictive set was reverted — it broke
+    // `?<X>` adjacency at the parent level when X had `ignore linespace`,
+    // because the predictive check would take the optional on a leading
+    // space, then run_ignore inside X's body would consume that space,
+    // and a subsequent failure inside X would leave the space lost. The
+    // optional's mark/restore would only restore to AFTER the eaten
+    // whitespace. See conversation log: SV preprocessor's
+    // MACRO_USE / MACRO_ARGS adjacency case.)
+
     // An optional original node is nullable — its first-byte set
     // is the union with "anything that comes after." The Sequence
     // walker that called us uses `nullable` to decide whether to
@@ -346,6 +351,7 @@ void Grammar::compute_first_bytes() const {
     if (first_bytes_computed_) return;
     const std::size_t N = nodes_.size();
     first_bytes_.assign(N, std::bitset<256>{});
+    strict_first_bytes_.assign(N, std::bitset<256>{});
     first_bytes_known_.assign(N, false);
     is_optional_chain_.assign(N, false);
     std::vector<int>             state(N, 0);
@@ -357,9 +363,15 @@ void Grammar::compute_first_bytes() const {
     for (std::size_t i = 0; i < N; ++i) {
         if (state[i] == 2 && cache[i].known) {
             first_bytes_known_[i] = true;
+            // Strict content bytes — always the actual computed set,
+            // regardless of nullability. should_skip_optional uses
+            // this to skip an `?<X>` whose body can't start at the
+            // next byte (skipping is equivalent to matching empty).
+            strict_first_bytes_[i] = cache[i].bytes;
             // Nullable nodes: any byte is fine (since "skip" is a
             // valid match). Encode as "known" + all bits set so the
-            // parse loop's peek check never rejects them.
+            // parse loop's peek check never wrongly rejects them in
+            // a Choice context where a sibling might match.
             if (cache[i].nullable) {
                 first_bytes_[i].set();
             } else {
@@ -410,6 +422,32 @@ void Grammar::set_backtrack(NodeId id) {
     nodes_[id.value()].backtrack = true;
 }
 
+void Grammar::set_opchain(NodeId id) {
+    nodes_[id.value()].opchain = true;
+}
+
+bool Grammar::has_opchain(NodeId id) const noexcept {
+    if (id.value() >= nodes_.size()) return false;
+    return nodes_[id.value()].opchain;
+}
+
+bool Grammar::has_opchain_in_chain(NodeId id) const noexcept {
+    NodeId cur = id;
+    std::unordered_set<std::uint32_t> seen;
+    while (cur.valid() && cur.value() < nodes_.size()
+           && seen.insert(cur.value()).second) {
+        if (nodes_[cur.value()].opchain) return true;
+        if (nodes_[cur.value()].kind != NodeKind::Ref) return false;
+        auto sv = std::dynamic_pointer_cast<StringValue>(
+            nodes_[cur.value()].value);
+        if (!sv) return false;
+        auto it = named_rules_.find(sv->data());
+        if (it == named_rules_.end()) return false;
+        cur = it->second;
+    }
+    return false;
+}
+
 void Grammar::set_fixed_schema(NodeId id) {
     nodes_[id.value()].fixed_schema = true;
 }
@@ -440,7 +478,20 @@ void Grammar::register_rule(std::string name, NodeId node) {
 
 void Grammar::register_parser(std::unique_ptr<Parser> p) {
     std::string name = p->name();
-    parsers_[std::move(name)] = std::move(p);
+    parsers_[name] = std::move(p);
+    // If this parser was on the ignore list (host called add_ignore
+    // before the parser was registered, or a parser group is replacing
+    // an earlier registration), refresh the raw pointer so the
+    // driver's ignore loop doesn't dereference the old (destroyed)
+    // unique_ptr.
+    for (std::size_t i = 0; i < ignore_names_.size(); ++i) {
+        if (ignore_names_[i] == name) {
+            ignore_[i] = parsers_[name].get();
+        }
+    }
+    // Same possibility for rule-local override lists; rebuild lazily
+    // on the next rule_ignore() call.
+    rule_ignore_dirty_ = true;
 }
 
 void Grammar::register_parser_alias(std::string key, std::unique_ptr<Parser> p) {
@@ -664,36 +715,456 @@ void note_progress(ParseError& max_progress, const ParseError& err) {
     }
 }
 
+// Recursively compact `{lhs, tail:[{op,rhs},...]}` always-wrap shapes
+// into `{op, args[]}` with same-op runs collapsed and mixed-op
+// boundaries nested.
+//
+// Algorithm:
+//   * Atoms and non-dicts pass through unchanged (recursing into
+//     arrays so list-shaped fields get compacted element-wise).
+//   * Dicts have their fields recursively compacted first.
+//   * If the resulting dict has `lhs` and a non-empty `tail`, fold
+//     the tail left-to-right onto lhs:
+//       - acc = lhs
+//       - For each (op, rhs) in tail: if acc is `{op:OP, args:[...]}`
+//         with same OP, extend args; otherwise wrap acc as
+//         `{op:OP, args:[acc, rhs]}`.
+//   * The original `lhs` / `tail` keys are dropped from the output;
+//     any other keys on the wrapper carry through.
+//   * Empty tail (or no tail at all): unwrap to `lhs`.
+ValuePtr compact_opchain(const ValuePtr& v) {
+    if (!v) return v;
+
+    if (auto arr = as_array(v)) {
+        auto out = std::make_shared<ArrayValue>();
+        for (const auto& elt : arr->data()) {
+            out->data().push_back(compact_opchain(elt));
+        }
+        return out;
+    }
+
+    auto d = as_dict(v);
+    if (!d) return v;
+
+    // Recurse on field values first.
+    auto recursed = std::make_shared<DictValue>();
+    for (const auto& [k, val] : d->data()) {
+        recursed->data().emplace(k, compact_opchain(val));
+    }
+
+    auto lhs_it = recursed->data().find("lhs");
+    if (lhs_it == recursed->data().end()) {
+        // Not an always-wrap shape; return with compacted fields.
+        return recursed;
+    }
+    ValuePtr lhs = lhs_it->second;
+
+    auto tail_it = recursed->data().find("tail");
+    auto tail_arr = (tail_it != recursed->data().end())
+        ? as_array(tail_it->second) : nullptr;
+    bool has_tail = tail_arr && !tail_arr->data().empty();
+
+    // Count non-{lhs,tail} fields — those need to carry through.
+    bool has_other = false;
+    for (const auto& [k, _] : recursed->data()) {
+        if (k != "lhs" && k != "tail") { has_other = true; break; }
+    }
+
+    if (!has_tail) {
+        // No chain; unwrap to lhs (or merge other fields onto lhs if
+        // there were any — rare but supported).
+        if (!has_other) return lhs;
+        // Other fields exist: build a fresh dict combining lhs's fields
+        // (if lhs is itself a dict) with the wrapper's extras.
+        auto out = std::make_shared<DictValue>();
+        if (auto ld = as_dict(lhs)) {
+            for (const auto& [k, v2] : ld->data()) out->data().emplace(k, v2);
+        }
+        for (const auto& [k, v2] : recursed->data()) {
+            if (k == "lhs" || k == "tail") continue;
+            out->data().emplace(k, v2);
+        }
+        return out;
+    }
+
+    // Fold the tail left-to-right.
+    ValuePtr acc = lhs;
+    for (const auto& te : tail_arr->data()) {
+        auto td = as_dict(te);
+        if (!td) continue;
+        auto op_it  = td->data().find("op");
+        auto rhs_it = td->data().find("rhs");
+        if (op_it == td->data().end() || rhs_it == td->data().end()) continue;
+        auto op_sv = as_string(op_it->second);
+        if (!op_sv) continue;
+        const std::string& op = op_sv->data();
+        ValuePtr rhs = rhs_it->second;
+
+        // Extend acc's args if it already has the same op.
+        bool extended = false;
+        if (auto ad = as_dict(acc)) {
+            auto ao_it = ad->data().find("op");
+            auto aa_it = ad->data().find("args");
+            if (ao_it != ad->data().end() && aa_it != ad->data().end()) {
+                auto ao_sv = as_string(ao_it->second);
+                auto aa_arr = as_array(aa_it->second);
+                if (ao_sv && aa_arr && ao_sv->data() == op
+                    // Same-op collapse only if no nested mixed-op
+                    // boundary lies inside — i.e. args contains only
+                    // values produced by THIS fold (not a user-given
+                    // {op,args} dict from the input). The fold itself
+                    // produces nested same-op dicts only via this
+                    // branch, so reaching here implies acc was either
+                    // the original lhs (atom) or a previously
+                    // extended same-op chain. Either case is safe.
+                ) {
+                    auto new_args = std::make_shared<ArrayValue>();
+                    for (const auto& a : aa_arr->data()) {
+                        new_args->data().push_back(a);
+                    }
+                    new_args->data().push_back(rhs);
+
+                    auto new_acc = std::make_shared<DictValue>();
+                    new_acc->data().emplace("op", ao_it->second);
+                    new_acc->data().emplace("args", new_args);
+                    acc = new_acc;
+                    extended = true;
+                }
+            }
+        }
+        if (extended) continue;
+
+        // Different op (or first iteration): wrap acc as
+        // `{op:OP, args:[acc, rhs]}`.
+        auto new_args = std::make_shared<ArrayValue>();
+        new_args->data().push_back(acc);
+        new_args->data().push_back(rhs);
+
+        auto new_acc = std::make_shared<DictValue>();
+        new_acc->data().emplace("op", make_string(op));
+        new_acc->data().emplace("args", new_args);
+        acc = new_acc;
+    }
+
+    if (!has_other) return acc;
+
+    // Carry through extra wrapper fields.
+    auto out = std::make_shared<DictValue>();
+    if (auto ad = as_dict(acc)) {
+        for (const auto& [k, v2] : ad->data()) out->data().emplace(k, v2);
+    }
+    for (const auto& [k, v2] : recursed->data()) {
+        if (k == "lhs" || k == "tail") continue;
+        out->data().emplace(k, v2);
+    }
+    return out;
+}
+
+// Unified byte-scan routine. Both Raw (`*`) and Scope (`scope { … }`)
+// dispatch through this — they materialise ScanConfig values that
+// describe the same operation (scan from cursor with optional start
+// delimiter, stop literal, atomic-span INNERs, string-or-array output).
+//
+// INNERs are atomic: when an INNER succeeds, the matched bytes are
+// folded into the captured payload and stop-matching skips over them.
+// This is what makes embedded `std.string`, `std.line_comment`, etc.
+// transparent to the scope — a `")"` inside a string doesn't end the
+// scope because the string parser swallowed it.
+//
+// Mark discipline: the caller MUST hold a live mark at scope entry;
+// the routine does its own internal marks for start, stop, and INNER
+// trials and balances them. On failure return, the stream is left
+// wherever the failure happened — the caller's outer mark provides
+// the rewind.
+inline bool scope_is_word_char(char c) noexcept {
+    auto u = static_cast<unsigned char>(c);
+    return (u >= '0' && u <= '9') ||
+           (u >= 'A' && u <= 'Z') ||
+           (u >= 'a' && u <= 'z') || u == '_';
+}
+
+// Build a ScanConfig from a Scope node. Scope is structurally Raw +
+// INNERs + optional array container: no opening delimiter (siblings
+// in the surrounding sequence carry start/stop literals), stops
+// resolved at load time by `resolve_raw_stops` and stashed on
+// `n.stops`, sibling consumes the stop (consume_stop=false).
+ScanConfig scan_config_from_scope(const Node& n) {
+    ScanConfig cfg;
+    cfg.stops          = n.stops;
+    cfg.stop_strict    = n.stops_strict;
+    cfg.inners         = n.children;
+    cfg.container      = n.container;
+    cfg.subparse_start = n.subparse_start;
+    cfg.consume_stop   = false;
+    return cfg;
+}
+
+// Build a ScanConfig from a Raw node. Raw's pre-resolved sibling-stop
+// literals are stashed on `n.stops` by `resolve_raw_stops` at load
+// time. Raw has no INNERs, is always string-output, and leaves the
+// matched stop literal unconsumed for the next sibling Key to match.
+ScanConfig scan_config_from_raw(const Node& n) {
+    ScanConfig cfg;
+    cfg.stops          = n.stops;
+    cfg.stop_strict    = n.stops_strict;
+    cfg.subparse_start = n.subparse_start;
+    cfg.consume_stop   = false;
+    return cfg;
+}
+
+tl::expected<ValuePtr, ParseError> walk_scan(
+    const Grammar& g, StreamReader& sr, ValuePool& pool,
+    const ScanConfig& cfg) {
+    const Position entry = sr.position();
+    const bool array_mode = (cfg.container == Container::Array);
+
+    const std::string& open_str  = cfg.start;
+    if (cfg.stops.empty()) {
+        return tl::unexpected(ParseError{
+            entry, "scan: no stop literals — the load-time stop "
+                   "resolver couldn't find any Key sibling that bounds "
+                   "this scope/raw"});
+    }
+    // Fast path for single-stop (the overwhelmingly common case —
+    // every direct-child scope/raw, all single-stop Raw `*` uses).
+    // The byte-scan hot loop hits per cursor byte; avoiding the
+    // 256-byte stack array init on every walk_scan call recovers
+    // ~95%+ of the throughput vs the multi-stop fallback.
+    const bool single_stop = (cfg.stops.size() == 1);
+    const std::string& single_close = single_stop ? cfg.stops[0] : std::string{};
+    const char single_first = single_stop && !single_close.empty()
+                              ? single_close[0] : '\0';
+    std::array<bool, 256> stop_first_byte{};
+    if (!single_stop) {
+        for (const auto& s : cfg.stops) {
+            if (s.empty()) continue;
+            stop_first_byte[static_cast<unsigned char>(s[0])] = true;
+        }
+    }
+
+    // Match start (if present). No ignore-set skipping inside the
+    // scan; embedded whitespace is part of the body.
+    if (!open_str.empty()) {
+        sr.mark();
+        for (char c : open_str) {
+            auto g_ = sr.get();
+            if (!g_ || *g_ != c) {
+                sr.reject();
+                return tl::unexpected(ParseError{
+                    entry, "scan: expected start literal '" + open_str + "'"});
+            }
+        }
+        if (cfg.start_strict && !open_str.empty()
+            && scope_is_word_char(open_str.back())) {
+            auto next = sr.peek();
+            if (next && scope_is_word_char(*next)) {
+                sr.reject();
+                return tl::unexpected(ParseError{
+                    entry, "scan: strict start '" + open_str +
+                            "' requires word boundary"});
+            }
+        }
+        sr.accept();
+    }
+
+    // Accumulators. String mode uses `body` (single concatenated payload).
+    // Array mode uses `segments` (ordered list of mixed StringValue text
+    // runs + INNER-typed values), with `text_run` buffering raw bytes
+    // until the next INNER match or stop flushes it.
+    std::string body;
+    auto       segments = array_mode ? std::make_shared<ArrayValue>() : nullptr;
+    std::string text_run;
+
+    auto flush_text_run = [&]() {
+        if (text_run.empty()) return;
+        segments->data().push_back(make_string(std::move(text_run)));
+        text_run.clear();
+    };
+
+    while (true) {
+        auto pk = sr.peek();
+        if (!pk) {
+            std::string msg = "scan: unterminated, no stop (";
+            for (std::size_t i = 0; i < cfg.stops.size(); ++i) {
+                if (i) msg += " | ";
+                msg += "'" + cfg.stops[i] + "'";
+            }
+            msg += ") before EOF";
+            return tl::unexpected(ParseError{entry, std::move(msg)});
+        }
+
+        // Stop check — single-stop fast path (compiles to a byte
+        // compare + memcmp; same shape as the pre-multi-stop engine);
+        // multi-stop path consults the per-stop first-byte set and
+        // loops over candidate stops only when the first byte matches.
+        bool stop_hit = false;
+        if (single_stop) {
+            if (*pk == single_first) {
+                sr.mark();
+                bool ok = true;
+                for (char e : single_close) {
+                    auto gc = sr.get();
+                    if (!gc || *gc != e) { ok = false; break; }
+                }
+                if (ok && cfg.stop_strict
+                    && scope_is_word_char(single_close.back())) {
+                    auto next = sr.peek();
+                    if (next && scope_is_word_char(*next)) ok = false;
+                }
+                if (ok) { stop_hit = true; }
+                else    { sr.reject(); }
+            }
+        } else if (stop_first_byte[static_cast<unsigned char>(*pk)]) {
+            for (const auto& close_str : cfg.stops) {
+                if (close_str.empty()) continue;
+                if (*pk != close_str[0]) continue;
+                sr.mark();
+                bool ok = true;
+                for (char e : close_str) {
+                    auto gc = sr.get();
+                    if (!gc || *gc != e) { ok = false; break; }
+                }
+                if (ok && cfg.stop_strict
+                    && scope_is_word_char(close_str.back())) {
+                    auto next = sr.peek();
+                    if (next && scope_is_word_char(*next)) ok = false;
+                }
+                if (ok) { stop_hit = true; break; }
+                sr.reject();
+            }
+        }
+        if (stop_hit) {
+            // consume_stop=true (Scope) accepts the mark so the stop
+            // literal stays consumed; consume_stop=false (Raw) rejects
+            // to leave the stop for the next sibling to match.
+            if (cfg.consume_stop) sr.accept();
+            else                  sr.reject();
+            if (array_mode) {
+                flush_text_run();
+                return ValuePtr(segments);
+            }
+            return ValuePtr(make_string(std::move(body)));
+        }
+
+        // Try each INNER in order.
+        bool inner_ok = false;
+        for (NodeId inner_id : cfg.inners) {
+            const Node& inner = g.node(g.resolve_ref(inner_id));
+
+            if (inner.kind == NodeKind::Parse) {
+                auto sv = std::dynamic_pointer_cast<StringValue>(inner.value);
+                if (!sv) continue;
+                Parser* p = g.parser(sv->data());
+                if (!p) continue;
+                p->reset();
+                const Position before = sr.position();
+                auto wr = p->walk(sr);
+                if (wr) {
+                    if (array_mode) {
+                        flush_text_run();
+                        // INNER's typed value lands as one segment.
+                        segments->data().push_back(p->value());
+                    } else {
+                        // Capture the FULL matched bytes (delimiters and
+                        // all) by reading the stream's retained window
+                        // — text_value() reports the parser's accumulator,
+                        // which strips delimiters (e.g. `"..."` outer
+                        // quotes) the body needs to round-trip verbatim.
+                        body.append(sr.bytes_from(before));
+                    }
+                    inner_ok = true;
+                    break;
+                }
+                // walk() rewound on failure (its own mark/reject);
+                // try next INNER.
+            } else {
+                // Any other rule shape (Sequence / Choice / Repeat / Ref
+                // chain that resolves to one) — re-enter the parse driver
+                // via parse_from. The resolved Node id is the rule's
+                // entry; on success we get its typed value back.
+                //
+                // Mark/reject isolates the trial: parse_from may consume
+                // bytes before failing, so we wrap with our own mark.
+                // Zero-byte matches are rejected — silently accepting
+                // them would loop forever on a nullable rule.
+                sr.mark();
+                const Position before = sr.position();
+                auto sub_r = g.parse_from(sr, pool, g.resolve_ref(inner_id),
+                                          /*require_full_consume=*/false,
+                                          cfg.caller_ignore);
+                if (sub_r && sr.position().bytes > before.bytes) {
+                    sr.accept();
+                    if (array_mode) {
+                        flush_text_run();
+                        segments->data().push_back(*sub_r);
+                    } else {
+                        body.append(sr.bytes_from(before));
+                    }
+                    inner_ok = true;
+                    break;
+                }
+                sr.reject();
+            }
+        }
+        if (inner_ok) continue;
+
+        // No INNER matched. Consume one raw byte.
+        auto cb = sr.get();
+        if (array_mode) text_run.push_back(*cb);
+        else            body.push_back(*cb);
+    }
+}
+
 } // namespace
 
-tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr) const {
+tl::expected<ValuePtr, ParseError> Grammar::parse(Stream& stream) const {
     ValuePool pool;
-    return parse(sr, pool);
+    return parse(stream, pool);
 }
 
-tl::expected<ValuePtr, ParseError> Grammar::parse(StreamReader& sr, ValuePool& pool) const {
-    return parse_from(sr, pool, top_);
+tl::expected<ValuePtr, ParseError> Grammar::parse(Stream& stream, ValuePool& pool) const {
+    return parse_from(stream.reader(), pool, top_);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse(std::string text) const {
+    auto stream = Stream::from_string(std::move(text));
+    return parse(stream);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse(std::string text, ValuePool& pool) const {
+    auto stream = Stream::from_string(std::move(text));
+    return parse(stream, pool);
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, const std::string& start_name) const {
+        Stream& stream, const std::string& start_name) const {
     ValuePool pool;
-    return parse_from(sr, pool, start_name);
+    return parse_from(stream, pool, start_name);
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, ValuePool& pool, const std::string& start_name) const {
+        Stream& stream, ValuePool& pool, const std::string& start_name) const {
     auto it = named_rules_.find(start_name);
     if (it == named_rules_.end()) {
         return tl::unexpected(ParseError{
-            sr.position(),
+            stream.reader().position(),
             "parse_from: no rule named '" + start_name + "'"});
     }
-    return parse_from(sr, pool, it->second);
+    return parse_from(stream.reader(), pool, it->second);
 }
 
 tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, ValuePool& pool, NodeId start) const {
+        Stream& stream, ValuePool& pool, NodeId start,
+        bool require_full_consume,
+        const std::vector<Parser*>* initial_ignore) const {
+    return parse_from(stream.reader(), pool, start,
+                       require_full_consume, initial_ignore);
+}
+
+tl::expected<ValuePtr, ParseError> Grammar::parse_from(
+        StreamReader& sr, ValuePool& pool, NodeId start,
+        bool require_full_consume,
+        const std::vector<Parser*>* initial_ignore) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
     ValuePtr result_value;
@@ -792,6 +1263,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             case NodeKind::Ref:      kind = "ref"; break;
             case NodeKind::Value:    kind = "value"; break;
             case NodeKind::Raw:      kind = "raw"; break;
+            case NodeKind::Scope:    kind = "scope"; break;
         }
         return std::string{kind} + "#" + std::to_string(id.value());
     };
@@ -873,8 +1345,39 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         const std::vector<Parser*>* parsers;
     };
     std::vector<IgnoreScope> ignore_stack;
+    // Seed the caller's active ignore policy when invoked from a
+    // walk_scan INNER subparse. entry_depth=0 keeps the seed at the
+    // bottom of the stack for the lifetime of this parse — any rule
+    // that pushes its own override sits on top until popped, then
+    // the seed re-surfaces. With the seed, all run_ignore sites
+    // (predictive, between-items, end-of-parse) see the caller's
+    // policy uniformly — no asymmetry between optional-boundary
+    // checks and inter-item whitespace skipping.
+    if (initial_ignore && !initial_ignore->empty()) {
+        ignore_stack.push_back({/*entry_depth=*/0, initial_ignore});
+    }
     auto current_ignore = [&]() -> const std::vector<Parser*>& {
         return ignore_stack.empty() ? ignore() : *ignore_stack.back().parsers;
+    };
+    // First-content guard. When this parse_from is a walk_scan INNER
+    // subparse (initial_ignore set), the leading run_ignore calls
+    // at Key / Parse / Raw cases are suppressed until the rule has
+    // consumed its first byte of content. This keeps leading
+    // whitespace in the surrounding scope's body capture instead of
+    // being eaten by the INNER's leading run_ignore. After any
+    // terminal content match, the guard clears and subsequent
+    // run_ignore calls fire normally — INNERs with required
+    // inter-item whitespace tolerance (e.g. `"begin" ident "end"`)
+    // work as if dispatched via a normal Ref.
+    const bool is_subparse = (initial_ignore != nullptr);
+    bool has_consumed_content = !is_subparse;
+    // Wrapper for the per-cursor run_ignore at content sites
+    // (predictive checks, Key / Parse / Raw / scope entry). Defers
+    // to current_ignore() once content has been consumed; otherwise
+    // (subparse, before first content) becomes a no-op so leading
+    // whitespace stays in the surrounding scope's body capture.
+    auto run_ignore_guarded = [&]() {
+        if (has_consumed_content) run_ignore(sr, current_ignore());
     };
     auto trim_ignore_stack = [&]() {
         while (!ignore_stack.empty()
@@ -914,21 +1417,21 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // big payoff is on 46-alt closed-keyword choices like
     // LAYER_KEYWORD where ~97% of attempts on real LEFs rewind on
     // the first character of the key.
-    auto choice_alt_cant_match = [this, &sr, &current_ignore,
-                                   &ensure_first_bytes](NodeId alt) -> bool {
+    auto choice_alt_cant_match = [this, &sr,
+                                   &ensure_first_bytes,
+                                   &run_ignore_guarded](NodeId alt) -> bool {
         ensure_first_bytes();
         NodeId resolved = resolve_ref(alt);
         if (resolved.value() >= first_bytes_known_.size()) return false;
         if (!first_bytes_known_[resolved.value()])         return false;
-        run_ignore(sr, current_ignore());
+        run_ignore_guarded();
         auto c = sr.peek();
         if (!c) return false;
         return !first_bytes_[resolved.value()].test(
             static_cast<unsigned char>(*c));
     };
 
-    auto should_skip_optional = [this, &sr, &current_ignore,
-                                  &ensure_first_bytes](NodeId id) -> bool {
+    auto should_skip_optional = [&](NodeId id) -> bool {
         // Fast path: precomputed flag tells us in O(1) whether this
         // node is in an `?<...>` use-site optional chain. Non-
         // optional pushes (the vast majority — Sequence children,
@@ -942,12 +1445,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!first_bytes_known_[resolved.value()])         return false;
         // Peek the next byte after ignore-skip. Whitespace skipping
         // is idempotent; if we later push the frame, the inner
-        // terminal re-runs ignore harmlessly.
-        run_ignore(sr, current_ignore());
+        // terminal re-runs ignore harmlessly. current_ignore()
+        // reflects the caller's seeded policy for subparses; the
+        // first-content guard suppresses the run_ignore until a
+        // terminal has matched, so optional-at-start of an INNER
+        // doesn't leak leading whitespace into the INNER's span.
+        run_ignore_guarded();
         auto c = sr.peek();
         if (!c) return false;   // EOF — let the engine handle
-        return !first_bytes_[resolved.value()].test(
+        bool skip = !strict_first_bytes_[resolved.value()].test(
             static_cast<unsigned char>(*c));
+        return skip;
     };
 
     auto push_with_optional_mark = [&](NodeId id) {
@@ -974,11 +1482,16 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             stack.back().set_has_neg_mark(true);
         }
         // Rule-local ignore: if the just-pushed frame's node has an
-        // override registered, push it. Lives for the lifetime of the
-        // frame and any children — trim_ignore_stack() pops it when
-        // the frame goes away.
+        // override registered, push it. Before pushing the override,
+        // run the OUTER (caller's) `run_ignore` so whitespace at a
+        // rule boundary gets eaten by the policy active when this
+        // frame was about to be entered. Without this step, a rule
+        // with `ignore:` (empty, suspending the inherited policy)
+        // entered via a Ref would never see its caller's ignore
+        // applied at the boundary.
         if (!stack.empty()) {
             if (const auto* ovr = rule_ignore(stack.back().node_id())) {
+                run_ignore_guarded();
                 ignore_stack.push_back({stack.size(), ovr});
             }
         }
@@ -1235,35 +1748,20 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         case NodeKind::Raw: {
             // Raw consume: bypass the ignore-set (embedded whitespace
             // and newlines are part of the captured payload), then
-            // peek-and-skip until the stop literal matches at the
-            // cursor. The literal is NOT consumed — it's left for the
-            // next sibling (a Key node) to match in its own iteration.
+            // dispatch to the unified walk_scan routine. Raw's config
+            // has consume_stop=false so the stop literal is left for
+            // the next sibling (a Key node) to match in its own
+            // iteration.
             const Node& n = nodes_[top.node_id().value()];
-            auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
-            assert(sv);
-            const std::string& stop = sv->data();
-            if (trace_enabled) trace("  raw until \"" + stop + "\"");
-            sr.mark();
-            const Position start = sr.position();
-            std::string captured;
-            bool found = false;
-            while (true) {
-                auto c = sr.peek();
-                if (!c) break;
-                if (*c == stop[0]) {
-                    sr.mark();
-                    std::string lookahead;
-                    for (std::size_t i = 0; i < stop.size(); ++i) {
-                        auto k = sr.get();
-                        if (!k) break;
-                        lookahead.push_back(*k);
-                    }
-                    sr.reject();
-                    if (lookahead == stop) { found = true; break; }
-                }
-                captured.push_back(*c);
-                sr.get();
+            if (trace_enabled) {
+                auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
+                trace(std::string("  raw until \"")
+                      + (sv ? sv->data() : std::string()) + "\"");
             }
+            sr.mark();
+            ScanConfig raw_cfg = scan_config_from_raw(n);
+            raw_cfg.caller_ignore = &current_ignore();
+            auto r = walk_scan(*this, sr, pool, raw_cfg);
             // Negative-lookahead inversion for Raw. Same shape as the
             // Key and Parse arms: a Raw frame marked `!*` inverts its
             // outcome before any value processing. The neg-inversion
@@ -1271,16 +1769,14 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // captured string is discarded entirely on the
             // success-to-failure path (we wanted the inner to fail).
             if (top.is_negative()) {
-                // Whichever way the inner went, rewind the byte mark
-                // taken at entry and pop the frame.
-                if (found) sr.accept(); else sr.reject();
+                if (r) sr.accept(); else sr.reject();
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
                     on_mark_reject();
                     popped.set_has_neg_mark(false);
                 }
-                if (found) {
+                if (r) {
                     if (trace_enabled) {
                         trace("  negative-lookahead matched (failing)");
                     }
@@ -1294,15 +1790,15 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 break;
             }
-            if (!found) {
+            if (!r) {
                 sr.reject();
-                handle_failure(ParseError{
-                    start, "raw consume: stop literal '"
-                            + stop + "' not found before EOF"});
+                handle_failure(r.error());
                 break;
             }
             sr.accept();
-            ValuePtr produced = make_string(std::move(captured));
+            // Raw matched — first-content guard clears.
+            has_consumed_content = true;
+            ValuePtr produced = *r;
             // Subparse hook: same as the Parse node branch — if this
             // Raw node carries a subparse_start, re-enter the engine
             // on the captured string with the named rule as entry.
@@ -1355,8 +1851,107 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             break;
         }
 
+        case NodeKind::Scope: {
+            // Bracketed-region terminal. Apply the surrounding ignore
+            // set once at entry (so leading whitespace before the
+            // start is tolerated), then dispatch to the unified
+            // walk_scan routine. Inside the body, ignore-set skipping
+            // is bypassed — embedded whitespace / comments are part
+            // of the captured payload.
+            run_ignore_guarded();
+            const Node& n = nodes_[top.node_id().value()];
+            if (trace_enabled) trace("  scope");
+            sr.mark();
+            ScanConfig scope_cfg = scan_config_from_scope(n);
+            scope_cfg.caller_ignore = &current_ignore();
+            auto r = walk_scan(*this, sr, pool, scope_cfg);
+            // Negative-lookahead inversion — same shape as Key / Raw.
+            if (top.is_negative()) {
+                if (r) sr.accept(); else sr.reject();
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                if (popped.has_neg_mark()) {
+                    on_mark_reject();
+                    popped.set_has_neg_mark(false);
+                }
+                if (r) {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead matched (failing)");
+                    }
+                    handle_failure(ParseError{
+                        sr.position(), "negative lookahead matched"});
+                } else {
+                    if (trace_enabled) {
+                        trace("  negative-lookahead inner failed (succeeding empty)");
+                    }
+                    if (!stack.empty()) advance_after_child();
+                }
+                break;
+            }
+            if (!r) {
+                sr.reject();
+                handle_failure(r.error());
+                break;
+            }
+            sr.accept();
+            // Scope matched — first-content guard clears.
+            has_consumed_content = true;
+            // walk_scan returns either StringValue (default string-body
+            // mode) or ArrayValue (array container mode); pass through
+            // verbatim. Subparse below is meaningful only for
+            // string-body mode.
+            ValuePtr produced = *r;
+            // Subparse hook — same as Raw / Parse: if the scope node
+            // carries a subparse_start, re-enter the engine on the
+            // captured body with the named rule as entry.
+            if (n.subparse_start.valid()) {
+                auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
+                if (!produced_sv) {
+                    handle_failure(ParseError{
+                        sr.position(),
+                        "scope subparse requires a string-valued body"});
+                    break;
+                }
+                std::istringstream sub_is(produced_sv->data());
+                StreamReader sub_sr(sub_is);
+                auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
+                if (!sub_r) {
+                    handle_failure(ParseError{
+                        sr.position(),
+                        "scope subparse: " + sub_r.error().message});
+                    break;
+                }
+                produced = *sub_r;
+            }
+            produced = pool.intern(produced);
+            top.add_value(produced, top.is_name());
+            // Scope is a terminal in the Frame model — its start /
+            // INNER / stop are consumed atomically by walk_scan,
+            // never as Frame-iteration children. Always pop here
+            // (do NOT call push_or_skip_optional on a child cursor —
+            // there is no leftover child to dispatch).
+            {
+                Frame popped = std::move(stack.back());
+                stack.pop_back();
+                if (popped.is_optional() && popped.has_mark()) {
+                    on_mark_accept();
+                    popped.set_has_mark(false);
+                }
+                popped.finish(pool);
+                fire_callbacks_for_frame(popped);
+                if (stack.empty()) {
+                    result_value = popped.result();
+                    parse_finished = true;
+                    break;
+                }
+                popped.pass_values_to(stack.back());
+                advance_after_child();
+            }
+            break;
+        }
+
         case NodeKind::Key: {
-            run_ignore(sr, current_ignore());
+            run_ignore_guarded();
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
@@ -1394,9 +1989,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             if (r) {
-                // Key matched. The literal itself is not emitted; any
-                // Value-kind children, however, contribute their
-                // constants when iterated.
+                // Key matched — first-content guard clears so
+                // subsequent run_ignore sites (between-items,
+                // optional-boundary, end-of-parse) fire normally.
+                has_consumed_content = true;
+                // The literal itself is not emitted; any Value-kind
+                // children, however, contribute their constants when
+                // iterated.
                 if (top.has_current()) {
                     push_or_skip_optional(top.current_child());
                 } else {
@@ -1425,7 +2024,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
 
         case NodeKind::Parse: {
-            run_ignore(sr, current_ignore());
+            run_ignore_guarded();
             const Node& n = nodes_[top.node_id().value()];
             auto sv = std::dynamic_pointer_cast<StringValue>(n.value);
             assert(sv);
@@ -1460,6 +2059,9 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 break;
             }
             if (r) {
+                // Parse matched — first-content guard clears so
+                // subsequent run_ignore sites fire normally.
+                has_consumed_content = true;
                 ValuePtr produced = *r;
                 // Subparse hook: if this Parse node carries a
                 // subparse_start, re-enter the engine on the produced
@@ -1673,17 +2275,31 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     }
 
     if (parse_finished) {
-        // Start rule produced a complete value; require the rest of
-        // the stream (modulo trailing ignored terminals) to be empty.
-        // Without this check a grammar that matches a prefix would
-        // silently succeed, hiding coverage gaps when the file has
-        // unmodeled content after the matched portion.
-        run_ignore(sr, current_ignore());
-        if (!sr.eof()) {
-            return tl::unexpected(ParseError{
-                sr.position(),
-                "unexpected content after start rule completed"
-            });
+        // Start rule produced a complete value. For top-level / subparse
+        // callers we require the rest of the stream (modulo trailing
+        // ignored terminals) to be empty — without this check a grammar
+        // that matches a prefix would silently succeed, hiding coverage
+        // gaps when the file has unmodeled content after the matched
+        // portion. Sub-invocations from byte-scan INNER trials disable
+        // the check via `require_full_consume=false`; they legitimately
+        // stop at the boundary the rule chose, and crucially MUST NOT
+        // eat trailing ignore bytes — those bytes belong to the
+        // surrounding scope's body capture, not to the INNER.
+        if (require_full_consume) {
+            run_ignore(sr, current_ignore());
+            if (!sr.eof()) {
+                return tl::unexpected(ParseError{
+                    sr.position(),
+                    "unexpected content after start rule completed"
+                });
+            }
+        }
+        // `#opchain` post-process: when the start rule body (or any
+        // Ref along the chain to it) carries the flag, compact any
+        // always-wrap chain shape in the produced AST. See
+        // `compact_opchain` for the transform.
+        if (has_opchain_in_chain(start)) {
+            result_value = compact_opchain(result_value);
         }
         return result_value;
     }

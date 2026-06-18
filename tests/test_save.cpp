@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <rawast/grammar.hpp>
+#include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 
 #include <memory>
@@ -16,9 +17,8 @@ std::string save_to_string(const Grammar& g, ValuePtr value) {
 }
 
 ValuePtr parse_to_value(const Grammar& g, std::string input) {
-    std::istringstream is{std::move(input)};
-    StreamReader sr{is};
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string(std::move(input));
+    auto r = g.parse(stream);
     REQUIRE(r);
     return *r;
 }
@@ -190,4 +190,297 @@ TEST_CASE("Parse-then-save with JSONC input: comments stripped, canonical output
         "// header\n"
         "{ \"a\": 1 /* inline */, \"b\": 2 }");
     CHECK(save_to_string(g, v) == "{\"a\":1,\"b\":2}");
+}
+
+// ─── Save dispatcher: separator-as-discriminator ────────────────
+// Regression suite for the precedence-ladder chain pattern where
+// the discriminator lives on the separator, not on the item:
+//
+//     CHAIN: sequence dict {
+//         repeat+2 <NEXT>:args[]=@ separator '||':op="||"
+//     }
+//
+// The dispatcher must recognise that CHAIN's discriminator is
+// `dict[op] == "||"` (set by the separator's literal binding),
+// not a catch-all wildcard. Previously the bug:
+//   * A top-level Choice between CHAIN and a leaf rule treats
+//     CHAIN as the catch-all and dispatches every dict to it,
+//     including type-tagged leaves that have nothing to do with
+//     CHAIN.
+//   * Two parallel chain rules (`OR_CHAIN` with `||`, `AND_CHAIN`
+//     with `&&`) become indistinguishable: both dispatch to the
+//     first chain alt regardless of the dict's actual op.
+
+TEST_CASE("save: separator-discriminator — chain rule does not eat type-tagged leaves") {
+    Grammar g;
+    register_std_parser_group();
+    const char* src = R"(
+        use: std
+        start: <TOP>
+        TOP ignore whitespace: choice { <CHAIN>, <LEAF> }
+        CHAIN: sequence dict {
+            repeat+2 <LEAF>:args[]=@ separator '||':op="||"
+        }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Bare LEAF — no `args`, no `op`. Must dispatch to LEAF, not CHAIN.
+    auto leaf_ast = parse_to_value(g, "FOO");
+    CHECK(save_to_string(g, leaf_ast) == "FOO");
+
+    // Chain — dispatch to CHAIN, emit operator between args.
+    auto chain_ast = parse_to_value(g, "A || B");
+    CHECK(save_to_string(g, chain_ast) == "A||B");
+}
+
+TEST_CASE("save: separator-discriminator — two chains with different ops dispatch correctly") {
+    Grammar g;
+    register_std_parser_group();
+    const char* src = R"(
+        use: std
+        start: <OR>
+        OR ignore whitespace: choice { <OR_CHAIN>, <AND> }
+        OR_CHAIN: sequence dict {
+            repeat+2 <AND>:args[]=@ separator '||':op="||"
+        }
+        AND: choice { <AND_CHAIN>, <LEAF> }
+        AND_CHAIN: sequence dict {
+            repeat+2 <LEAF>:args[]=@ separator '&&':op="&&"
+        }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Same surface dict shape ({args, op}), different op — dispatcher
+    // must pick the right chain rule via the op discriminator.
+    auto or_ast = parse_to_value(g, "A || B");
+    CHECK(save_to_string(g, or_ast) == "A||B");
+
+    auto and_ast = parse_to_value(g, "A && B");
+    CHECK(save_to_string(g, and_ast) == "A&&B");
+}
+
+// ─── Save dispatcher: inline-Choice discriminator ───────────────
+// A rule whose body contains an inline `choice { K1:f=v1, K2:f=v2 }`
+// is currently treated as a wildcard catch-all because no top-level
+// (V-name + Value-const) pair is found. The dispatcher commits to
+// it for any dict whose field-presence walk passes — even when
+// the inner Choice cannot dispatch — and then errors out at
+// emission time with "no matching grammar alternative for value
+// at save".
+//
+// Rule pattern this exercises:
+//
+//   EQ: choice { EQ_BINOP, LEAF }
+//   EQ_BINOP: sequence dict {
+//       <LEAF>:args[]=@,
+//       choice { '==':op="==", '!=':op="!=" },
+//       <LEAF>:args[]=@
+//   }
+//
+// For a dict that does NOT carry `op` in {"==", "!="} (e.g. a bare
+// LEAF), EQ_BINOP must be rejected so the LEAF alt can take over.
+
+TEST_CASE("save: inline-Choice discriminator — rule with inner op-Choice rejects non-matching dicts") {
+    Grammar g;
+    register_std_parser_group();
+    // Reproduces the sv_pp_expr round-trip failure shape: a unary
+    // rule (NOT_EXPR with op="!") whose AST has the SAME args-list
+    // shape as EQ_BINOP, but a different op constant. The dict has
+    // `args` so the field-presence check on EQ_BINOP passes; only
+    // the inner Choice's op discriminator can tell them apart.
+    const char* src = R"(
+        use: std
+        start: <EQ>
+        EQ ignore whitespace: choice { <EQ_BINOP>, <UNARY> }
+        EQ_BINOP: sequence dict {
+            <LEAF>:args[]=@,
+            choice { '==':op="==", '!=':op="!=" },
+            <LEAF>:args[]=@
+        }
+        UNARY: choice { <NOT_EXPR>, <LEAF> }
+        NOT_EXPR: sequence dict {
+            '!':op="!",
+            <LEAF>:args[]=@
+        }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // EQ_BINOP first in catch-all order; field-presence on `args`
+    // passes; the inner Choice's op = "==" / "!=" doesn't match
+    // dict.op = "!". Without the fix, dispatcher commits to
+    // EQ_BINOP, then errors at the inner Choice with
+    // "no matching grammar alternative for value at save".
+    auto not_ast = parse_to_value(g, "!FOO");
+    CHECK(save_to_string(g, not_ast) == "!FOO");
+
+    // Equality still routes correctly (regression guard).
+    auto eq_ast = parse_to_value(g, "A == B");
+    CHECK(save_to_string(g, eq_ast) == "A==B");
+
+    auto ne_ast = parse_to_value(g, "A != B");
+    CHECK(save_to_string(g, ne_ast) == "A!=B");
+}
+
+// ─── Save dispatcher: scope-aware recursion ─────────────────────
+// The recursive dispatchability check needs to track scope changes
+// across `:field=@` and `:field[]=@` bindings. Without scope
+// tracking the recursion checks the next sibling's discriminators
+// against the OUTER dict — wrong for a Ref like `<UNARY>:args[]=@`,
+// where UNARY is meant to dispatch each element of dict.args, not
+// the outer dict itself.
+//
+// Reproduces sv_pp_expr.rawast's remaining round-trip failures
+// (== / != chain and the realistic mixed expression) using a
+// minimal precedence ladder with the same shape.
+
+TEST_CASE("save: scope-aware recursion through `:args[]=@` bindings") {
+    Grammar g;
+    register_std_parser_group();
+    const char* src = R"(
+        use: std
+        start: <OR>
+        OR ignore whitespace: choice { <OR_CHAIN>, <AND> }
+        OR_CHAIN: sequence dict {
+            repeat+2 <AND>:args[]=@ separator '||':op="||"
+        }
+        AND: choice { <AND_CHAIN>, <EQ> }
+        AND_CHAIN: sequence dict {
+            repeat+2 <EQ>:args[]=@ separator '&&':op="&&"
+        }
+        EQ: choice { <EQ_BINOP>, <UNARY> }
+        EQ_BINOP: sequence dict {
+            <UNARY>:args[]=@,
+            choice { '==':op="==", '!=':op="!=" },
+            <UNARY>:args[]=@
+        }
+        UNARY: choice { <NOT_EXPR>, <PRIMARY> }
+        NOT_EXPR: sequence dict {
+            '!':op="!",
+            <UNARY>:args[]=@
+        }
+        PRIMARY: choice { <LEAF> }
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Equality + inequality: dict.op is "==" / "!=". EQ_BINOP needs
+    // to accept these; my non-scope-aware recursion rejects them
+    // because it checks UNARY's discriminators against the outer
+    // dict (which has op="==", not type="leaf").
+    auto eq_ast = parse_to_value(g, "A == B");
+    CHECK(save_to_string(g, eq_ast) == "A==B");
+
+    auto ne_ast = parse_to_value(g, "A != B");
+    CHECK(save_to_string(g, ne_ast) == "A!=B");
+
+    // Mixed: && containing == — exercises the scope flowing through
+    // a chain into a binop arg list.
+    auto mixed = parse_to_value(g, "A && B == C");
+    auto saved = save_to_string(g, mixed);
+    INFO("saved: " << saved);
+    auto reparsed = parse_to_value(g, saved);
+    CHECK(reparsed);
+}
+
+// ─── Engine: nested always-wrap chains ──────────────────────────
+// When a chain rule's lhs is itself an always-wrap chain dict
+// (`{lhs:{lhs:atom, tail:[{op,rhs:atom}]}, tail:[{op,rhs:...}]}`),
+// save's dispatch must follow the catch-all NEXT Ref down through
+// the precedence ladder until it reaches the rule whose tail-item
+// discriminator matches the inner chain's op. Currently the
+// recursive `can_consume` rejects too eagerly somewhere along that
+// path: even though the inner chain's op="&&" matches AND_CHAIN
+// (which IS reachable from OR_EXPR's catch-all <AND_EXPR>), the
+// dispatcher returns invalid at the outer OR_EXPR Choice and the
+// save aborts with "no matching grammar alternative".
+//
+// Reproduces sv_pp_expr's `defined() && (A == 32 || A == 64)`
+// failure shape without depending on #opchain or scope.paren —
+// pure choice+repeat+ always-wrap pattern surfaced by parsing the
+// natural input.
+
+TEST_CASE("save: nested always-wrap chain round-trips through catch-all Refs") {
+    Grammar g;
+    register_std_parser_group();
+    // 4 precedence levels — OR, AND, EQ, ADD — to match sv_pp_expr's
+    // ladder depth more closely. EQ_TAIL uses an inline `choice {...}`
+    // for ==/!= so the `collect_child_discriminators` inline-Choice
+    // extension also fires. ADD_TAIL same shape for +/-.
+    const char* src = R"(
+        use: std
+        start: <TOP>
+        TOP: <OR_EXPR>:#opchain
+        OR_EXPR ignore whitespace: choice { <OR_CHAIN>, <AND_EXPR> }
+        OR_CHAIN: sequence dict {
+            <AND_EXPR>:lhs=@,
+            repeat+ <OR_TAIL>:tail[]=@
+        }
+        OR_TAIL: sequence dict { '||':op="||", <AND_EXPR>:rhs=@ }
+
+        AND_EXPR: choice { <AND_CHAIN>, <EQ_EXPR> }
+        AND_CHAIN: sequence dict {
+            <EQ_EXPR>:lhs=@,
+            repeat+ <AND_TAIL>:tail[]=@
+        }
+        AND_TAIL: sequence dict { '&&':op="&&", <EQ_EXPR>:rhs=@ }
+
+        EQ_EXPR: choice { <EQ_CHAIN>, <ADD_EXPR> }
+        EQ_CHAIN: sequence dict {
+            <ADD_EXPR>:lhs=@,
+            repeat+ <EQ_TAIL>:tail[]=@
+        }
+        EQ_TAIL: sequence dict {
+            choice { '==':op="==", '!=':op="!=" },
+            <ADD_EXPR>:rhs=@
+        }
+
+        ADD_EXPR: choice { <ADD_CHAIN>, <LEAF> }
+        ADD_CHAIN: sequence dict {
+            <LEAF>:lhs=@,
+            repeat+ <ADD_TAIL>:tail[]=@
+        }
+        ADD_TAIL: sequence dict {
+            choice { '+':op="+", '-':op="-" },
+            <LEAF>:rhs=@
+        }
+
+        LEAF: sequence dict {
+            identifier:type="leaf":name=@
+        }
+    )";
+    auto load = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(load, "load failed: " << (load ? "" : load.error()));
+
+    // Simple chain cases — these must keep working.
+    {
+        auto ast = parse_to_value(g, "A&&B");
+        CHECK(save_to_string(g, ast) == "A&&B");
+    }
+    {
+        auto ast = parse_to_value(g, "A||B");
+        CHECK(save_to_string(g, ast) == "A||B");
+    }
+
+    // The failing case (mirrors sv_pp_expr): outer || chain whose
+    // lhs and rhs are themselves == chains, and those == chains'
+    // operands cascade down to LEAF via the catch-all ADD_EXPR Ref.
+    {
+        auto ast = parse_to_value(g, "A==B||C==D");
+        CHECK(save_to_string(g, ast) == "A==B||C==D");
+    }
 }

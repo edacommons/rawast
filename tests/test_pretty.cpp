@@ -135,9 +135,8 @@ TEST_CASE("Pretty: JSON grammar with newline/tab/indent fields works end-to-end"
     })";
     REQUIRE(load_json_grammar_from_string(g, schema));
 
-    std::istringstream input("[ 42 ]");
-    StreamReader sr(input);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("[ 42 ]");
+    auto r = g.parse(stream);
     REQUIRE(r);
 
     std::ostringstream out;
@@ -188,9 +187,8 @@ TEST_CASE("Pretty: .rawast postfix flags (newline / tab / indent) on items") {
     g.add_ignore("whitespace");
     REQUIRE(load_rawast_grammar_from_string(g, src));
 
-    std::istringstream input("[ 7 ]");
-    StreamReader sr(input);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("[ 7 ]");
+    auto r = g.parse(stream);
     REQUIRE(r);
 
     std::ostringstream out;
@@ -244,9 +242,8 @@ TEST_CASE("Pretty: .rawast postfix attrs on repeat item (`repeat int tab indent`
     g.add_ignore("whitespace");
     REQUIRE(load_rawast_grammar_from_string(g, src));
 
-    std::istringstream input("[1, 2, 3]");
-    StreamReader sr(input);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("[1, 2, 3]");
+    auto r = g.parse(stream);
     REQUIRE(r);
 
     std::ostringstream out;
@@ -277,9 +274,8 @@ TEST_CASE("Pretty: pretty=false skips tab/indent/newline; keeps space and tail")
     g.add_ignore("whitespace");
     REQUIRE(load_rawast_grammar_from_string(g, src));
 
-    std::istringstream input("[1, 2]");
-    StreamReader sr(input);
-    auto r = g.parse(sr);
+    auto stream = Stream::from_string("[1, 2]");
+    auto r = g.parse(stream);
     REQUIRE(r);
 
     // Pretty mode: emits all attrs.
@@ -300,9 +296,8 @@ TEST_CASE("Pretty: pretty=false skips tab/indent/newline; keeps space and tail")
     CHECK(compact_out.str() == "[1 ,2 ]");
 
     // Round-trip: re-parse compact output, get same AST.
-    std::istringstream compact_in(compact_out.str());
-    StreamReader compact_sr(compact_in);
-    auto compact_r = g.parse(compact_sr);
+    auto compact_sr_stream = Stream::from_string(compact_out.str());
+    auto compact_r = g.parse(compact_sr_stream);
     REQUIRE(compact_r);
     std::ostringstream compact_out_2;
     REQUIRE(g.save(compact_out_2, *compact_r, /*pretty=*/false));
@@ -331,9 +326,8 @@ TEST_CASE("Save: fixed-schema dict round-trips in grammar order, not alphabetica
     g.add_ignore("whitespace");
     REQUIRE(load_rawast_grammar_from_string(g, src));
 
-    std::istringstream input(R"("alice" 30)");
-    StreamReader sr(input);
-    auto parsed = g.parse(sr);
+    auto stream = Stream::from_string(R"("alice" 30)");
+    auto parsed = g.parse(stream);
     REQUIRE(parsed);
     auto dict = std::dynamic_pointer_cast<DictValue>(*parsed);
     REQUIRE(dict);
@@ -346,9 +340,8 @@ TEST_CASE("Save: fixed-schema dict round-trips in grammar order, not alphabetica
     CHECK(out.str() == R"("alice"30)");
 
     // Round-trip — the saved output reparses to the same dict.
-    std::istringstream input2(out.str());
-    StreamReader sr2(input2);
-    auto reparsed = g.parse(sr2);
+    auto stream2 = Stream::from_string(out.str());
+    auto reparsed = g.parse(stream2);
     REQUIRE(reparsed);
     auto dict2 = std::dynamic_pointer_cast<DictValue>(*reparsed);
     REQUIRE(dict2);
@@ -378,9 +371,8 @@ TEST_CASE("Save: fixed-schema dict with optional field — present and absent") 
 
     // With age present.
     {
-        std::istringstream input(R"("alice" 30)");
-        StreamReader sr(input);
-        auto parsed = g.parse(sr);
+        auto stream = Stream::from_string(R"("alice" 30)");
+        auto parsed = g.parse(stream);
         REQUIRE(parsed);
         std::ostringstream out;
         REQUIRE(g.save(out, *parsed));
@@ -389,9 +381,8 @@ TEST_CASE("Save: fixed-schema dict with optional field — present and absent") 
 
     // With age absent — save should skip the int parser entirely.
     {
-        std::istringstream input(R"("alice")");
-        StreamReader sr(input);
-        auto parsed = g.parse(sr);
+        auto stream = Stream::from_string(R"("alice")");
+        auto parsed = g.parse(stream);
         REQUIRE(parsed);
         std::ostringstream out;
         REQUIRE(g.save(out, *parsed));
@@ -440,9 +431,8 @@ TEST_CASE("Pretty: full JSON pretty grammar in .rawast — round-trip") {
     REQUIRE(load_rawast_grammar_from_string(g, src));
 
     // Compact JSON in, pretty JSON out.
-    std::istringstream input(R"({"name":"alice","items":[1,2]})");
-    StreamReader sr(input);
-    auto parsed = g.parse(sr);
+    auto stream = Stream::from_string(R"({"name":"alice","items":[1,2]})");
+    auto parsed = g.parse(stream);
     REQUIRE(parsed);
 
     std::ostringstream out;
@@ -463,9 +453,8 @@ TEST_CASE("Pretty: full JSON pretty grammar in .rawast — round-trip") {
 
     // Round-trip: re-parse the pretty output, re-save, expect identical
     // pretty text (idempotent under save).
-    std::istringstream pretty_in(pretty);
-    StreamReader pretty_sr(pretty_in);
-    auto reparsed = g.parse(pretty_sr);
+    auto pretty_sr_stream = Stream::from_string(pretty);
+    auto reparsed = g.parse(pretty_sr_stream);
     REQUIRE(reparsed);
     std::ostringstream out2;
     REQUIRE(g.save(out2, *reparsed));

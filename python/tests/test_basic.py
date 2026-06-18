@@ -221,3 +221,57 @@ def test_schema_generator_describes_json_paircase():
     pair_section = md[pair_idx:next_idx]
     assert "VALUE" in pair_section
     assert '":"' not in pair_section  # `:` is structural, skipped
+
+
+# ─── Stream + three-mode preprocessor API ───────────────────────────────
+
+
+def test_stream_from_string_round_trips_through_grammar():
+    """Stream.from_string + Grammar.parse_stream should match
+    Grammar.parse_string."""
+    g = rawast.Grammar("json")
+    text = '{"a": 1, "b": [1, 2, 3]}'
+    stream = rawast.Stream.from_string(text)
+    assert isinstance(stream, rawast.Stream)
+    assert g.parse_stream(stream) == g.parse_string(text)
+
+
+def test_preprocessor_three_mode_pipeline():
+    """Mode 1 (pp.parse → AST), Mode 2 (pp.preprocess(ast, src) →
+    Stream), Mode 3 (g.parse_stream(stream) → host value) compose
+    end-to-end."""
+    pp_g = rawast.Grammar("sv_preprocessor")
+    pp = rawast.Preprocessor(pp_g)
+
+    src = "`define X 7\n`X\n"
+
+    # Mode 1: parse only, no state mutation.
+    ast = pp.parse(src)
+    assert isinstance(ast, list)            # PP_FILE is an ArrayValue
+    assert pp.macros == {}                  # walker did not run
+
+    # Mode 2: AST → Stream; walker runs, macros now populated.
+    stream = pp.preprocess(ast, src)
+    assert isinstance(stream, rawast.Stream)
+    assert "X" in pp.macros
+
+    # Mode 3: pretend any text grammar consumes the Stream. We use a
+    # simple JSON-style smoke since we don't have a host SV grammar
+    # to hand here — but the same shape works for any consumer.
+    smoke = rawast.Stream.from_string("42")
+    json_g = rawast.Grammar("json")
+    assert json_g.parse_stream(smoke) == 42
+
+
+def test_tcl_grammar_accepts_utf8_in_quoted_strings():
+    """Regression: ALL_BYTES first-byte macro previously capped at
+    0x7F, so the SEGMENTS subparse downstream of the quoted-string
+    parser refused to enter LITERAL_SEG on a non-ASCII byte. Fixed by
+    extending ALL_BYTES to cover 0x01-0xFF."""
+    g = rawast.Grammar("tcl")
+    ast = g.parse_string('foo "中國的漢字"')
+    cmd = ast["commands"][0]
+    assert cmd["type"] == "command"
+    quoted = cmd["words"][1]
+    assert quoted["type"] == "quoted"
+    assert quoted["value"] == [{"type": "literal", "value": "中國的漢字"}]

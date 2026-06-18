@@ -26,9 +26,8 @@ TEST_CASE("Callbacks: on_rule_complete fires with the rule's parsed value") {
         captured = v;
     });
 
-    std::istringstream input("42");
-    StreamReader sr(input);
-    auto result = g.parse(sr);
+    auto stream = Stream::from_string("42");
+    auto result = g.parse(stream);
     REQUIRE(result);
 
     CHECK(call_count == 1);
@@ -51,9 +50,8 @@ TEST_CASE("Callbacks: multiple callbacks on the same rule all fire in order") {
     g.on_rule_complete("NUM", [&](const ValuePtr&) { order.push_back(2); });
     g.on_rule_complete("NUM", [&](const ValuePtr&) { order.push_back(3); });
 
-    std::istringstream input("7");
-    StreamReader sr(input);
-    REQUIRE(g.parse(sr));
+    auto stream = Stream::from_string("7");
+    REQUIRE(g.parse(stream));
 
     REQUIRE(order.size() == 3);
     CHECK(order[0] == 1);
@@ -85,9 +83,8 @@ TEST_CASE("Callbacks: replace_parser swaps a terminal for subsequent input") {
 
     // First identifier: default rules (no '/'). Second identifier:
     // post-swap rules — '/' allowed.
-    std::istringstream input("foo bar/baz");
-    StreamReader sr(input);
-    auto result = g.parse(sr);
+    auto stream = Stream::from_string("foo bar/baz");
+    auto result = g.parse(stream);
     REQUIRE(result);
 
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*result);
@@ -129,9 +126,8 @@ TEST_CASE("Callbacks: LEF-style preamble — DIVIDERCHAR declaration teaches the
         g.replace_parser(std::make_unique<IdentifierParser>("", sv->data()));
     });
 
-    std::istringstream input(R"(DIVIDERCHAR "/" ; cell_a/inst1/leaf)");
-    StreamReader sr(input);
-    auto result = g.parse(sr);
+    auto stream = Stream::from_string(R"(DIVIDERCHAR "/" ; cell_a/inst1/leaf)");
+    auto result = g.parse(stream);
     REQUIRE(result);
 
     auto arr = std::dynamic_pointer_cast<ArrayValue>(*result);
@@ -180,9 +176,8 @@ TEST_CASE("Callbacks: queued under backtrack, fire only on accepted branch") {
     // sees "magic2" — fails, rolls back, FIRST_RULE callback DISCARDED.
     // alt2 matches SECOND_RULE="hello" then "magic2" — succeeds,
     // SECOND_RULE callback FIRES once.
-    std::istringstream input("hello magic2");
-    StreamReader sr(input);
-    auto result = g.parse(sr);
+    auto stream = Stream::from_string("hello magic2");
+    auto result = g.parse(stream);
     REQUIRE(result);
 
     CHECK(first_calls  == 0);
@@ -238,9 +233,8 @@ TEST_CASE("Callbacks: nested backtrack — outer accept flushes inner accept; ou
     //     accept → merge into outer alt2's queue. Then "go" matches;
     //     accept outer alt2 → flush (top-level: fire).
     //   Final inner_calls = 1.
-    std::istringstream input("h y go");
-    StreamReader sr(input);
-    auto result = g.parse(sr);
+    auto stream = Stream::from_string("h y go");
+    auto result = g.parse(stream);
     REQUIRE(result);
     CHECK(inner_calls == 1);
 }

@@ -1,7 +1,10 @@
 #pragma once
 
 #include <rawast/node.hpp>
+#include <rawast/parser.hpp>
+#include <rawast/stream.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,16 +43,33 @@ std::optional<PpOnUndefined> parse_pp_on_undefined(std::string_view name) noexce
 // One macro definition. Function-like macros carry a non-empty
 // `params` list AND `is_function_like = true`; an empty `params`
 // list with `is_function_like = false` is the object-like form.
-// `body` is the raw body text captured by the grammar; substitution
-// happens at expansion time (see preprocessor_macro_lex.cpp once it
-// lands). For Phase 1.2 only object-like macros are supported; the
-// function-like fields are present in the struct so we don't churn
-// the layout when function-like support arrives in Phase 2.
+//
+// `body_segments` keeps the body as an AST array — the same shape
+// the grammar produces for `\`define`'s `body` field (mixed bare
+// StringValue text runs interleaved with typed segments for
+// PARAM_REF / STRING / macro_use). Substitution at expansion time
+// is an AST-to-AST splice: walk the segments, replace each
+// `{type:"ref"}` whose value matches a parameter name with the
+// corresponding arg's value, then walk the result through the
+// normal segment dispatch — no string round-trip, no re-parse.
+//
+// Legacy bodies that arrived as a single string (mini_preprocessor
+// synthesized ASTs, process_ast callers) are normalised to a one-
+// element segments array at register time.
 struct MacroDef {
     std::string name;
     std::vector<std::string> params;
-    std::string body;
+    std::shared_ptr<ArrayValue> body_segments;
     bool is_function_like = false;
+
+    // Convenience: text representation of the body's flat text
+    // segments. For legacy bodies that wrap a single StringValue
+    // this is the original captured text; for sv_preprocessor.rawast
+    // bodies with typed segments, this only renders the bare text
+    // runs (typed segments like `{type:"ref"}` are skipped). Used
+    // by tests and the default expr-eval ref resolver — not by the
+    // expansion path, which walks segments directly.
+    std::string body_text() const;
 };
 
 // A preprocessor warning surfaced at process time. Accumulated on
@@ -161,6 +181,15 @@ struct PreprocessorState {
 // that includes preprocessor.hpp.
 class Grammar;
 
+// Result of a host-supplied include-source resolver. The
+// `canonical_id` uniquely identifies the source (used for source-map
+// provenance, `included_files()` dedup, and diagnostic labels) and
+// `content` is the raw bytes to parse + walk.
+struct PpIncludeSource {
+    std::string canonical_id;
+    std::string content;
+};
+
 // Construction options for Preprocessor. Top-level so the in-class
 // default initializers don't need to be visible at the Preprocessor
 // constructor's default-argument-deduction site (a nested struct
@@ -190,6 +219,79 @@ struct PpOptions {
     // letting the host parser handle the token.
     PpOnUndefined on_undefined = PpOnUndefined::Leave;
 
+    // Host-supplied evaluator for `\`if` / `\`elsif` expressions.
+    // Called with the AST node the grammar produced for the
+    // expression — typically a structured dict tree (e.g.
+    // {type:"binop", op:"&&", lhs:..., rhs:...}), but a leaf
+    // StringValue is fine for trivial cases like `\`if FOO` where
+    // the grammar just captures the identifier text.
+    //
+    // Returns:
+    //   true  — branch is taken
+    //   false — branch is not taken; walker tries the next elsif or
+    //           falls to else_branch
+    //   nullopt — evaluator can't decide; walker records a warning
+    //           and treats the branch as false (consumers can elevate
+    //           to error via their own policy if they need to).
+    //
+    // If unset and the walker hits an `\`if` directive, no branch is
+    // taken and a warning is recorded — `\`if` without an evaluator
+    // is a configuration error.
+    //
+    // Passing the AST (not the raw source text) keeps the grammar
+    // as the only parser in the system — the host walks the tree
+    // the same way the preprocessor walker does, rather than
+    // re-parsing the expression by hand.
+    std::function<std::optional<bool>(const ValuePtr& cond)> expr_eval;
+
+    // Host-supplied source resolver for `\`include`. When set, called
+    // instead of (well, before — see fallback) the built-in
+    // `include_paths` filesystem walk. Returns the canonical id and
+    // text content of the included source, or nullopt to mean "not
+    // found, fall back to the built-in walk."
+    //
+    // The `including_file` argument is the canonical id of the file
+    // currently doing the `\`include` (empty for top-level / stdin),
+    // letting hosts implement "resolve relative to the including
+    // file" or any other context-sensitive policy.
+    //
+    // The `canonical_id` returned identifies the source for source-
+    // map provenance, the `included_files()` dedup query, and
+    // diagnostic file labels. Two `\`include` directives that
+    // legitimately reference the same logical source should produce
+    // the same canonical_id; the host decides the identity policy
+    // (absolute path, virtual URI, content hash, …).
+    //
+    // The `content` is the raw bytes to be parsed and walked. The
+    // host is free to read from disk, cache in memory, fetch over
+    // the network, or generate on the fly — the preprocessor doesn't
+    // care where the bytes come from.
+    //
+    // Multi-include with redefined macros works as expected: the
+    // callback fires once per `\`include` directive, each call
+    // processes the returned content with the macro table as it
+    // stood at the call site. Hosts that cache content do not skip
+    // processing — only the I/O.
+    std::function<std::optional<PpIncludeSource>(
+        const std::string& requested,
+        const std::string& including_file)> include_source;
+
+    // Host-supplied fallback for undefined macro uses. Called when
+    // a `\`NAME` site references a macro not in the active table.
+    // If it returns a value, that string is emitted as the expansion
+    // (recursively re-expanded — host can return text containing
+    // further `\`uses) and the `on_undefined` policy is bypassed.
+    // If it returns nullopt, processing falls through to the
+    // `on_undefined` policy as if the callback weren't set.
+    //
+    // Args mirror what the AST reports: macro name (without the
+    // leading backtick) and the captured argument strings.
+    // Default-empty means "no callback" — bypass; existing behaviour
+    // is unchanged for callers that don't set it.
+    std::function<std::optional<std::string>(
+        const std::string& name,
+        const std::vector<std::string>& args)> undefined_handler;
+
     // Macro expansion recursion limit. Protects against cycles
     // that blue-painting alone doesn't catch (e.g. mutual
     // expansion via include + redefine). Hitting the limit
@@ -200,6 +302,45 @@ struct PpOptions {
     // tooling and debugging; default off keeps the hot path cheap.
     bool trace = false;
 };
+
+// Generic AST evaluator for preprocessor `\`if` conditions. Walks
+// the documented expression-AST shape (see grammars/sv_pp_expr.rawast)
+// and returns a tri-state result:
+//
+//   true   — condition holds
+//   false  — condition does not hold
+//   nullopt — undecidable (unknown call name, non-int operand of an
+//            arithmetic op, ref without a resolver) — the walker
+//            records a warning and treats it as false; hosts can
+//            elevate via their own policy.
+//
+// The AST shape (uniform across any grammar emitting it):
+//
+//   {type:"int",    value: <int>}
+//   {type:"ref",    value: <name>}
+//   {type:"paren",  value: <expr>}
+//   {type:"call",   name: <fn>, args: [<expr>, ...]}
+//                               // built-in: name == "defined" with
+//                               // a single ref arg returns the macro's
+//                               // is_defined state. Any other name is
+//                               // nullopt (host extension point).
+//   {op: "&&"/"||"/"!"/"=="/"!="/"<"/">"/"<="/">="/"+"/"-"/"*"/"/"/"%",
+//    args: [<expr>, ...]}        // operators evaluated as documented
+//                               // in grammars/sv_pp_expr.rawast
+//
+// `ref_resolver`: callback that returns the macro body for a name,
+// or nullopt if not defined. Decouples the evaluator from any specific
+// Preprocessor — testable in isolation, reusable by any host. For an
+// integer-valued macro (`\`define WIDTH 32`), the resolver returns the
+// body verbatim; the evaluator parses it as an integer when used in
+// arithmetic context, otherwise the truthiness of "defined" alone
+// drives boolean context (`\`if FOO` is true iff FOO is defined and
+// resolves to a non-zero integer or to a string that doesn't parse as
+// an integer — defined-and-non-empty is truthy).
+std::optional<bool> default_pp_expr_eval(
+    const ValuePtr& cond,
+    const std::function<std::optional<std::string>(
+        const std::string& name)>& ref_resolver);
 
 // The user-facing entry point for preprocessing. Owns the active
 // PreprocessorState; orchestrates parse + walk for the configured
@@ -238,6 +379,52 @@ public:
     // duplicates suppressed). Returns the preprocessed text.
     std::string process_file(const std::string& path);
 
+    // ─── Three-mode API ─────────────────────────────────────────────
+    //
+    // Mode 1: parse the source through the preprocessor grammar and
+    // return the raw AST, without expanding `\`define / \`include /
+    // \`ifdef ...`. Useful for tooling that wants to inspect macro
+    // and include structure without paying expansion cost (or without
+    // having the surrounding source resolvable at all).
+    //
+    // No mutation of state_ macros / included_files / spans — pure
+    // parse. Returns ParseError on grammar failure; a no-top-rule
+    // grammar yields ParseError too (degenerate construction).
+    tl::expected<ValuePtr, ParseError>
+    parse(const std::string& source);
+
+    // Mode 2: expand a preprocessor AST into a Stream of expanded
+    // bytes ready to feed to a host Grammar::parse. State accumulates
+    // on the instance same as process_ast — macros, includes,
+    // warnings, and spans are all populated.
+    //
+    // The returned Stream owns the expanded byte buffer (via Stream's
+    // shared_ptr<void> owner_ slot); the buffer outlives this call,
+    // so callers can hold the Stream and consume it later.
+    //
+    // `source` is the original input text spans should reference; see
+    // process_ast() for the contract.
+    Stream
+    preprocess(const ValuePtr& ast, const std::string& source);
+
+    // Walk a pre-built AST. Bypasses the grammar layer entirely —
+    // useful for unit-testing the walker (and the dynamic_macros /
+    // expr_eval / undefined_handler callbacks) against synthesized
+    // ASTs, and for tooling that builds the AST through some other
+    // mechanism (programmatic, deserialized from JSON, etc.).
+    //
+    // `source` is the byte string the walker should treat as the
+    // original input — used by `locate_item` to position spans and
+    // emit text. For synthesized ASTs that don't correspond to a
+    // real source file, pass a synthetic string containing each
+    // referenced token (the helpers `synth_text` etc. in the test
+    // file build conforming sources). For ASTs deserialized from a
+    // real file, pass that file's contents.
+    //
+    // Returns the preprocessed text. State accumulates on the
+    // instance across calls, same as process().
+    std::string process_ast(const ValuePtr& ast, const std::string& source);
+
     // ─── Inspection ─────────────────────────────────────────────────
 
     const std::unordered_map<std::string, MacroDef>&
@@ -272,6 +459,46 @@ public:
     void restore(PreprocessorState state) { state_ = std::move(state); }
     void reset() { state_ = {}; }
 
+    // ─── Convenience wiring ────────────────────────────────────────
+
+    // Bind opts_.expr_eval to the generic AST evaluator above,
+    // resolving refs through this Preprocessor's macro table. Use
+    // when the preprocessor grammar produces the documented
+    // expression-AST shape and you don't need custom evaluation
+    // semantics on top of it.
+    //
+    //   Preprocessor pp(grammar);
+    //   pp.use_default_expr_eval();
+    //   auto out = pp.process(text);
+    //
+    // Overwrites any previously-set expr_eval callback. To extend
+    // the default (e.g. add custom `call` handlers), wire your own
+    // expr_eval that delegates to default_pp_expr_eval for the
+    // shapes it doesn't handle.
+    void use_default_expr_eval();
+
+    // Same as use_default_expr_eval() but for preprocessor grammars
+    // that capture `\`if` conditions as raw text (the
+    // sv_preprocessor.rawast shape). When the walker hands cond in as
+    // a StringValue, the callback parses it with `expr_grammar` first
+    // (typically loaded from grammars/sv_pp_expr.rawast), then feeds
+    // the resulting AST through default_pp_expr_eval.
+    //
+    //   Grammar pp = load("grammars/sv_preprocessor.rawast");
+    //   Grammar ex = load("grammars/sv_pp_expr.rawast");
+    //   Preprocessor p(pp);
+    //   p.use_default_expr_eval(ex);
+    //
+    // Cond values that are already structured (DictValue/ArrayValue)
+    // bypass the parse step and go straight to default_pp_expr_eval —
+    // so the same Preprocessor handles both grammar-captured text and
+    // process_ast-supplied synthesized ASTs.
+    //
+    // `expr_grammar` is captured by reference and must outlive the
+    // Preprocessor. A parse failure is recorded as a warning and the
+    // branch is treated as false (std::nullopt return).
+    void use_default_expr_eval(const Grammar& expr_grammar);
+
 private:
     // Walk the value tree produced by parsing through pp_grammar_,
     // dispatching on the `type` field that role-bearing rules emit.
@@ -289,15 +516,44 @@ private:
     // so they have direct access to state_ and opts_.
     void handle_define(const class DictValue& d);
     void handle_undef(const class DictValue& d);
+    // `consume_line=true` (default) is the line-based form used by
+    // mini_preprocessor where a `\`MACRO` call owns the whole line —
+    // src_cursor advances past the trailing newline and the
+    // expansion appends a `\n` to preserve line structure. With
+    // `consume_line=false` (text_line iterator) only the `\`NAME`
+    // (+ optional `(args)`) is consumed, so the macro use can sit
+    // mid-line surrounded by other text.
     void handle_macro_use(const class DictValue& d, std::string& out,
                           std::size_t& src_cursor,
                           const std::string& source,
-                          std::uint32_t parent_span_id);
+                          std::uint32_t parent_span_id,
+                          bool consume_line = true);
+
+    // Expand a `\`MACRO` use whose AST sits inside a substituted
+    // macro body — no source-mapped cursor or span tracking, just
+    // produce the text the use site would emit. Used by
+    // `render_macro_body_segments` to walk macro_use AST nodes that
+    // appeared inside the body of another macro after AST-level
+    // parameter substitution. Mirrors the matching logic of
+    // `handle_macro_use` (lookup, arity check, blue-paint cycle
+    // guard, undefined_handler dispatch, on_undefined policy) but
+    // emits to a string instead of `out`.
+    std::string render_macro_use_inline(const class DictValue& d);
+
+    // Render a (possibly post-substitution) macro body's segments
+    // to text. Bare StringValue runs emit verbatim; macro_use dicts
+    // recurse through `render_macro_use_inline`; other typed
+    // segments fall back to `render_segment` for leaf text.
+    std::string render_macro_body_segments(const class ArrayValue& segs);
     void handle_ifdef(const class DictValue& d, std::string& out,
                       std::size_t& src_cursor,
                       const std::string& source,
                       std::uint32_t parent_span_id,
                       bool invert);
+    void handle_if(const class DictValue& d, std::string& out,
+                   std::size_t& src_cursor,
+                   const std::string& source,
+                   std::uint32_t parent_span_id);
     void handle_include(const class DictValue& d, std::string& out,
                         std::size_t& src_cursor,
                         const std::string& source,
@@ -330,6 +586,17 @@ private:
     const Grammar&    pp_grammar_;
     PpOptions         opts_;
     PreprocessorState state_;
+
+    // Scoped guard set by `\`ifdef`/`\`ifndef`/`\`if` handlers when
+    // walking a NOT-TAKEN branch. The walker still traverses the
+    // branch (so src_cursor advances over the source bytes and
+    // nested directives' shapes are visited), but per-directive
+    // handlers check this flag and skip state mutations: handle_define
+    // doesn't register the macro, handle_undef doesn't erase, etc.
+    // Source-map spans and output bytes are also discarded by
+    // walk_or_discard, but those are already routed through a
+    // disposable buffer; this flag closes the macro-table gap.
+    bool suppress_side_effects_ = false;
 };
 
 } // namespace rawast

@@ -82,15 +82,13 @@ TEST_CASE("to_value: round-trip — JSON grammar reloads to equivalent shape") {
 
     // Parse the same input through both. The original.
     const std::string input = R"({"name": "rawast", "version": 2, "items": [1, 2, 3]})";
-    std::istringstream is1(input);
-    StreamReader sr1{is1};
-    auto p1 = g1.parse(sr1);
+    auto stream1 = Stream::from_string(input);
+    auto p1 = g1.parse(stream1);
     REQUIRE(p1);
 
     // The round-tripped grammar.
-    std::istringstream is2(input);
-    StreamReader sr2{is2};
-    auto p2 = g2.parse(sr2);
+    auto stream2 = Stream::from_string(input);
+    auto p2 = g2.parse(stream2);
     REQUIRE_MESSAGE(p2, "round-tripped grammar failed to parse: "
                         << (p2 ? "" : p2.error().message));
 }
@@ -124,14 +122,12 @@ TEST_CASE("to_value: rawast meta-grammar round-trips") {
         "use: std\n"
         "start: <X>\n"
         "X: sequence { repeat+2 int:nums[]=@ separator \",\" }\n";
-    std::istringstream is1(snippet);
-    StreamReader sr1{is1};
-    auto p1 = g1.parse(sr1);
+    auto stream1 = Stream::from_string(snippet);
+    auto p1 = g1.parse(stream1);
     REQUIRE(p1);
 
-    std::istringstream is2(snippet);
-    StreamReader sr2{is2};
-    auto p2 = g2.parse(sr2);
+    auto stream2 = Stream::from_string(snippet);
+    auto p2 = g2.parse(stream2);
     REQUIRE_MESSAGE(p2, "round-tripped meta-grammar failed: "
                         << (p2 ? "" : p2.error().message));
 }

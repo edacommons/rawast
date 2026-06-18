@@ -23,6 +23,7 @@
 #include <rawast/value.hpp>
 
 #include <cassert>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -374,9 +375,13 @@ struct ChildDisc {
 };
 
 std::vector<ChildDisc>
-collect_child_discriminators(const Grammar& g, const Node& seq) {
+collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
     std::vector<ChildDisc> out;
     if (seq.kind != NodeKind::Sequence) return out;
+    // Recursion depth guard against grammars where a Choice's alts
+    // reach back into this Sequence through a Ref chain (rare but
+    // possible; surfaced as a stack overflow without the cap).
+    if (depth > 4) return out;
     for (std::size_t i = 0; i + 1 < seq.children.size(); ++i) {
         const Node& a = g.node(g.resolve_ref(seq.children[i]));
         const Node& b = g.node(g.resolve_ref(seq.children[i + 1]));
@@ -390,6 +395,42 @@ collect_child_discriminators(const Grammar& g, const Node& seq) {
         auto multi = discriminator_choice_values(g, b);
         if (!multi.empty()) {
             out.push_back({fname->data(), std::move(multi)});
+        }
+    }
+    // Inline Choice children whose alts each carry a single
+    // discriminator on the same field are themselves discriminators:
+    // the dict's field must be in the union of alt values. Without
+    // this, a rule like
+    //
+    //   TAIL: sequence dict {
+    //       choice { '+':op="+", '-':op="-" },
+    //       <NEXT>:rhs=@
+    //   }
+    //
+    // exposes no discriminator to its enclosing Repeat — so a chain
+    // rule whose tail items use TAIL looks like a wildcard and
+    // accepts any dict whose `tail` field happens to be non-empty.
+    for (NodeId child_id : seq.children) {
+        const Node& c = g.node(g.resolve_ref(child_id));
+        if (c.kind != NodeKind::Choice) continue;
+        if (c.children.empty()) continue;
+        std::string common_field;
+        std::vector<ValuePtr> values;
+        bool ok = true;
+        for (NodeId alt : c.children) {
+            const Node& a = g.node(g.resolve_ref(alt));
+            auto alt_discs = collect_child_discriminators(g, a, depth + 1);
+            if (alt_discs.size() != 1) { ok = false; break; }
+            if (alt_discs[0].values.size() != 1) { ok = false; break; }
+            if (common_field.empty()) {
+                common_field = alt_discs[0].field;
+            } else if (alt_discs[0].field != common_field) {
+                ok = false; break;
+            }
+            values.push_back(alt_discs[0].values[0]);
+        }
+        if (ok && !values.empty()) {
+            out.push_back({std::move(common_field), std::move(values)});
         }
     }
     return out;
@@ -415,6 +456,119 @@ discriminator_pair_matches(const Grammar& g, const std::string& name,
         return false;
     }
     return std::nullopt;
+}
+
+// Recursive check: could this grammar node dispatch the given dict?
+// Used by the Sequence-Dict can_consume branch to validate inline
+// Choice children (and Choices nested inside them) without
+// committing to a particular dispatch path.
+//
+// Mirrors the prototype's `_check_element` — symmetry with parse:
+// any shape parse can accept, save can dispatch through the same
+// recursion. Without this, an inline Choice with non-trivial alts
+// (nested Choices, Refs, Sequences with their own discriminators)
+// reads as a catch-all to the dispatcher and bad dicts commit then
+// fail at emission with "no matching grammar alternative for value
+// at save."
+//
+// Recursion rules:
+//
+//   * Choice — at least one alt must be dispatchable.
+//   * Ref    — resolve and recurse into the body.
+//   * Sequence — recurse into Choice / Ref children; check every
+//     (V-name + expr) pair as a discriminator (false → reject this
+//     subtree). Other children don't constrain at this level.
+//   * Other  — permissive; let the actual emission path decide.
+bool dispatchable_for_dict(const Grammar& g, NodeId node_id,
+                            const DictValue& dict,
+                            std::unordered_set<std::uint32_t>& visited) {
+    NodeId resolved = g.resolve_ref(node_id);
+    // Cycle guard. TCL has BRACKET_WORD → ... → SCRIPT → COMMAND →
+    // ... → BRACKET_WORD (command substitution inside a script).
+    // Without the visited set the recursion stack-overflows on any
+    // real Tcl input. When a node is already on the stack, assume
+    // it's dispatchable — the surrounding context will reject
+    // mismatches at the actual emission site.
+    if (!visited.insert(resolved.value()).second) return true;
+    bool result;
+    {
+        const Node& n = g.node(resolved);
+        switch (n.kind) {
+            case NodeKind::Choice: {
+                if (n.children.empty()) { result = true; break; }
+                result = false;
+                for (NodeId alt : n.children) {
+                    if (dispatchable_for_dict(g, alt, dict, visited)) {
+                        result = true;
+                        break;
+                    }
+                }
+                break;
+            }
+            case NodeKind::Sequence: {
+                // Scope-aware walk: a V-name marker "claims" the
+                // next sibling — that sibling consumes a field's
+                // value (or iterates a field's array), so its own
+                // discriminators apply to the FIELD'S value, not the
+                // outer dict. Without distinguishing this case from
+                // a bare Ref / Choice, we'd recurse into `<X>` with
+                // the outer dict for `<X>:foo=@` and reject because
+                // X's discriminator doesn't match outer-level fields.
+                result = true;
+                bool prev_was_vname = false;
+                for (std::size_t i = 0; i < n.children.size(); ++i) {
+                    const Node& c = g.node(g.resolve_ref(n.children[i]));
+                    if (c.kind == NodeKind::Value && c.is_name) {
+                        // V-name marker. Try the discriminator-pair
+                        // form against the next sibling (Value-const,
+                        // Key-with-Value-child, Ref-to-Choice-of-keys
+                        // — discriminator_pair_matches checks those).
+                        // For non-discriminator siblings (Refs,
+                        // Choices, Parse), no constraint is enforced
+                        // here; the sibling will be consumed by the
+                        // V-name binding at emission time and its
+                        // own discriminators apply to the field's
+                        // value, not the outer dict.
+                        if (i + 1 < n.children.size()) {
+                            auto fname = as_string(c.value);
+                            if (fname) {
+                                const Node& nb = g.node(
+                                    g.resolve_ref(n.children[i + 1]));
+                                auto m = discriminator_pair_matches(
+                                    g, fname->data(), nb, dict);
+                                if (m.has_value() && !*m) {
+                                    result = false;
+                                    break;
+                                }
+                            }
+                        }
+                        prev_was_vname = true;
+                        continue;
+                    }
+                    if (prev_was_vname) {
+                        // Consumed by the preceding V-name binding;
+                        // skip discriminator-recursion on it.
+                        prev_was_vname = false;
+                        continue;
+                    }
+                    if (c.kind == NodeKind::Choice
+                        || c.kind == NodeKind::Ref) {
+                        if (!dispatchable_for_dict(g, n.children[i],
+                                                    dict, visited)) {
+                            result = false;
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+            default:
+                result = true;
+                break;
+        }
+    }
+    visited.erase(resolved.value());
+    return result;
 }
 
 // Detect the `repeat <X>:field[]=@` pattern at a Sequence child position
@@ -447,8 +601,6 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     const Node& wrapper = g.node(
         g.resolve_ref(repeat_node.children[item_idx]));
     if (wrapper.kind != NodeKind::Sequence) return std::nullopt;
-    // First wrapper child should be the V-name marker the loader inserted
-    // for the `field[]=@` binding; the second is the actual item.
     if (wrapper.children.size() < 2) return std::nullopt;
     const Node& vn = g.node(g.resolve_ref(wrapper.children[0]));
     if (vn.kind != NodeKind::Value || !vn.is_name) return std::nullopt;
@@ -456,26 +608,27 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     if (!vn_name) return std::nullopt;
     bool is_list = false;
     std::string field = strip_list_suffix(vn_name->data(), is_list);
-    if (!is_list) return std::nullopt;  // not the `[]=@` pattern
+    if (!is_list) return std::nullopt;
     const Node& item = g.node(g.resolve_ref(wrapper.children[1]));
     auto discs = collect_child_discriminators(g, item);
-    if (discs.empty()) return std::nullopt;
+    // n-ary chain pattern: the separator can carry the rule's
+    // discriminator as a const-binding (`separator '||':op="||"`).
+    // Collect those too; if neither item nor separator yields any,
+    // there's no discriminator and the function is inapplicable.
+    std::vector<ChildDisc> sep_discs;
+    if (repeat_node.has_separator && !repeat_node.children.empty()) {
+        const Node& sep = g.node(g.resolve_ref(repeat_node.children[0]));
+        sep_discs = collect_child_discriminators(g, sep);
+    }
+    if (discs.empty() && sep_discs.empty()) return std::nullopt;
     auto it = dict.data().find(field);
     if (it == dict.data().end()) {
-        // Missing / empty list. `repeat+` (min>=1) requires at least
-        // one entry, so absence rules this alt out. `repeat` (min=0)
-        // is ambiguous — leave it nullopt so the surrounding
-        // field-presence walk can decide.
-        return repeat_node.min > 0
-            ? std::optional<bool>{false}
-            : std::nullopt;
+        return repeat_node.min > 0 ? std::optional<bool>{false} : std::nullopt;
     }
     auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
     if (!arr) return std::nullopt;
     if (arr->data().empty()) {
-        return repeat_node.min > 0
-            ? std::optional<bool>{false}
-            : std::nullopt;
+        return repeat_node.min > 0 ? std::optional<bool>{false} : std::nullopt;
     }
     for (const auto& elt : arr->data()) {
         auto elt_dict = std::dynamic_pointer_cast<DictValue>(elt);
@@ -485,13 +638,28 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
             if (eit == elt_dict->data().end()) return false;
             bool ok = false;
             for (const auto& v : d.values) {
-                if (values_equal_v2(eit->second, v.get())) {
-                    ok = true;
-                    break;
-                }
+                if (values_equal_v2(eit->second, v.get())) { ok = true; break; }
             }
             if (!ok) return false;
         }
+    }
+    // n-ary chain pattern: verify the rule-level discriminator the
+    // separator carries (e.g. `separator '||':op="||"` means
+    // dict[op] must equal "||" for this rule to apply). Without
+    // this check, two CHAIN rules differing only in operator —
+    // OR_CHAIN with '||', AND_CHAIN with '&&' — both look like
+    // catch-alls and the dispatcher picks whichever comes first.
+    for (const auto& d : sep_discs) {
+        auto dit = dict.data().find(d.field);
+        if (dit == dict.data().end()) return false;
+        bool ok = false;
+        for (const auto& v : d.values) {
+            if (values_equal_v2(dit->second, v.get())) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) return false;
     }
     return true;
 }
@@ -518,20 +686,35 @@ bool has_explicit_discriminator(const Grammar& g, NodeId alt_id) {
             // type=@` pattern).
             if (!discriminator_choice_values(g, b).empty()) return true;
         }
-        // Bare Repeat children carrying a V-name + discriminating item.
+        // Bare Repeat children carrying a V-name + discriminating
+        // item, OR a separator with a const-binding discriminator.
+        // The second case covers the n-ary chain pattern:
+        //   repeat+2 <NEXT>:args[]=@ separator '||':op="||"
+        // where the rule-distinguishing constant lives on the
+        // separator, not on the item. Without this branch the rule
+        // looks like a wildcard catch-all and the save dispatcher
+        // routes every {args:...}-shaped dict here regardless of op.
         for (NodeId child_id : n.children) {
             const Node& cn = g.node(g.resolve_ref(child_id));
             if (cn.kind != NodeKind::Repeat) continue;
             std::size_t item_idx = cn.has_separator ? 1 : 0;
-            if (item_idx >= cn.children.size()) continue;
-            const Node& wrapper = g.node(
-                g.resolve_ref(cn.children[item_idx]));
-            if (wrapper.kind != NodeKind::Sequence) continue;
-            if (wrapper.children.size() < 2) continue;
-            const Node& item = g.node(
-                g.resolve_ref(wrapper.children[1]));
-            if (!collect_child_discriminators(g, item).empty()) {
-                return true;
+            if (item_idx < cn.children.size()) {
+                const Node& wrapper = g.node(
+                    g.resolve_ref(cn.children[item_idx]));
+                if (wrapper.kind == NodeKind::Sequence
+                    && wrapper.children.size() >= 2) {
+                    const Node& item = g.node(
+                        g.resolve_ref(wrapper.children[1]));
+                    if (!collect_child_discriminators(g, item).empty()) {
+                        return true;
+                    }
+                }
+            }
+            if (cn.has_separator && !cn.children.empty()) {
+                const Node& sep = g.node(g.resolve_ref(cn.children[0]));
+                if (!collect_child_discriminators(g, sep).empty()) {
+                    return true;
+                }
             }
         }
         if (!n.children.empty()) {
@@ -793,6 +976,30 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 }
                 found_disc_match = true;
             }
+            // Inline-Choice walk via the recursive dispatchability
+            // check. Symmetric with parse: a Choice in the rule body
+            // dispatches if at least one alt could fire on the
+            // current dict — checked recursively so nested Choices,
+            // Refs, and Sequences with their own discriminators all
+            // participate. Without this, the rule reads as a catch-
+            // all and the dispatcher commits to it for any dict
+            // whose field-presence walk passes — then errors at
+            // emission with "no matching grammar alternative for
+            // value at save."
+            for (NodeId child_id : n.children) {
+                const Node& orig = g.node(child_id);
+                // Only fire on INLINE Choice children — Refs that
+                // resolve to a Choice body are scope-changers (the
+                // V-name preceding the Ref takes care of dispatch),
+                // not in-body discriminators.
+                if (orig.kind != NodeKind::Choice) continue;
+                std::unordered_set<std::uint32_t> visited;
+                if (!dispatchable_for_dict(g, child_id, dict, visited)) {
+                    if (orig.is_optional) continue;
+                    return false;
+                }
+                found_disc_match = true;
+            }
             if (found_disc_match) return true;
             // No discriminator matched. Fall back to a field-presence
             // check: every REQUIRED (non-optional) Value-name marker
@@ -1033,12 +1240,6 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
     }
 
     case NodeKind::Choice: {
-        // Try each alternative against the peek. The Choice is
-        // dispatchable iff at least one alternative could consume.
-        // Previous coarse "any non-null peek" check was too
-        // permissive and let Repeat-over-Choice loops keep iterating
-        // when no alt actually matched, masking the real "no
-        // dispatchable field" condition in fixed-schema mode.
         if (!peek_value) return false;
         for (NodeId alt : n.children) {
             if (can_consume_peek(g, alt, peek_value, peek_key, s)) return true;
@@ -1067,6 +1268,17 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         if (n.subparse_start.valid()) return true;
         return peek_value->type() == ValueType::String;
 
+    case NodeKind::Scope:
+        // Scope at the top of an alt. Parse-side produced either a
+        // StringValue (default body mode) or an ArrayValue (array
+        // container mode); with #subparse it's a structured sub-tree.
+        if (!peek_value) return false;
+        if (n.subparse_start.valid()) return true;
+        if (n.container == Container::Array) {
+            return peek_value->type() == ValueType::Array;
+        }
+        return peek_value->type() == ValueType::String;
+
     case NodeKind::Ref:
         return can_consume_peek(g, g.resolve_ref(node_id), peek_value, peek_key, s);
     }
@@ -1079,12 +1291,10 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
 
 NodeId choose_alternative_v2(const Grammar& g, const Node& choice_node,
                               const SaveState& s) {
-    // First pass: try alternatives with explicit discriminators.
     for (NodeId alt : choice_node.children) {
         if (!has_explicit_discriminator(g, alt)) continue;
         if (can_consume(g, alt, s)) return alt;
     }
-    // Second pass: catch-all alternatives (no explicit discriminator).
     for (NodeId alt : choice_node.children) {
         if (has_explicit_discriminator(g, alt)) continue;
         if (can_consume(g, alt, s)) return alt;
@@ -1243,6 +1453,73 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 "Raw save expects a StringValue payload"});
         }
         out << sv->data();
+        return {};
+    }
+
+    case NodeKind::Scope: {
+        // Scope save: emit the captured body bytes between start and
+        // stop. Scope has no delimiters of its own — the surrounding
+        // sequence's siblings carry start and stop literals and emit
+        // them in their own do_consume cycles. Two body modes:
+        //   - default (StringValue payload): body was captured verbatim
+        //     on the parse side; emit it as-is. With #subparse, the
+        //     stored value is the structured sub-tree — re-serialize
+        //     through the subparse rule to recover the body text first.
+        //   - array container (ArrayValue payload): body is a list of
+        //     segments; each StringValue segment emits verbatim, each
+        //     typed segment dispatches to the first INNER whose
+        //     can_consume_peek matches and save-emits through it.
+        const bool is_optional = n.is_optional;
+        auto r = s.pull_value(is_optional);
+        if (!r) return tl::unexpected(r.error());
+        ValuePtr v = r->value ? r->value : null_value();
+
+        if (n.subparse_start.valid()) {
+            // Subparse round-trip — independent of container mode.
+            SaveState sub_s;
+            sub_s.push_q({v, false, ""});
+            auto sub_r = do_consume(g, out, n.subparse_start,
+                                    sub_s, 0, pretty);
+            if (!sub_r) return tl::unexpected(sub_r.error());
+        } else if (n.container == Container::Array) {
+            // Array mode: iterate segments, dispatch each.
+            auto arr = as_array(v);
+            if (!arr) {
+                return tl::unexpected(SaveError{
+                    "scope array save expects an ArrayValue payload"});
+            }
+            for (const auto& seg : arr->data()) {
+                if (!seg) continue;
+                // Raw text segments emit verbatim.
+                if (auto sv = as_string(seg)) {
+                    out << sv->data();
+                    continue;
+                }
+                // Typed segment: dispatch to the first matching INNER.
+                bool dispatched = false;
+                for (NodeId inner_id : n.children) {
+                    if (!can_consume_peek(g, inner_id, seg, "", s)) continue;
+                    SaveState seg_s;
+                    seg_s.push_q({seg, false, ""});
+                    auto sr = do_consume(g, out, inner_id,
+                                          seg_s, depth, pretty);
+                    if (sr) { dispatched = true; break; }
+                }
+                if (!dispatched) {
+                    return tl::unexpected(SaveError{
+                        "scope array save: no INNER matches a segment"});
+                }
+            }
+        } else {
+            // Default string mode.
+            auto sv = as_string(v);
+            if (!sv) {
+                return tl::unexpected(SaveError{
+                    "scope save expects a StringValue payload"});
+            }
+            out << sv->data();
+        }
+
         return {};
     }
 
@@ -1536,6 +1813,197 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     return {};
 }
 
+// Inverse of `compact_opchain` (defined in grammar.cpp). When the
+// save engine is about to dispatch a value through an opchain-marked
+// rule, the input AST is in `{op, args[]}` form; the rule's grammar
+// expects always-wrap `{lhs, tail:[{op,rhs}, ...]}`. Expand
+// recursively before save.
+//
+// Top-level wrap: a non-chain atom (e.g. `{type:"num", value:1}`) is
+// wrapped as `{lhs: atom, tail: []}` so the rule's `<NEXT>:lhs=@`
+// binding can find the `lhs` field. The caller decides when to wrap
+// (only at the top of an opchain rule's dispatch, not on every
+// recursion — args inside compacted chains are leaves at the NEXT
+// precedence level and shouldn't be wrapped here).
+// Build a map from `op` string → tail-rule-group id. Two ops share a
+// group id iff they appear in the same grammar rule's `op`
+// discriminator set — that is, the same tail rule accepts them
+// both. Used by `expand_opchain` to decide whether `args[0]` and the
+// outer chain op are part of the same chain (absorb) or separate
+// sub-expressions at different precedence levels (don't absorb).
+//
+// Example for sv_pp_expr:
+//   OR_TAIL    {"||"}              → group 0
+//   AND_TAIL   {"&&"}              → group 1
+//   EQ_TAIL    {"==", "!="}        → group 2
+//   COMPARE    {"<", ">", "<=", ">="} → group 3
+//   ADD_TAIL   {"+", "-"}          → group 4
+//   MUL_TAIL   {"*", "/", "%"}     → group 5
+//   NOT_EXPR   {"!"}               → group 6  (unary, args.size==1; never absorbed)
+//
+// `1 + 2 - 3` compacted: outer "-" → 4, inner "+" → 4. Same → absorb
+// into a single ADD chain `{lhs:1, tail:[{+,2}, {-,3}]}`.
+//
+// `A == B || C == D` compacted: outer "||" → 0, inner "==" → 2.
+// Different → don't absorb; the inner EQ chain stays as a complete
+// `{lhs, tail}` sub-tree at OR's lhs position.
+std::unordered_map<std::string, int>
+build_op_compat_map(const Grammar& g) {
+    std::unordered_map<std::string, int> out;
+    int next_id = 0;
+    for (const auto& [_, rule_id] : g.named_rules()) {
+        NodeId rid = g.resolve_ref(rule_id);
+        if (rid.value() >= g.node_count()) continue;
+        const Node& n = g.node(rid);
+        if (n.kind != NodeKind::Sequence) continue;
+        auto discs = collect_child_discriminators(g, n);
+        // Find the discriminator on the `op` field, if any.
+        for (const auto& d : discs) {
+            if (d.field != "op") continue;
+            int id = next_id++;
+            for (const auto& v : d.values) {
+                if (auto s = as_string(v)) {
+                    // First-seen mapping wins. Within one grammar each
+                    // op normally appears in exactly one tail rule.
+                    out.emplace(s->data(), id);
+                }
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+// Returns true iff both ops route to the same tail rule (same group
+// id in the compat map). Unknown ops never absorb (conservative).
+bool ops_in_same_tail_rule(
+    const std::unordered_map<std::string, int>& op_compat,
+    const std::string& a, const std::string& b) {
+    auto ait = op_compat.find(a);
+    auto bit = op_compat.find(b);
+    if (ait == op_compat.end() || bit == op_compat.end()) return false;
+    return ait->second == bit->second;
+}
+
+ValuePtr expand_opchain(
+    const ValuePtr& v,
+    const std::unordered_map<std::string, int>& op_compat) {
+    if (!v) return v;
+
+    if (auto arr = as_array(v)) {
+        auto out = std::make_shared<ArrayValue>();
+        for (const auto& e : arr->data()) {
+            out->data().push_back(expand_opchain(e, op_compat));
+        }
+        return out;
+    }
+
+    auto d = as_dict(v);
+    if (!d) return v;
+
+    // Detect compacted shape: `{op:OP, args:[a, b, ...]}` with at
+    // least two args. Unary `{op:"!", args:[x]}` (NOT_EXPR etc.)
+    // stays as-is; it's not a chain.
+    auto op_it = d->data().find("op");
+    auto args_it = d->data().find("args");
+    auto args_arr = (args_it != d->data().end())
+        ? as_array(args_it->second) : nullptr;
+    bool is_chain = (op_it != d->data().end())
+                    && args_arr
+                    && args_arr->data().size() >= 2;
+
+    if (!is_chain) {
+        // Not compacted at this level — recurse on field values so
+        // nested compacted nodes get expanded too.
+        auto out = std::make_shared<DictValue>();
+        for (const auto& [k, val] : d->data()) {
+            out->data().emplace(k, expand_opchain(val, op_compat));
+        }
+        return out;
+    }
+
+    auto op_sv = as_string(op_it->second);
+    if (!op_sv) return v;
+    const std::string& op = op_sv->data();
+
+    // Op-aware absorb: if args[0] is itself a chain whose op routes
+    // to the SAME tail rule as the outer op, the two are part of one
+    // chain (e.g. `1+2-3` → outer "-" and inner "+" are both
+    // ADD_TAIL). Absorb args[0]'s lhs as our lhs and prepend its
+    // tail. Otherwise — different precedence level — keep args[0]
+    // expanded as a complete sub-tree at the outer lhs position.
+    ValuePtr first = expand_opchain(args_arr->data()[0], op_compat);
+    ValuePtr lhs;
+    std::vector<ValuePtr> tail;
+    bool absorbed = false;
+    if (auto fd = as_dict(first)) {
+        auto fl_it = fd->data().find("lhs");
+        auto ft_it = fd->data().find("tail");
+        if (fl_it != fd->data().end() && ft_it != fd->data().end()) {
+            // first is a fully-expanded chain wrapper. Check if its
+            // ORIGINAL op (before expand collapsed lhs/tail) belongs
+            // to the same tail rule as outer. We recover it from the
+            // tail entries' op — they all have the chain's op.
+            auto ft_arr = as_array(ft_it->second);
+            if (ft_arr && !ft_arr->data().empty()) {
+                auto te0 = as_dict(ft_arr->data()[0]);
+                if (te0) {
+                    auto teo = te0->data().find("op");
+                    if (teo != te0->data().end()) {
+                        if (auto teos = as_string(teo->second)) {
+                            if (ops_in_same_tail_rule(
+                                op_compat, op, teos->data())) {
+                                lhs = fl_it->second;
+                                for (const auto& t : ft_arr->data()) {
+                                    tail.push_back(t);
+                                }
+                                absorbed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (!absorbed) {
+        lhs = first;
+    }
+
+    // Each remaining arg becomes a tail entry `{op:OP, rhs:arg}`.
+    for (std::size_t i = 1; i < args_arr->data().size(); ++i) {
+        auto te = std::make_shared<DictValue>();
+        te->data().emplace("op", make_string(op));
+        te->data().emplace("rhs", expand_opchain(args_arr->data()[i], op_compat));
+        tail.push_back(te);
+    }
+
+    auto out = std::make_shared<DictValue>();
+    out->data().emplace("lhs", lhs);
+    auto tail_arr_v = std::make_shared<ArrayValue>();
+    for (const auto& t : tail) tail_arr_v->data().push_back(t);
+    out->data().emplace("tail", tail_arr_v);
+    // Carry any other wrapper-level fields (not op/args).
+    for (const auto& [k, val] : d->data()) {
+        if (k == "op" || k == "args") continue;
+        out->data().emplace(k, expand_opchain(val, op_compat));
+    }
+    return out;
+}
+
+// Ensure top-level value is wrapped as `{lhs:..., tail:[]}` if it
+// isn't already a chain shape. Used by save-side opchain dispatch
+// so the start rule's `<NEXT>:lhs=@` binding always finds the
+// `lhs` field, even for atoms (`1` → `{lhs:{type:num,value:1},
+// tail:[]}`).
+ValuePtr wrap_atom_as_chain(const ValuePtr& v) {
+    if (!v) return v;
+    if (auto d = as_dict(v); d && d->data().count("lhs")) return v;
+    auto out = std::make_shared<DictValue>();
+    out->data().emplace("lhs", v);
+    out->data().emplace("tail", std::make_shared<ArrayValue>());
+    return out;
+}
+
 } // namespace
 
 // Definition of Grammar::save lives here (rather than in
@@ -1551,9 +2019,31 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     // for the duration of this save call. Idempotent and amortised
     // across subsequent calls.
     ensure_refs_resolved_();
+    if (!start.valid()) start = top();
+    // `#opchain` pre-process: when the start rule chain carries the
+    // flag, the input AST is in compacted `{op, args[]}` form but
+    // the grammar expects always-wrap `{lhs, tail:[...]}`. Expand
+    // recursively, then wrap atoms so the top-level rule's
+    // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
+    if (has_opchain_in_chain(start)) {
+        auto op_compat = build_op_compat_map(*this);
+        value = expand_opchain(value, op_compat);
+        // Wrap atoms only when the start chain resolves to a
+        // Sequence-Dict (plain always-wrap pattern, like
+        // test_opchain's flat ADD grammar). For the
+        // `choice { CHAIN, NEXT }` ladder pattern used by sv_pp_expr,
+        // atoms naturally fall through the catch-all NEXT and the
+        // wrap would break dispatch (the dict would have
+        // `lhs`+`tail:[]` instead of the leaf's `type` field, so
+        // PRIMARY's type-discriminated leaves wouldn't match).
+        NodeId resolved_start = resolve_ref(start);
+        if (resolved_start.value() < node_count()
+            && node(resolved_start).kind == NodeKind::Sequence) {
+            value = wrap_atom_as_chain(value);
+        }
+    }
     SaveState s;
     s.push_q({value, false, ""});
-    if (!start.valid()) start = top();
     return do_consume(*this, out, start, s, 0, pretty);
 }
 

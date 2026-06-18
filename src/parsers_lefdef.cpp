@@ -36,25 +36,24 @@ bool is_identifier_stop(char c) {
 
 LefdefIdentifierParser::LefdefIdentifierParser() : Parser("identifier") {}
 
-ParseResult LefdefIdentifierParser::parse(StreamReader& sr) {
+WalkResult LefdefIdentifierParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
-    std::string ident;
     while (true) {
         auto c = sr.peek();
         if (!c || is_identifier_stop(*c)) break;
-        ident.push_back(*c);
+        accum_.push_back(*c);
         sr.get();
     }
 
-    if (ident.empty()) {
+    if (accum_.empty()) {
         sr.reject();
         return tl::unexpected(ParseError{start, "expected LEF/DEF identifier"});
     }
 
     sr.accept();
-    return make_string(std::move(ident));
+    return {};
 }
 
 SaveResult LefdefIdentifierParser::unparse(const Value& value) const {
@@ -70,7 +69,7 @@ SaveResult LefdefIdentifierParser::unparse(const Value& value) const {
 
 LefdefLineCommentParser::LefdefLineCommentParser() : Parser("line_comment") {}
 
-ParseResult LefdefLineCommentParser::parse(StreamReader& sr) {
+WalkResult LefdefLineCommentParser::walk(StreamReader& sr) {
     sr.mark();
     const Position start = sr.position();
 
@@ -88,6 +87,12 @@ ParseResult LefdefLineCommentParser::parse(StreamReader& sr) {
     }
 
     sr.accept();
+    return {};
+}
+
+ValuePtr LefdefLineCommentParser::value() const {
+    // Comments carry no payload; the parser exists for its ignore-list
+    // side-effect (consume bytes, emit nothing).
     return null_value();
 }
 
