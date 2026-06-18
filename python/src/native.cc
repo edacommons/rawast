@@ -14,6 +14,7 @@
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_gdsii.hpp>
+#include <rawast/parsers_sv.hpp>
 #include <rawast/parsers_lefdef.hpp>
 #include <rawast/parsers_tcl.hpp>
 #include <rawast/parsers_registry.hpp>
@@ -119,6 +120,7 @@ NB_MODULE(_native, m) {
     rawast::register_std_parser_group();
     rawast::register_gdsii_parser_group();
     rawast::register_lefdef_parser_group();
+    rawast::register_sv_parser_group();
     rawast::register_tcl_parser_group();
 
     // Stream — opaque Python type. The canonical Grammar input.

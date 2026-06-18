@@ -1,0 +1,2965 @@
+// systemverilog.rawast — SystemVerilog grammar (Verilog 2001 synthesizable
+// subset as the foundation; SV-1800 extensions added incrementally).
+//
+// Scope of this first pass:
+//
+//   • Module declarations: header, parameter port list, port list
+//     (both ANSI and non-ANSI styles), module items, endmodule.
+//   • Module items: net/reg/logic/integer declarations, parameter
+//     declarations, continuous assigns (`assign`), procedural blocks
+//     (`always`, `always_ff`, `always_comb`, `always_latch`, `initial`),
+//     module instantiations, generate blocks (loop/if/case),
+//     task and function declarations.
+//   • Statements: blocking and non-blocking assignment, if/else,
+//     case/casex/casez, begin/end blocks (with labels), for/while/
+//     repeat/forever loops, disable, wait, system task calls.
+//   • Event control: `@(posedge clk or negedge rst_n)`, `@*`, named
+//     events, delay control `#5`.
+//   • Expressions: full ~13-level precedence chain — conditional →
+//     logical-or → logical-and → bitwise-or → bitwise-xor → bitwise-and
+//     → equality → relational → shift → add/sub → mul/div/mod → power →
+//     unary → primary.
+//   • Primaries: numbers (every SV literal form via sv_number),
+//     identifiers, hierarchical references, bit/part selects,
+//     concatenation, replication, parens, function calls, system
+//     task/function calls.
+//
+// NOT in this first pass (separate issues / future grammar files):
+//
+//   • Preprocessor (`define, `ifdef, `include) — separate phase.
+//   • Classes, interfaces, modports, packages — SystemVerilog OOP.
+//   • SVA assertions and properties — via subparse from SV grammar.
+//   • Constraints, randomization, covergroups — testbench features.
+//   • Specify blocks, UDP declarations, `defparam`.
+//   • Typedef and user-defined types — needs symbol-table tracking;
+//     today, declarations must use built-in keywords (wire/reg/logic).
+//
+// Design choices:
+//
+//   • Strict keywords (single-quote `'token'`) throughout — prevents
+//     keyword/identifier collisions like `always` matching `always_inst`.
+//   • Direct `{type, ...}` IR emission via bindings; no post-parse
+//     lowering step.
+//   • Math operator chains (`a + b - c + d`) require parentheses for
+//     3+ operands. PEG can't left-fold; this design choice trades
+//     ergonomic source for grammar simplicity. Real SV code rarely
+//     hits this — comparisons and arithmetic almost always bracket.
+//   • Both ANSI-style and Verilog-95-style port lists supported. The
+//     Choice between them triggers an informational LL(k) warning;
+//     accept (it's intentional fall-through).
+
+use: std, sv
+
+start: <SOURCE_TEXT>
+
+// ─── File level ─────────────────────────────────────────────────────────
+
+// Top-level ignore: whitespace + both comment styles. SV LRM §5.4
+// permits both `//` and `/* */`; the std parsers handle both.
+SOURCE_TEXT ignore whitespace line_comment block_comment: sequence dict {
+  <DESCRIPTIONS>:descriptions=@
+}
+
+// Wrap the repeat in its own `sequence array` rule so save-side
+// dispatch can iterate the array cleanly. Putting the repeat
+// directly in SOURCE_TEXT (`repeat <DESCRIPTION>:descriptions[]=@`)
+// breaks Choice dispatch because the pending-name path can't find
+// the top dict scope at the moment alt-selection runs — peek_value
+// ends up empty/wrong-typed and every alt's can_consume returns
+// false. The extra rule resolves cleanly per the tcl.SCRIPT pattern.
+DESCRIPTIONS: sequence array {
+  repeat <DESCRIPTION>
+}
+
+// Flat Choice. Preprocessor directives (`define / `undef / `include /
+// `ifdef / `ifndef) are NOT part of this list — the SV grammar is
+// designed for input that's already been through the preprocessor
+// pipeline. Load the `sv_preprocessor` grammar separately and run
+// the source through it before handing the result to this parser.
+DESCRIPTION: choice {
+  <SV_ATTRIBUTE>,
+  <DPI_IMPORT>,
+  <DPI_EXPORT>,
+  <PACKAGE_DECL>,
+  <INTERFACE_DECL>,
+  <CLASS_DECL_VIRTUAL>,
+  <CLASS_DECL_PLAIN>,
+  <UDP_DECL>,
+  <CONFIG_DECL>,
+  <PROGRAM_DECL>,
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>,
+  <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_USERTYPE_STMT>,
+  <LOCALPARAM_DECL_STMT>,
+  <IMPORT_STMT>,
+  <EXPORT_STMT>,
+  <MACRO_STMT>,
+  <FUNCTION_DECL>,
+  <TASK_DECL>,
+  <MODULE_DECL>,
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <CONT_ASSIGN>,
+  <ALWAYS_BLOCK>,
+  <INITIAL_BLOCK>,
+  <CONCURRENT_ASSERT>,
+  <USER_TYPED_DECL>
+}
+
+// SV-1800 attribute syntax: `(* attr_name = value, attr_name2 = value, ... *)`.
+// Attributes can appear before nearly any declaration to provide
+// tool-specific hints. Pure parse — body captured raw.
+SV_ATTRIBUTE: sequence dict {
+  "(*":type="attribute",
+  *:body=@,
+  "*)"
+}
+
+// `import "DPI-C" [pure | context] [c_name =] function|task NAME (args);`
+// Foreign function interface declaration. Body captured raw to the
+// trailing `;` so the full signature (return type, args with default
+// values, modifiers like `pure`/`context`) parses uniformly.
+DPI_IMPORT: sequence dict {
+  'import':@:type="dpi_import",
+  string:dpi_spec=@,
+  *:body=@,
+  ";"
+}
+
+// `export "DPI-C" [c_name =] function|task NAME;` — DPI export.
+DPI_EXPORT: sequence dict {
+  'export':@:type="dpi_export",
+  string:dpi_spec=@,
+  *:body=@,
+  ";"
+}
+
+// ─── Module declaration ─────────────────────────────────────────────────
+
+MODULE_DECL: sequence dict {
+  <MODULE_KEYWORD>:keyword=@:type="module",
+  <IDENT_OR_MACRO>:name=@,
+  ?<MODULE_HEADER_IMPORT>:header_import=@,
+  ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<PORT_LIST>:ports=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endmodule',
+  ?<END_LABEL>:end_label=@
+}
+
+// `module foo import pkg::*; #(...) (...)` — SV-1800 §23.2.1
+// allows package imports immediately after the module name.
+// Captures the import declarations as raw text up to the next
+// non-import token (`#`, `(`, or `;`).
+MODULE_HEADER_IMPORT: sequence dict {
+  'import':@:type="module_header_import",
+  *:body=@,
+  ";"
+}
+
+// SV adds `program` and `macromodule` as module-equivalent keywords;
+// keep them under one rule so the same item grammar applies.
+MODULE_KEYWORD: choice {
+  'module':@, 'macromodule':@, 'program':@
+}
+
+// `#(parameter A = 4, parameter B = 8)`. `localparam` may also appear
+// inside the port list for derived parameters that can't be
+// overridden by the instantiator. Each entry is `<PARAM_DECL_OR_LOCAL>`.
+PARAM_PORT_LIST: sequence dict {
+  "#", "(",
+  repeat+ <PARAM_DECL_OR_LOCAL>:params[]=@ separator ",",
+  ")"
+}
+
+// Order matters: PARAM_DECL_VALUE before PARAM_DECL_USERTYPE so the
+// built-in TYPE_SPEC keywords (`int`, `bit`, `logic`, …) take priority
+// over USERTYPE's `sv_identifier:type_spec=@` which would otherwise
+// happily consume them. PARAM_DECL_VALUE additionally REQUIRES
+// `<TYPE_SPEC>` (not optional) so it doesn't gobble `parameter
+// MyType x` — that needs to fall through to USERTYPE.
+PARAM_DECL_OR_LOCAL: choice {
+  <PARAM_DECL_LOCALPARAM>,
+  <PARAM_DECL_TYPE>,
+  <PARAM_DECL_TYPE_IMPLICIT>,
+  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_UNTYPED>,
+  <PARAM_DECL_USERTYPE>,
+  <PARAM_DECL_IMPLICIT>
+}
+
+// `localparam [type] NAME = expr` — non-overridable derived parameter.
+PARAM_DECL_LOCALPARAM: sequence {
+  'localparam':@:type="localparam_port",
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
+}
+
+// Non-container sequence: its emitted bindings flow into the
+// surrounding rule's dict (PARAM_DECL_STMT wraps it with a trailing
+// `;`; PARAM_PORT_LIST uses it directly). Save-side dispatch can't
+// handle a container=Dict Ref referenced without an outer binding —
+// non-container sidesteps that.
+// Same ordering note as PARAM_DECL_OR_LOCAL — VALUE before USERTYPE
+// so built-in type keywords win.
+PARAM_DECL: choice {
+  <PARAM_DECL_TYPE>,
+  <PARAM_DECL_TYPE_IMPLICIT>,
+  <PARAM_DECL_VALUE>,
+  <PARAM_DECL_UNTYPED>,
+  <PARAM_DECL_USERTYPE>,
+  <PARAM_DECL_IMPLICIT>
+}
+
+// `parameter NAME = expr` — untyped parameter, default type is int
+// per SV LRM. Must precede USERTYPE in the choice since USERTYPE's
+// `sv_qualified_type:type_spec=@` would happily eat NAME and then
+// fail when the trailing `=` isn't followed by another identifier
+// for the actual parameter name. Requires `=` to commit the match.
+PARAM_DECL_UNTYPED: sequence {
+  'parameter':@:type="param_untyped",
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
+}
+
+// `parameter [<pkg>::]<type_name> <NAME> [= <expr>]` — user-typed
+// parameter. The `sv_qualified_type` terminal handles both bare
+// identifiers and package-qualified forms (`pkg::TypeName`) in one
+// match, collapsing what previously needed two parallel grammar
+// rules.
+PARAM_DECL_USERTYPE: sequence dict {
+  'parameter':@:type="param_usertype",
+  sv_qualified_type:type_spec=@,
+  ?<PARAM_OVERRIDE>:type_params=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
+}
+
+PARAM_DECL_TYPE: sequence dict {
+  'parameter':@:type="param_type",
+  'type',
+  sv_identifier:name=@,
+  ?<PARAM_TYPE_DEFAULT>:default=@
+}
+
+// Implicit-`parameter` form for class type parameters:
+// `class C #(type T = int);`. The `parameter` keyword is omitted.
+PARAM_DECL_TYPE_IMPLICIT: sequence dict {
+  'type':@:type="param_type_implicit",
+  sv_identifier:name=@,
+  ?<PARAM_TYPE_DEFAULT>:default=@
+}
+
+PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
+
+// TYPE_SPEC is REQUIRED here (not optional) so this rule only matches
+// when the parameter type is a built-in keyword. `parameter MyType x`
+// falls through to PARAM_DECL_USERTYPE which reads the type via
+// sv_qualified_type.
+PARAM_DECL_VALUE: sequence {
+  'parameter':@:type="param",
+  <TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
+}
+
+// Integer-atom signing. SV LRM §6.11 allows `signed`/`unsigned`
+// after an integer atom type (`int unsigned`, `byte signed`, etc.).
+SIGNING_KW: choice { 'signed':@, 'unsigned':@ }
+
+// SV reserved keywords that close a structural scope (`begin … end`,
+// `case … endcase`, `function … endfunction`, …) or terminate a
+// branch (`else`). These MUST NOT be matched as plain identifiers
+// at the head of a declaration-shaped rule — without the guard,
+// `LOCAL_VAR_DECL_USER` (and any other `<sv_id> <sv_id> …` rule)
+// would happily consume `end p = q;` as `type=end, name=p, init=q;`
+// and the enclosing `begin … end` block would never see its closer.
+//
+// All entries are strict (single-quote) keys so they only match at
+// word boundaries — `endure` matches none of them, `endcase` matches
+// `'endcase'` and not the prefix `'end'`.
+//
+// Used via `!<SV_RESERVED>` at the start of rules whose first token
+// is a bare `sv_identifier` / `sv_qualified_type`. The negative
+// lookahead consumes nothing on success, so the inner rule sees the
+// original cursor.
+SV_RESERVED: choice {
+  'endcase':@,    'endclass':@,   'endclocking':@, 'endconfig':@,
+  'endfunction':@, 'endgenerate':@, 'endgroup':@,  'endinterface':@,
+  'endmodule':@,  'endpackage':@, 'endprimitive':@, 'endprogram':@,
+  'endproperty':@, 'endsequence':@, 'endspecify':@, 'endtask':@,
+  'endchecker':@,
+  'end':@,    'else':@,    'begin':@
+}
+
+PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
+
+// Implicit-`parameter` form for class parameter port lists:
+// `class C #(int N = 8); ...endclass`. The `parameter` keyword is
+// implied. Same fields as PARAM_DECL_VALUE but without the
+// `'parameter'` prefix.
+PARAM_DECL_IMPLICIT: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="param_implicit",
+  ?<SIGNING_KW>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
+}
+
+// Port list — Choice between ANSI-style and Verilog-95-style. The
+// LL(k) lint flags this as informational; accept as intentional.
+PORT_LIST: choice {
+  <PORT_LIST_ANSI>,
+  <PORT_LIST_NONANSI>
+}
+
+// ANSI port list. The FIRST port must be direction-headed (so the
+// ANSI/non-ANSI disambiguation works correctly — `(a, b, c)` falls
+// through to PORT_LIST_NONANSI). Subsequent ports can be either
+// direction-headed (new direction) or name-only continuations
+// (inherit the preceding direction, like SV's `input a, b, c`
+// shorthand). PORT_BODY_NEXT wraps the leading `,` so we can put
+// the Choice over direction-vs-cont forms in one place.
+PORT_LIST_ANSI: sequence dict {
+  "(":style="ansi",
+  <PORT_BODY_FIRST>:ports[]=@,
+  repeat <PORT_BODY_NEXT>:ports[]=@,
+  ")"
+}
+
+// First port — must have a direction keyword. The pkg-qualified
+// usertype variant is tried first so `input pkg::Type name` doesn't
+// mismatch against PORT_DECL_ANSI_USERTYPE's bare-identifier type
+// (which would consume `pkg` then expect a `name`, leaving `::`
+// unmatched). PORT_DECL_ANSI_USERTYPE then handles the bare
+// usertype form, and PORT_DECL_ANSI is the catchall.
+PORT_BODY_FIRST: choice {
+  <PORT_DECL_ANSI_USERTYPE>,
+  <PORT_DECL_ANSI>
+}
+
+// Subsequent ports: comma + port-body. The port-body Choice
+// includes the name-only continuation form (PORT_NAME_CONT) for
+// inherited-direction ports. The non-container Sequence passes
+// PORT_BODY_ANY's emitted port-dict up through PORT_LIST_ANSI's
+// `:ports[]=@` binding.
+PORT_BODY_NEXT: sequence { ",", <PORT_BODY_ANY> }
+
+PORT_BODY_ANY: choice {
+  <PORT_DECL_ANSI_USERTYPE>,
+  <PORT_DECL_ANSI>,
+  <PORT_NAME_CONT>
+}
+
+// Continuation form: `input a, b, c` is shorthand for
+// `input a, input b, input c`. The first port carries the
+// direction; subsequent ports inherit it. Pure parse — host
+// re-applies the inherited direction by walking the port array
+// left-to-right.
+PORT_NAME_CONT: sequence dict {
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@:type="port_name_cont",
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
+}
+
+// `input <typedef'd_name> [range] <name>` — two identifiers in a row,
+// with the first being the user type and the second the port name.
+// The sv_identifier here matches the type name; the IDENT_OR_MACRO
+// matches the port name. Range and unpacked dimensions are the same
+// as PORT_DECL_ANSI.
+// User-typed port. `sv_qualified_type` matches both bare type names
+// and `pkg::TypeName` qualified forms in one step — collapsing the
+// previous PORT_DECL_ANSI_PKG_USERTYPE variant into this one.
+PORT_DECL_ANSI_USERTYPE: sequence dict {
+  <PORT_DIRECTION>:direction=@,
+  sv_qualified_type:type_spec=@:type="port_decl_usertype",
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
+}
+
+PORT_LIST_NONANSI: sequence dict {
+  "(":style="nonansi",
+  repeat sv_identifier:port_names[]=@ separator ",",
+  ")"
+}
+
+// ANSI-style port: direction + optional type + optional range + name.
+PORT_DECL_ANSI: sequence dict {
+  <PORT_DIRECTION>:direction=@,
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
+}
+
+PORT_DIRECTION: choice {
+  'input':@, 'output':@, 'inout':@, 'ref':@
+}
+
+// `[7:0]` — packed dimension (in bit position).
+RANGE: sequence dict {
+  "[", <EXPR>:msb=@, ":", <EXPR>:lsb=@, "]"
+}
+
+// Multiple packed dimensions: `[7:0][3:0][1:0]`. Used in NET_DECL,
+// REG_DECL, INTEGER_DECL, USER_TYPED_DECL — anywhere a single
+// `?<RANGE>` field is currently used, the alternative form
+// `?<PACKED_DIMENSIONS>` lets the host accept multi-dim packed
+// arrays. Kept as a separate rule (not just `repeat <RANGE>`) so
+// existing single-range usage isn't disturbed.
+PACKED_DIMENSIONS: sequence array {
+  repeat+ <RANGE>
+}
+
+// SV-1800 dynamic/associative/queue bracket forms attached to a
+// declaration's variable name:
+//
+//   * `int q[$];`      — queue (unbounded)
+//   * `int q[$:10];`   — queue (bounded)
+//   * `int aa[string];` — associative array keyed by string
+//   * `int da[];`      — dynamic array (resizable, empty brackets)
+//   * `int arr[16];`   — fixed-size unpacked array
+//
+// All forms use square brackets but with distinct internals. We
+// capture them as raw text via `sv_balanced_braces` (which tracks
+// `()`/`{}`/`[]` depth) so any of the four cases parse uniformly.
+// Bracket content is captured by `sv_balanced_brackets` which
+// tracks `[]`/`()`/`{}` depth so nested-bracket cases like
+// `[bit[31:0]]` (associative array keyed by a sized type) parse
+// uniformly. Covers all variants: `[$]`, `[$:10]`, `[string]`,
+// `[]`, `[16]`, and the nested forms.
+ARRAY_KIND_SUFFIX: sequence dict {
+  "[", sv_balanced_brackets:kind=@, "]"
+}
+
+// `[0:15] [0:7]` or `[3]` — unpacked dimensions for arrays. Each
+// dimension is either an `[msb:lsb]` range OR a single `[size]`
+// fixed-size expression OR a typed bracket (`[type]`, `[$]`, `[]`).
+// Captured via ARRAY_KIND_SUFFIX which uses raw-capture between
+// brackets — covers all variants uniformly.
+UNPACKED_DIMENSIONS: sequence array {
+  repeat+ <ARRAY_KIND_SUFFIX>
+}
+
+// Built-in net/variable types. Used in OPTIONAL slots where adding
+// an identifier-fallback would cause greedy mis-matching of the
+// name as a type. User-defined type names in these positions reach
+// the AST via the separate `USER_TYPED_DECL` and `USER_TYPED_PORT`
+// rules (tried after the built-in-keyword variants in their
+// respective Choices). Host disambiguates "built-in vs typedef'd"
+// by matching against the keyword set — no symbol-table resolution
+// at parse time.
+TYPE_SPEC: choice {
+  'wire':@,  'reg':@,    'logic':@,   'bit':@,
+  'integer':@, 'int':@,  'real':@,    'time':@,
+  'shortint':@, 'longint':@, 'byte':@,
+  'tri':@,   'tri0':@,   'tri1':@,    'wand':@, 'wor':@,
+  'supply0':@, 'supply1':@,
+  'string':@, 'chandle':@, 'event':@, 'void':@,
+  'realtime':@, 'shortreal':@
+}
+
+// ─── Module items ───────────────────────────────────────────────────────
+
+// Array-wrapper rule for the items list in MODULE_DECL — same
+// pattern as DESCRIPTIONS (see SOURCE_TEXT). Wrapping the repeat
+// in its own `sequence array` rule lets save-side dispatch iterate
+// the array cleanly; embedding `repeat <X>:items[]=@` directly in
+// MODULE_DECL breaks Choice dispatch at save time.
+MODULE_ITEMS: sequence array {
+  repeat <MODULE_ITEM>
+}
+
+// Flat Choice — directives inlined for save-dispatch reasons (see
+// DESCRIPTION). MACRO_STMT comes LAST: a `MACRO at module-item
+// position is tried as a regular item first (instantiation, decl,
+// etc.), and only falls through to MACRO_STMT if nothing else
+// matches. This is what makes `MOD_TYPE `U0(.clk(clk)); parse as
+// an instance (with macro module-type and macro instance-name)
+// instead of gobbling just `MOD_TYPE as a statement.
+MODULE_ITEM: choice {
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
+  <SV_ATTRIBUTE>,
+  <DPI_IMPORT>,
+  <DPI_EXPORT>,
+  <PORT_DECL_STMT>,
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <GENVAR_DECL>,
+  <NETTYPE_DECL>,
+  <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_USERTYPE_STMT>,
+  <LOCALPARAM_DECL_STMT>,
+  <CONT_ASSIGN>,
+  <ALWAYS_BLOCK>,
+  <INITIAL_BLOCK>,
+  <FINAL_BLOCK>,
+  <GENERATE_BLOCK>,
+  <GEN_IF>,
+  <GEN_FOR>,
+  <GEN_CASE>,
+  <TASK_DECL>,
+  <FUNCTION_DECL>,
+  <EXTERN_DECL>,
+  <SPECIFY_BLOCK>,
+  <DEFPARAM_STMT>,
+  <BIND_STMT>,
+  <LET_DECL>,
+  <CLOCKING_BLOCK>,
+  <COVERGROUP_DECL>,
+  <CHECKER_DECL>,
+  <PROPERTY_DECL>,
+  <SEQUENCE_DECL>,
+  <CONCURRENT_ASSERT>,
+  <MODPORT_DECL>,
+  <CLASS_DECL_VIRTUAL>,
+  <CLASS_DECL_PLAIN>,
+  <MODULE_DECL>,
+  <INTERFACE_DECL>,
+  <IMPORT_STMT>,
+  <EXPORT_STMT>,
+  <MODULE_INSTANTIATION>,
+  <VIRTUAL_INTERFACE_DECL>,
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>,
+  <USER_TYPED_DECL>,
+  <MACRO_STMT>
+}
+
+// Verilog-95 / non-ANSI port declaration: a port direction followed by
+// optional type/range and one or more port names — used as a module
+// item to fill in the declaration for ports listed by name in the
+// header. Example:
+//   module foo (a, b);
+//     input wire a;
+//     output reg b;
+//   endmodule
+PORT_DECL_STMT: sequence dict {
+  <PORT_DIRECTION>:direction=@:type="port_decl",
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ";"
+}
+
+NET_DECL: sequence dict {
+  <NET_KIND>:kind=@:type="net_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ <NET_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+NET_KIND: choice {
+  'wire':@,    'logic':@,   'tri':@,    'tri0':@, 'tri1':@,
+  'wand':@,    'wor':@,     'supply0':@,'supply1':@
+}
+
+NET_SIGNING: choice { 'signed':@, 'unsigned':@ }
+
+NET_NAME: sequence dict {
+  <IDENT_OR_MACRO>:name=@,
+  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
+  ?<NET_INIT>
+}
+
+// Optional initializer on a net (e.g. `wire x = a & b;`). Non-
+// container sequence: its `initial` binding flows up into the
+// caller's dict.
+NET_INIT: sequence { "=", <EXPR>:initial=@ }
+
+REG_DECL: sequence dict {
+  <REG_KIND>:kind=@:type="reg_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ <REG_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+REG_KIND: choice {
+  'reg':@, 'logic':@, 'bit':@
+}
+
+REG_NAME: sequence dict {
+  <IDENT_OR_MACRO>:name=@,
+  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
+  ?<UNPACKED_DIMENSIONS>:packed=@,
+  ?<NET_INIT>
+}
+
+INTEGER_DECL: sequence dict {
+  ?'const':is_const=true,
+  ?'var':is_var=true,
+  <INTEGER_KIND>:kind=@:type="integer_decl",
+  ?<NET_SIGNING>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ <REG_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+INTEGER_KIND: choice {
+  'integer':@,  'int':@,     'shortint':@,
+  'longint':@,  'byte':@,    'real':@,
+  'time':@,     'realtime':@
+}
+
+// `typedef <TYPE> <NAME>;` — user-defined type alias. Pure parse:
+// the AST captures both the source type and the new name; the host
+// (or a downstream pass) builds the symbol table that lets later
+// declarations like `byte_t data;` resolve to the typedef.
+//
+// Also recognizes the `typedef class NAME;` forward declaration
+// form used to break circular class references.
+TYPEDEF_DECL: choice {
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>
+}
+
+TYPEDEF_FORWARD_CLASS: sequence dict {
+  'typedef':@:type="typedef_forward_class",
+  'class',
+  sv_identifier:name=@,
+  ";"
+}
+
+TYPEDEF_REGULAR: sequence dict {
+  'typedef':@:type="typedef",
+  <TYPEDEF_BASE>:base=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ";"
+}
+
+// What can follow `typedef`: a built-in TYPE_SPEC keyword (logic,
+// integer, etc.) or any identifier (another typedef'd name being
+// re-aliased). The Choice tries TYPE_SPEC's keyword set first, then
+// falls through to sv_identifier so user-defined names work too.
+TYPEDEF_BASE: choice {
+  <ENUM_TYPE>,
+  <STRUCT_TYPE>,
+  <UNION_TYPE>,
+  <PARAMETERIZED_TYPE_REF>,
+  <TYPE_SPEC>,
+  sv_qualified_type
+}
+
+// `enum [base_type] { label [= value], ... }` — enumerated type.
+// Body parsed DIRECTLY (no subparse) as a comma-separated list of
+// labels. Cleaner than capture-then-subparse: the grammar engine
+// handles structure naturally and save round-trips for free.
+ENUM_TYPE: sequence dict {
+  'enum':@:type="enum_type",
+  *:meta=@,
+  "{",
+  repeat+ <ENUM_LABEL>:labels[]=@ separator ",",
+  "}"
+}
+
+ENUM_LABEL: sequence dict {
+  sv_identifier:name=@,
+  ?<ENUM_LABEL_VALUE>:value=@
+}
+
+ENUM_LABEL_VALUE: sequence dict { "=", <EXPR>:value=@ }
+
+// `[packed] struct [signing] { <fields> }` — struct/union types.
+// Body parsed directly as a sequence of field declarations.
+STRUCT_TYPE: sequence dict {
+  ?'packed':is_packed=true,
+  'struct':@:type="struct_type",
+  *:meta=@,
+  "{",
+  repeat+ <STRUCT_FIELD>:fields[]=@,
+  "}"
+}
+
+UNION_TYPE: sequence dict {
+  ?'packed':is_packed=true,
+  'union':@:type="union_type",
+  *:meta=@,
+  "{",
+  repeat+ <STRUCT_FIELD>:fields[]=@,
+  "}"
+}
+
+// Struct/union field: `<TYPE> [range] <NAME> [unpacked-dim] [= init];`.
+STRUCT_FIELD: sequence dict {
+  <STRUCT_FIELD_TYPE>:type_spec=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<STRUCT_FIELD_INIT>:init=@,
+  ";"
+}
+
+STRUCT_FIELD_TYPE: choice {
+  <TYPE_SPEC>,
+  <STRUCT_FIELD_PKG_TYPE>,
+  <STRUCT_FIELD_USER_TYPE>
+}
+
+// `pkg::type_name` — package-qualified type used as a struct/union
+// field type. Captured as a single dict so save reconstructs the
+// `pkg::name` form.
+STRUCT_FIELD_PKG_TYPE: sequence dict {
+  sv_identifier:pkg=@:type="pkg_qual_type",
+  "::",
+  sv_identifier:name=@
+}
+
+STRUCT_FIELD_USER_TYPE: sequence { sv_identifier }
+
+STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
+
+// User-defined-typed declaration: `<typedef'd_name> [range] <names>;`.
+// Tried at module-item position AFTER all the built-in-keyword
+// declarations and after MODULE_INSTANTIATION. The order matters:
+//
+//   * `wire foo;` matches NET_DECL (NET_KIND keyword).
+//   * `reg r1;`   matches REG_DECL (REG_KIND keyword).
+//   * `byte_t x;` falls through to USER_TYPED_DECL.
+//   * `Mod m(.p(s));` matches MODULE_INSTANTIATION (parens).
+//   * `Mod m;`     falls through to USER_TYPED_DECL (no parens).
+//
+// The host distinguishes "synth net/reg" vs "user-defined type" by
+// matching the `type_spec` field against the keyword set. Pure parse;
+// no symbol-table lookup at parse time.
+// User-typed declaration. `sv_qualified_type` handles both bare
+// type names (`my_type x;`) and package-qualified ones
+// (`pkg::TypeName x;`) in a single match — collapsing what used
+// to need two parallel rules.
+//
+// `!<SV_RESERVED>` guard at the head: `sv_qualified_type` accepts
+// any identifier-shape token without consulting SV's reserved
+// word table, so without the guard `endfunction <name>;` at the
+// tail of a function body would parse as a user-typed decl
+// (`type=endfunction, name=<name>;`). The guard lets the surrounding
+// `endfunction` keyword claim the token instead.
+USER_TYPED_DECL: sequence dict {
+  !<SV_RESERVED>,
+  ?'const':is_const=true,
+  ?'var':is_var=true,
+  sv_qualified_type:type_spec=@:type="user_typed_decl",
+  ?<PARAM_OVERRIDE>:params=@,
+  ?<NET_SIGNING>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ <NET_NAME>:names[]=@ separator ",",
+  ";"
+}
+
+PARAM_DECL_STMT: sequence dict {
+  <PARAM_DECL>,
+  ";"
+}
+
+LOCALPARAM_DECL_STMT: sequence dict {
+  'localparam':@:type="localparam",
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@,
+  ";"
+}
+
+// `localparam [pkg::]Type NAME = expr;` — user-typed localparam.
+// LOCALPARAM_DECL_STMT's optional TYPE_SPEC can't match `pkg::T`
+// because TYPE_SPEC is built-in keywords only; this rule picks it up
+// via sv_qualified_type. Must be tried BEFORE LOCALPARAM_DECL_STMT
+// in the enclosing choice — the STMT form would otherwise consume
+// just `localparam` and then trip on `pkg::T`'s `::`.
+LOCALPARAM_DECL_USERTYPE_STMT: sequence dict {
+  'localparam':@:type="localparam_usertype",
+  sv_qualified_type:type_spec=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@,
+  ";"
+}
+
+// ─── Continuous assignment ──────────────────────────────────────────────
+
+CONT_ASSIGN: sequence dict {
+  'assign':@:type="cont_assign",
+  ?<DELAY>:delay=@,
+  repeat+ <ASSIGNMENT_PAIR>:assignments[]=@ separator ",",
+  ";"
+}
+
+ASSIGNMENT_PAIR: sequence dict {
+  <LVALUE>:lhs=@, "=", <EXPR>:rhs=@
+}
+
+LVALUE: sequence dict {
+  <LVALUE_HEAD>:name=@,
+  repeat <HIER_PART>:path[]=@,
+  ?<RANGE_OR_INDEX>:select=@
+}
+
+// LVALUE head accepts `this`, `super`, plain identifier, or a
+// package-qualified name. Supports `this.x = ...`, `obj.field =
+// ...`, `pkg::sym = ...` on the LHS of an assignment.
+LVALUE_HEAD: choice {
+  <THIS_KW>,
+  <SUPER_KW>,
+  sv_identifier
+}
+
+THIS_KW:  sequence { 'this':@ }
+SUPER_KW: sequence { 'super':@ }
+
+// `[N]` (bit-select) or `[N:M]` (part-select). The Choice is between
+// a single expression (bit) and a range (part).
+RANGE_OR_INDEX: choice {
+  <RANGE>,
+  <BIT_SELECT>
+}
+
+BIT_SELECT: sequence dict {
+  "[", <EXPR>:index=@, "]"
+}
+
+DELAY: sequence dict {
+  "#",
+  choice {
+    <EXPR>:value=@,
+    sequence { "(", <EXPR>:value=@, ")" }
+  }
+}
+
+// ─── Always / initial / final ───────────────────────────────────────────
+
+ALWAYS_BLOCK: sequence dict {
+  <ALWAYS_KEYWORD>:kind=@:type="always",
+  ?<EVENT_CONTROL>:sensitivity=@,
+  <STATEMENT>:body=@
+}
+
+// SV adds `always_ff`, `always_comb`, `always_latch` with intended
+// behavior hints that synthesis tools enforce; treat them like
+// `always` with a kind discriminator.
+ALWAYS_KEYWORD: choice {
+  'always_ff':@,    'always_comb':@,
+  'always_latch':@, 'always':@
+}
+
+INITIAL_BLOCK: sequence dict {
+  'initial':@:type="initial",
+  <STATEMENT>:body=@
+}
+
+FINAL_BLOCK: sequence dict {
+  'final':@:type="final",
+  <STATEMENT>:body=@
+}
+
+// ─── Event control ──────────────────────────────────────────────────────
+
+EVENT_CONTROL: sequence dict {
+  "@",
+  choice {
+    sequence { "*":wildcard=true },
+    sequence { "(", "*":wildcard=true, ")" },
+    sequence { "(", <EVENT_EXPR>:events=@, ")" }
+  }
+}
+
+EVENT_EXPR: sequence array {
+  repeat+ <EVENT_PRIMARY> separator <EVENT_SEP>
+}
+
+EVENT_PRIMARY: sequence dict {
+  ?<EDGE>:edge=@,
+  <EXPR>:signal=@,
+  ?<EVENT_IFF>:iff=@
+}
+
+// `iff <expr>` — event-gating predicate. Per SV-1800: the event
+// fires only when expr evaluates true.
+EVENT_IFF: sequence dict { 'iff':@, <EXPR>:cond=@ }
+
+EDGE: choice { 'posedge':@, 'negedge':@, 'edge':@ }
+
+EVENT_SEP: choice { ",":@, 'or':@ }
+
+// ─── Module instantiation ───────────────────────────────────────────────
+
+MODULE_INSTANTIATION: sequence dict {
+  <IDENT_OR_MACRO>:module_name=@:type="instance",
+  ?<PARAM_OVERRIDE>:params=@,
+  repeat+ <INSTANCE>:instances[]=@ separator ",",
+  ";"
+}
+
+PARAM_OVERRIDE: sequence dict {
+  "#", "(",
+  repeat+ <PARAM_BINDING>:bindings[]=@ separator ",",
+  ")"
+}
+
+PARAM_BINDING: choice {
+  <PARAM_BINDING_NAMED>,
+  <PARAM_BINDING_POSITIONAL>
+}
+
+PARAM_BINDING_NAMED: sequence dict {
+  ".", sv_identifier:name=@:style="named",
+  "(", <EXPR>:value=@, ")"
+}
+
+PARAM_BINDING_POSITIONAL: sequence dict {
+  <EXPR>:value=@:style="positional"
+}
+
+INSTANCE: sequence dict {
+  <IDENT_OR_MACRO>:name=@,
+  ?<UNPACKED_DIMENSIONS>:array=@,
+  "(",
+  repeat <PORT_BINDING>:port_bindings[]=@ separator ",",
+  ")"
+}
+
+// Order matters: PORT_BINDING_NAMED (`.name(expr)`) tried before
+// PORT_BINDING_IMPLICIT (`.name` — same-name shorthand, SV-1800
+// §23.3.3.4) because the implicit form is a prefix of the named
+// form. PORT_BINDING_WILDCARD handles `.*` (connect-all-by-name).
+PORT_BINDING: choice {
+  <PORT_BINDING_WILDCARD>,
+  <PORT_BINDING_NAMED>,
+  <PORT_BINDING_IMPLICIT>,
+  <PORT_BINDING_POSITIONAL>
+}
+
+PORT_BINDING_NAMED: sequence dict {
+  ".", sv_identifier:port=@:style="named",
+  "(", ?<EXPR>:signal=@, ")"
+}
+
+// `.name` — shorthand for `.name(name)`. Common in testbench
+// instantiations where the local wire matches the port name.
+PORT_BINDING_IMPLICIT: sequence dict {
+  ".", sv_identifier:port=@:style="implicit"
+}
+
+// `.*` — connect all remaining ports by name. SV-1800 §23.3.3.5.
+PORT_BINDING_WILDCARD: sequence dict {
+  ".", "*":style="wildcard"
+}
+
+PORT_BINDING_POSITIONAL: sequence dict {
+  <EXPR>:signal=@:style="positional"
+}
+
+// ─── Generate ───────────────────────────────────────────────────────────
+
+GENERATE_BLOCK: sequence dict {
+  'generate':@:type="generate",
+  repeat <GENERATE_ITEM>:items[]=@,
+  'endgenerate'
+}
+
+GENERATE_ITEM: choice {
+  <GENVAR_DECL>,
+  <GEN_FOR>,
+  <GEN_IF>,
+  <GEN_CASE>,
+  <MODULE_ITEM>
+}
+
+GENVAR_DECL: sequence dict {
+  'genvar':@:type="genvar",
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ";"
+}
+
+GEN_FOR: sequence dict {
+  'for':@:type="gen_for",
+  "(",
+  <FOR_INIT>:init=@, ";",
+  <EXPR>:cond=@, ";",
+  <FOR_STEP>:step=@,
+  ")",
+  <GEN_BLOCK>:body=@
+}
+
+GEN_IF: sequence dict {
+  'if':@:type="gen_if",
+  "(", <EXPR>:cond=@, ")",
+  <GEN_BLOCK>:then=@,
+  ?<GEN_ELSE>
+}
+
+// Non-container sub-rule; its `else` binding flows up to the caller's
+// dict (the GEN_IF rule).
+GEN_ELSE: sequence { 'else', <GEN_BLOCK>:else=@ }
+
+GEN_CASE: sequence dict {
+  'case':@:type="gen_case",
+  "(", <EXPR>:selector=@, ")",
+  repeat+ <GEN_CASE_ITEM>:items[]=@,
+  'endcase'
+}
+
+GEN_CASE_ITEM: sequence dict {
+  choice {
+    sequence { 'default':default=true, ?":" },
+    sequence {
+      repeat+ <EXPR>:labels[]=@ separator ",",
+      ":"
+    }
+  },
+  <GEN_BLOCK>:body=@
+}
+
+// A generate block — either a labelled begin/end group or a single
+// generate item (a single module item, typically an instantiation).
+GEN_BLOCK: choice {
+  <GEN_NAMED_BLOCK>,
+  <MODULE_ITEM>
+}
+
+GEN_NAMED_BLOCK: sequence dict {
+  'begin':@:type="gen_block", ?<BLOCK_LABEL>,
+  repeat <GENERATE_ITEM>:items[]=@,
+  'end':@
+}
+
+// ─── Tasks and functions ────────────────────────────────────────────────
+
+TASK_DECL: sequence dict {
+  'task':@:type="task",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<TASK_PORT_LIST>:ports=@,
+  ";",
+  repeat <TASK_ITEM>:items[]=@,
+  'endtask',
+  ?<END_LABEL>:end_label=@
+}
+
+// `function [<LIFETIME>] [<RETURN_TYPE>] NAME (<args>) ; <body>
+// endfunction`. The choice between "has return type" and "no return
+// type" is what PEG's `?<FUNCTION_RETURN>` couldn't decide: a bare
+// `function f()` would have FUNCTION_RETURN_TYPED eagerly consume
+// `f` as the return type, leaving no identifier for the name. The
+// split FUNCTION_TYPED_HEAD / FUNCTION_UNTYPED_HEAD lets PEG try
+// "two identifiers in a row" first, falling back to "one identifier"
+// if FUNCTION_TYPED_HEAD fails (sv_qualified_type+name match leaves
+// no name remaining).
+FUNCTION_DECL: sequence dict {
+  'function':@:type="function",
+  ?<LIFETIME>:lifetime=@,
+  <FUNCTION_HEAD>,
+  ?<TASK_PORT_LIST>:ports=@,
+  ";",
+  repeat <TASK_ITEM>:items[]=@,
+  'endfunction'
+}
+
+FUNCTION_HEAD: choice {
+  <FUNCTION_TYPED_HEAD>,
+  <FUNCTION_UNTYPED_HEAD>
+}
+
+FUNCTION_TYPED_HEAD: sequence {
+  <FUNCTION_RETURN>:return_type=@,
+  sv_identifier:name=@
+}
+
+FUNCTION_UNTYPED_HEAD: sequence {
+  sv_identifier:name=@
+}
+
+LIFETIME: choice { 'automatic':@, 'static':@ }
+
+// SV LRM allows several function return forms — all captured by
+// one sequence dict with each slot optional. At least one of
+// type_spec or range must match for FUNCTION_RETURN to commit (the
+// caller's `?<FUNCTION_RETURN>` handles the "no return type" case
+// like `function NAME();`).
+//
+//   function int NAME              → type_spec="int"
+//   function int unsigned NAME     → type_spec="int", signing="unsigned"
+//   function [7:0] NAME            → range
+//   function logic [7:0] NAME      → type_spec="logic", range
+//   function pkg::Type NAME        → type_spec="pkg::Type" via sv_qualified_type
+//
+// Order: type_spec tried first (via sv_qualified_type which matches
+// bare or `pkg::`-qualified identifiers); if absent, RANGE_ONLY
+// catches the range-without-type form.
+FUNCTION_RETURN: choice {
+  <FUNCTION_RETURN_TYPED>,
+  <FUNCTION_RETURN_RANGED>
+}
+
+FUNCTION_RETURN_TYPED: sequence dict {
+  sv_qualified_type:type_spec=@:type="function_return",
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@
+}
+
+FUNCTION_RETURN_RANGED: sequence dict {
+  <RANGE>:range=@:type="function_return_ranged",
+  ?<NET_SIGNING>:signing=@
+}
+
+TASK_PORT_LIST: sequence dict {
+  "(",
+  repeat <TASK_PORT>:ports[]=@ separator ",",
+  ")"
+}
+
+TASK_PORT: sequence dict {
+  ?<PORT_DIRECTION>:direction=@,
+  ?<TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@
+}
+
+// Inside function/task bodies — same as BLOCK_ITEM but adds
+// MACRO_STMT and USER_TYPED_DECL so user-typed locals and
+// UVM-style macro calls aren't rejected. STATEMENT alternatives
+// (assignments, if/case/while) come last so a leading identifier
+// has every chance to match a declaration first.
+TASK_ITEM: choice {
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <USER_TYPED_DECL>,
+  <MACRO_STMT>,
+  <STATEMENT>
+}
+
+// ─── Statements ─────────────────────────────────────────────────────────
+
+STATEMENT: choice {
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
+  <MACRO_STMT>,
+  <BLOCK_STMT>,
+  <FORK_JOIN>,
+  <IF_STMT>,
+  <CASE_STMT>,
+  <FOR_STMT>,
+  <FOREACH_STMT>,
+  <WHILE_STMT>,
+  <DO_WHILE_STMT>,
+  <REPEAT_STMT>,
+  <FOREVER_STMT>,
+  <RANDSEQUENCE_STMT>,
+  <WAIT_FORK_STMT>,
+  <DISABLE_FORK_STMT>,
+  <CONCURRENT_ASSERT>,
+  <IMMEDIATE_ASSERT>,
+  <RETURN_STMT>,
+  <BREAK_STMT>,
+  <CONTINUE_STMT>,
+  <LOCAL_VAR_DECL>,
+  <ASSIGN_STMT>,
+  <PROC_CONT_ASSIGN>,
+  <SYSTEM_TASK_CALL>,
+  <VOID_CAST_STMT>,
+  <METHOD_CALL_STMT>,
+  <TASK_CALL>,
+  <DISABLE_STMT>,
+  <WAIT_STMT>,
+  <DELAY_OR_EVENT_STMT>,
+  <NULL_STMT>
+}
+
+// `void'(expr);` — SV idiom for "call expr (typically a function)
+// and discard its return value." Pure statement form (the
+// expression-context `void'(...)` cast is already handled by
+// TYPE_CAST_IDENT). Tried in STATEMENT before METHOD_CALL_STMT /
+// TASK_CALL so the leading `void` keyword wins over those eager
+// identifier-shaped alternatives.
+VOID_CAST_STMT: sequence dict {
+  'void':type="void_cast_stmt",
+  "'",
+  "(", <EXPR>:value=@, ")",
+  ";"
+}
+
+// Local variable declaration inside a procedural block (begin/end
+// block, function body, task body). Supports both built-in types
+// (TYPE_SPEC) and user-typed names. Tried BEFORE ASSIGN_STMT so
+// `int x = 5;` and `Driver drv;` parse as declarations.
+//
+// To prevent claiming things that aren't declarations (e.g. plain
+// `a = b;` where `a` would be matched as a user-type and `b` as
+// the variable), require a `;` (no init) OR `=<EXPR>;` after the
+// variable name. Plain `a` followed by `=` is then claimed as
+// ASSIGN_STMT instead.
+LOCAL_VAR_DECL: choice {
+  <LOCAL_VAR_DECL_BUILTIN>,
+  <LOCAL_VAR_DECL_USER>
+}
+
+LOCAL_VAR_DECL_BUILTIN: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="local_var_decl",
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  ?<RANGE>:unpacked=@,
+  ?<LOCAL_VAR_INIT>:init=@,
+  ";"
+}
+
+// User-typed local: `<typedef'd_name> <var>;` — needs TWO
+// identifiers (type + name) and trailing `;`/`=`/`<-`. With the
+// engine's Repeat per-iteration mark fix, a Choice alternative
+// that consumes one or two identifiers and then fails on the
+// trailing `;` rolls back cleanly.
+//
+// `!<SV_RESERVED>` guard at the head: this rule's `<id> <id>`
+// shape happily matches `end p = q;` (with `end` consumed as a
+// "user type"), so without the guard a `begin … end` block's
+// repeat-over-BLOCK_ITEM would consume the closing `end` instead
+// of bailing out. See SV_RESERVED comment above.
+LOCAL_VAR_DECL_USER: sequence dict {
+  !<SV_RESERVED>,
+  sv_identifier:type_spec=@:type="local_var_decl_user",
+  sv_identifier:name=@,
+  ?<RANGE>:unpacked=@,
+  ?<LOCAL_VAR_INIT>:init=@,
+  ";"
+}
+
+LOCAL_VAR_INIT: sequence dict { "=", <EXPR>:value=@ }
+
+// Statement-position macro: `MY_ASSERT(req, gnt);`. Same form as a
+// function call but with the `-prefix and an optional trailing `;`
+// (some macros include the semicolon in their body, some don't).
+MACRO_STMT: sequence dict {
+  <MACRO_USE>:macro=@:type="macro_stmt",
+  ?";"
+}
+
+NULL_STMT: sequence dict { ";":type="null_stmt" }
+
+BLOCK_STMT: sequence dict {
+  'begin':@:type="block",
+  ?<BLOCK_LABEL>,
+  repeat <BLOCK_ITEM>:items[]=@,
+  'end':@,
+  ?<END_LABEL>:end_label=@
+}
+
+// Non-container; the `label` binding flows up to the parent dict.
+BLOCK_LABEL: sequence { ":", sv_identifier:label=@ }
+
+BLOCK_ITEM: choice {
+  <LOCALPARAM_DECL_STMT>,
+  <NET_DECL>,
+  <REG_DECL>,
+  <INTEGER_DECL>,
+  <STATEMENT>
+}
+
+IF_STMT: sequence dict {
+  ?<UNIQUENESS>:uniqueness=@,
+  'if':@:type="if",
+  "(", <EXPR>:cond=@, ")",
+  <STATEMENT>:then=@,
+  ?<ELSE_CLAUSE>
+}
+
+// SV-1800 `unique` / `unique0` / `priority` modifier on if/case
+// statements — enforces that exactly one (or at most one) branch
+// matches. Pure parse: captured as a string; host enforces.
+UNIQUENESS: choice { 'unique0':@, 'unique':@, 'priority':@ }
+
+// Non-container sub-rule; its `else` binding flows up to the caller's
+// dict (the IF_STMT rule).
+ELSE_CLAUSE: sequence { 'else', <STATEMENT>:else=@ }
+
+CASE_STMT: sequence dict {
+  ?<UNIQUENESS>:uniqueness=@,
+  <CASE_KIND>:kind=@:type="case",
+  "(", <EXPR>:selector=@, ")",
+  ?'inside':is_inside=true,
+  repeat+ <CASE_ITEM>:items[]=@,
+  'endcase'
+}
+
+CASE_KIND: choice {
+  'casex':@, 'casez':@, 'case':@
+}
+
+CASE_ITEM: sequence dict {
+  choice {
+    sequence { 'default':default=true, ?":" },
+    sequence {
+      repeat+ <CASE_LABEL>:labels[]=@ separator ",",
+      ":"
+    }
+  },
+  <STATEMENT>:body=@
+}
+
+// Case label: an expression OR a range (for `case ... inside`).
+// Range form `[a:b]` is allowed by LRM in inside-case items.
+CASE_LABEL: choice {
+  <RANGE>,
+  <EXPR>
+}
+
+FOR_STMT: sequence dict {
+  'for':@:type="for",
+  "(",
+  <FOR_INIT>:init=@, ";",
+  <EXPR>:cond=@, ";",
+  <FOR_STEP>:step=@,
+  ")",
+  <STATEMENT>:body=@
+}
+
+// For-loop init can be an assignment OR a declaration with init
+// (`int i = 0`, `genvar i = 0`, or `Driver drv = new()`).
+// Declaration forms tried first so `int i = 0` and `genvar i = 0`
+// aren't mis-claimed as malformed assignments.
+FOR_INIT: choice {
+  <FOR_INIT_GENVAR>,
+  <FOR_INIT_DECL>,
+  <ASSIGNMENT_PAIR>
+}
+
+FOR_INIT_GENVAR: sequence dict {
+  'genvar':@:type="for_init_genvar",
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
+}
+
+FOR_INIT_DECL: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="for_init_decl",
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
+}
+
+// For-loop step is typically `i++`, `i--`, or `i = i + 1`.
+// Plus an inline expression form so `i++` and `i--` parse.
+FOR_STEP: choice {
+  <ASSIGNMENT_PAIR>,
+  <FOR_STEP_INCDEC>,
+  <FOR_STEP_PRE_INCDEC>
+}
+
+FOR_STEP_INCDEC: sequence dict {
+  <LVALUE>:lhs=@:type="for_step_incdec",
+  <INC_DEC_OP>:op=@
+}
+
+FOR_STEP_PRE_INCDEC: sequence dict {
+  <INC_DEC_OP>:op=@:type="for_step_pre_incdec",
+  <LVALUE>:lhs=@
+}
+
+INC_DEC_OP: choice { "++":@, "--":@ }
+
+WHILE_STMT: sequence dict {
+  'while':@:type="while",
+  "(", <EXPR>:cond=@, ")",
+  <STATEMENT>:body=@
+}
+
+REPEAT_STMT: sequence dict {
+  'repeat':@:type="repeat",
+  "(", <EXPR>:count=@, ")",
+  <STATEMENT>:body=@
+}
+
+FOREVER_STMT: sequence dict {
+  'forever':@:type="forever",
+  <STATEMENT>:body=@
+}
+
+// Single rule covering both blocking (`=`) and non-blocking (`<=`)
+// assignments. Combining them avoids re-parsing LVALUE when the
+// engine falls through from one alt to the other in the STATEMENT
+// Choice (the shared-leading-ref lint catches this).
+ASSIGN_STMT: sequence dict {
+  <LVALUE>:lhs=@,
+  <ASSIGN_OP>:type=@,
+  ?<DELAY_OR_EVENT>:delay=@,
+  <EXPR>:rhs=@,
+  ";"
+}
+
+// Longest-first so `<=` wins over `<` and `=` is checked last.
+// Compound assignment forms (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`,
+// `|=`, `^=`, `<<=`, `>>=`, `<<<=`, `>>>=`) are SV-1800 extensions
+// to the original Verilog blocking/nonblocking pair. All emit
+// `assign_compound` with the operator preserved in the type slot
+// (host can dispatch on the type value).
+ASSIGN_OP: choice {
+  "<<<=":"assign_shl_arith",
+  ">>>=":"assign_shr_arith",
+  "<<=":"assign_shl",
+  ">>=":"assign_shr",
+  "+=":"assign_add",
+  "-=":"assign_sub",
+  "*=":"assign_mul",
+  "/=":"assign_div",
+  "%=":"assign_mod",
+  "&=":"assign_and",
+  "|=":"assign_or",
+  "^=":"assign_xor",
+  "<=":"nonblocking_assign",
+  "=":"blocking_assign"
+}
+
+PROC_CONT_ASSIGN: sequence dict {
+  'assign':@, <LVALUE>:lhs=@, "=", <EXPR>:rhs=@, ";":type="proc_assign"
+}
+
+DELAY_OR_EVENT: choice { <DELAY>, <EVENT_CONTROL> }
+
+DELAY_OR_EVENT_STMT: sequence dict {
+  <DELAY_OR_EVENT>:control=@:type="delay_event_stmt",
+  <STATEMENT>:body=@
+}
+
+// `$display(...)`, `$finish`, `$strobe(...)`, etc. The leading
+// identifier always starts with `$` (sv_identifier returns it with
+// the `$` retained), so the grammar dispatches on the leading byte
+// implicitly via Choice ordering.
+SYSTEM_TASK_CALL: sequence dict {
+  sv_system_name:name=@:type="system_task",
+  ?<TASK_ARG_LIST>:args=@,
+  ";"
+}
+
+// Regular task call: `[pkg::]task_name(args);` — identifier without
+// `$`. Uses `sv_qualified_type` so package-qualified forms
+// (`env_dpi::env_initial(...)`) match without a parallel rule.
+TASK_CALL: sequence dict {
+  sv_qualified_type:name=@:type="task_call",
+  <TASK_ARG_LIST>:args=@,
+  ";"
+}
+
+TASK_ARG_LIST: sequence dict {
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")"
+}
+
+DISABLE_STMT: sequence dict {
+  'disable':@, sv_identifier:target=@, ";":type="disable"
+}
+
+WAIT_STMT: sequence dict {
+  'wait':@, "(", <EXPR>:cond=@, ")":type="wait",
+  <STATEMENT>:body=@
+}
+
+// ─── Expressions ────────────────────────────────────────────────────────
+//
+// 13 precedence levels, low to high:
+//
+//   EXPR             conditional (ternary)
+//   LOR              || logical or
+//   LAND             && logical and
+//   BOR              |  bitwise or
+//   BXOR             ^  bitwise xor (~^, ^~)
+//   BAND             &  bitwise and
+//   EQUALITY         == != === !== ==? !=?
+//   RELATIONAL       <  <= >  >=  inside (out of scope)
+//   SHIFT            << >> <<< >>>
+//   ADD              +  -
+//   MUL              *  /  %
+//   POWER            **
+//   UNARY            + - ! ~ & | ^ ~& ~| ~^ ^~
+//   PRIMARY
+//
+// For each level, the right-hand alternative is the pass-through (the
+// next-higher-precedence level), which is what the engine picks when
+// no operator is found at this level.
+//
+// Math chains (+/-, */// %, shifts) at 3+ operands need parens — see
+// the design-choice comment at the top of this file. The grammar
+// emits `{op, args:[lhs, rhs]}` only for exactly two operands.
+
+// Each binop precedence level uses the `NEXT (OP NEXT)*` pattern:
+//
+//   LEVEL: sequence dict {
+//     <NEXT>:lhs=@,
+//     repeat <LEVEL_TAIL>:tail[]=@
+//   }
+//   LEVEL_TAIL: sequence dict { <OP>:op=@, <NEXT>:rhs=@ }
+//
+// This parses NEXT *once*, then loops looking for `OP NEXT` greedily.
+// Linear in the number of operands. CRITICALLY: this avoids the 2^N
+// exponential blowup of the `choice { LEVEL_BINOP, NEXT }` pattern
+// where the binop alt re-parses NEXT just to fail on the missing
+// operator. See issue #8 for the diagnosis — single set of parens
+// went from 209M frames (100s) to ~600 frames (<1ms).
+//
+// IR shape:
+//   no operator         → `{lhs: <inner>, tail: []}` (or just <inner>
+//                          if the host strips empty-tail wrappers)
+//   one or more ops     → `{lhs: <inner>, tail: [{op, rhs}, …]}`
+//
+// Left-associativity (`a + b - c` should mean `(a + b) - c`) is
+// encoded structurally in the tail list order; host applies a
+// left-fold pass if it needs nested `{op, args}` form.
+
+// EXPR also uses the linear pattern: parse LOR once, then optionally
+// try the ternary `? : ` tail. If "?" isn't present, LOR is the
+// result. No re-parse. (The `choice {<TERNARY>, <LOR>}` form would
+// parse LOR twice when there's no ternary — the shared-leading-ref
+// lint pass detects this.)
+EXPR: sequence dict {
+  <LOR>:lhs=@,
+  ?<TERNARY_REST>
+}
+
+TERNARY_REST: sequence dict {
+  "?":op="?:",
+  <EXPR>:then=@,
+  ":",
+  <EXPR>:else=@
+}
+
+LOR: sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
+LOR_TAIL: sequence dict { "||":op="||", <LAND>:rhs=@ }
+
+LAND: sequence dict { <BOR>:lhs=@, repeat <LAND_TAIL>:tail[]=@ }
+LAND_TAIL: sequence dict { "&&":op="&&", <BOR>:rhs=@ }
+
+BOR: sequence dict { <BXOR>:lhs=@, repeat <BOR_TAIL>:tail[]=@ }
+BOR_TAIL: sequence dict { "|":op="|", <BXOR>:rhs=@ }
+
+BXOR: sequence dict { <BAND>:lhs=@, repeat <BXOR_TAIL>:tail[]=@ }
+BXOR_TAIL: sequence dict { <BXOR_OP>:op=@, <BAND>:rhs=@ }
+
+BXOR_OP: choice { "^~":@, "~^":@, "^":@ }
+
+BAND: sequence dict { <EQUALITY>:lhs=@, repeat <BAND_TAIL>:tail[]=@ }
+BAND_TAIL: sequence dict { "&":op="&", <EQUALITY>:rhs=@ }
+
+EQUALITY: sequence dict { <RELATIONAL>:lhs=@, repeat <EQUALITY_TAIL>:tail[]=@ }
+EQUALITY_TAIL: sequence dict { <EQUALITY_OP>:op=@, <RELATIONAL>:rhs=@ }
+
+// Longest-first so `===` wins over `==` and `!==` wins over `!=`.
+EQUALITY_OP: choice {
+  "===":@, "!==":@, "==?":@, "!=?":@, "==":@, "!=":@
+}
+
+RELATIONAL: sequence dict { <SHIFT>:lhs=@, repeat <RELATIONAL_OR_INSIDE_TAIL>:tail[]=@ }
+
+// At the relational precedence level, either a regular comparison
+// (`<`/`<=`/`>`/`>=`) or an `inside { ... }` set membership test.
+RELATIONAL_OR_INSIDE_TAIL: choice {
+  <RELATIONAL_TAIL>,
+  <INSIDE_TAIL>
+}
+
+RELATIONAL_TAIL: sequence dict { <RELATIONAL_OP>:op=@, <SHIFT>:rhs=@ }
+
+// `inside { [1:10], 20, 30, ... }` — set membership. The body
+// (open ranges + comma-separated values) is captured raw; host
+// re-parses if it needs to enumerate members.
+INSIDE_TAIL: sequence dict {
+  'inside':op="inside",
+  "{",
+  *:body=@,
+  "}"
+}
+
+RELATIONAL_OP: choice {
+  "<=":@, ">=":@, "<":@, ">":@
+}
+
+SHIFT: sequence dict { <ADD>:lhs=@, repeat <SHIFT_TAIL>:tail[]=@ }
+SHIFT_TAIL: sequence dict { <SHIFT_OP>:op=@, <ADD>:rhs=@ }
+
+// Arithmetic shifts (<<<, >>>) before logical shifts so longer wins.
+SHIFT_OP: choice {
+  "<<<":@, ">>>":@, "<<":@, ">>":@
+}
+
+ADD: sequence dict { <MUL>:lhs=@, repeat <ADD_TAIL>:tail[]=@ }
+ADD_TAIL: sequence dict { <ADD_OP>:op=@, <MUL>:rhs=@ }
+
+ADD_OP: choice { "+":@, "-":@ }
+
+MUL: sequence dict { <POWER>:lhs=@, repeat <MUL_TAIL>:tail[]=@ }
+MUL_TAIL: sequence dict { <MUL_OP>:op=@, <POWER>:rhs=@ }
+
+MUL_OP: choice { "*":@, "/":@, "%":@ }
+
+// POWER is right-associative per SV LRM. Right-recursive pattern
+// (?<POWER_REST>) instead of repeat-tail — still linear because
+// UNARY on each side is parsed exactly once.
+POWER: sequence dict {
+  <UNARY>:lhs=@,
+  ?<POWER_REST>
+}
+POWER_REST: sequence dict { "**":op="**", <POWER>:rhs=@ }
+
+UNARY: choice { <UNARY_OP_EXPR>, <PRIMARY> }
+UNARY_OP_EXPR: sequence dict {
+  <UNARY_OP>:op=@, <PRIMARY>:arg=@
+}
+
+UNARY_OP: choice {
+  "~&":@, "~|":@, "~^":@, "^~":@,
+  "+":@, "-":@, "!":@, "~":@,
+  "&":@, "|":@, "^":@
+}
+
+// ─── Primaries ──────────────────────────────────────────────────────────
+
+// NUMBER comes BEFORE MACRO_USE so `` `WIDTH'd42 `` is
+// recognized as a based number (with `` `WIDTH `` as the size)
+// rather than as a bare macro followed by orphan `'d42`. BASED_NUM
+// uses INT_OR_MACRO at its size slot, so macros-as-size work.
+PRIMARY: choice {
+  <PAREN_EXPR>,
+  <NULL_LIT>,
+  <NEW_EXPR>,
+  <TYPE_CAST>,
+  <ASSIGNMENT_PATTERN>,
+  <DEFAULT_VALUE_PATTERN>,
+  <SYSTEM_FUNC_CALL>,
+  <METHOD_CALL>,
+  <PARAMETERIZED_TYPE_REF>,
+  <FUNC_CALL>,
+  <STREAMING_CONCAT>,
+  <CONCAT_OR_REPLICATION>,
+  <NUMBER>,
+  <MACRO_USE>,
+  <STRING_PRIMARY>,
+  <THIS_REF>,
+  <SUPER_REF>,
+  <PKG_QUAL_PRIMARY>,
+  <HIER_REF>
+}
+
+// `TypeName#(arg1, arg2)` — a parameterized type reference used as
+// a value in expression context (e.g. as a class parameter override
+// value: `extends Base #(.ITEM_T(my_item#(W, H)))`). Tried before
+// FUNC_CALL because both start with an identifier; the trailing `#`
+// disambiguates.
+PARAMETERIZED_TYPE_REF: sequence dict {
+  sv_identifier:name=@:type="param_type_ref",
+  "#", "(",
+  repeat+ <EXPR>:params[]=@ separator ",",
+  ")"
+}
+
+// SV-1800 default-value patterns: `'0` (all bits 0), `'1` (all
+// bits 1), `'x` (all bits x), `'z` (all bits z). Used for full-
+// width literal initialization.
+DEFAULT_VALUE_PATTERN: sequence dict {
+  "'":type="default_value_pattern",
+  <DEFAULT_VALUE_CHAR>:value=@
+}
+
+DEFAULT_VALUE_CHAR: choice {
+  "0":@, "1":@,
+  "x":@, "X":@,
+  "z":@, "Z":@
+}
+
+// `<type>'(expr)` — type cast. Type can be a TYPE_SPEC keyword,
+// an identifier (typedef'd), `signed`/`unsigned`, or a width
+// expression (`8'(x)`). Multiple forms via Choice.
+TYPE_CAST: choice {
+  <TYPE_CAST_IDENT>,
+  <TYPE_CAST_NUM>,
+  <TYPE_CAST_SIGNED>
+}
+
+TYPE_CAST_IDENT: sequence dict {
+  sv_identifier:type=@:type="type_cast",
+  "'",
+  "(",
+  <EXPR>:value=@,
+  ")"
+}
+
+TYPE_CAST_NUM: sequence dict {
+  int:type=@:type="type_cast_num",
+  "'",
+  "(",
+  <EXPR>:value=@,
+  ")"
+}
+
+TYPE_CAST_SIGNED: sequence dict {
+  <SIGNED_KW>:type=@:type="type_cast_signed",
+  "'",
+  "(",
+  <EXPR>:value=@,
+  ")"
+}
+
+SIGNED_KW: choice { 'signed':@, 'unsigned':@ }
+
+// `'{<fields>}` — assignment pattern. Used to initialize struct/
+// array/queue literals. Body captured raw because the inner
+// content has its own dialect (key-value pairs, default values,
+// type-based defaults).
+ASSIGNMENT_PATTERN: sequence dict {
+  "'":type="assignment_pattern",
+  "{",
+  sv_balanced_braces:body=@,
+  "}"
+}
+
+// `obj.method(args)` / `obj.field.method(args)` — method invocation
+// via dot notation. At least one `.path` is required so this rule
+// doesn't claim plain `foo()` (which is FUNC_CALL). An optional
+// trailing `with { <constraints> }` clause (for
+// `obj.randomize() with { x > 0; }` and similar) is captured raw.
+METHOD_CALL: sequence dict {
+  sv_identifier:name=@:type="method_call",
+  repeat+ <HIER_PART>:path[]=@,
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")",
+  ?<WITH_CLAUSE>:with=@
+}
+
+// Optional `with { ... }` (constraint block style) OR `with (expr)`
+// (array-method predicate style) trailing a method call. Body
+// captured raw to handle both forms uniformly; host inspects the
+// captured text to decide.
+WITH_CLAUSE: choice {
+  <WITH_BRACES>,
+  <WITH_PARENS>
+}
+
+WITH_BRACES: sequence dict {
+  'with':@:type="with_braces",
+  "{",
+  sv_balanced_braces:body=@,
+  "}"
+}
+
+WITH_PARENS: sequence dict {
+  'with':@:type="with_parens",
+  "(",
+  *:body=@,
+  ")"
+}
+
+// `this[.field][...]` — class self-reference. Class context only,
+// but pure parse doesn't enforce that.
+THIS_REF: sequence dict {
+  'this':@:type="this_ref",
+  repeat <HIER_PART>:path[]=@,
+  ?<RANGE_OR_INDEX>:select=@
+}
+
+// `super[.field][...]` — class parent-reference.
+SUPER_REF: sequence dict {
+  'super':@:type="super_ref",
+  repeat <HIER_PART>:path[]=@,
+  ?<RANGE_OR_INDEX>:select=@
+}
+
+// `pkg::name[.field][...]` — package-qualified reference. Tried
+// BEFORE HIER_REF so the leading sv_identifier is committed to
+// PKG_QUAL_PRIMARY when followed by `::`. PEG handles the
+// non-match case by rolling back to HIER_REF.
+PKG_QUAL_PRIMARY: sequence dict {
+  sv_identifier:pkg=@:type="pkg_qual_ref",
+  "::",
+  sv_identifier:name=@,
+  repeat <HIER_PART>:path[]=@,
+  ?<RANGE_OR_INDEX>:select=@
+}
+
+// `null` literal — class handle absence.
+NULL_LIT: sequence dict { 'null':@:type="null" }
+
+// `new`, `new()`, `new(arg1, arg2, ...)`, `new[N]` — class
+// instance creation OR dynamic array sizing. Args captured raw
+// to handle the full expression-list inside parens, since the
+// argument list may contain commas inside nested parens.
+NEW_EXPR: sequence dict {
+  'new':@:type="new",
+  ?<NEW_ARGS>:args=@
+}
+
+NEW_ARGS: choice {
+  <NEW_PARENS>,
+  <NEW_BRACKETS>
+}
+
+NEW_PARENS: sequence dict {
+  "(", *:text=@, ")"
+}
+
+NEW_BRACKETS: sequence dict {
+  "[", *:text=@, "]"
+}
+
+// Streaming concatenation: `{<<{...}}` or `{>>{...}}`,
+// optionally with slice size: `{<<8{...}}`. LRM:
+//   streaming_concatenation ::=
+//     '{' stream_operator [slice_size] '{' stream_expressions '}' '}'
+//
+// We capture the slice and inner stream expressions as raw text;
+// host re-parses if needed.
+STREAMING_CONCAT: sequence dict {
+  "{":type="streaming_concat",
+  <STREAM_DIR>:direction=@,
+  *:slice=@,
+  "{",
+  *:body=@,
+  "}",
+  "}"
+}
+
+STREAM_DIR: choice { "<<":@, ">>":@ }
+
+PAREN_EXPR: sequence { "(", <EXPR>, ")" }
+
+// Concatenation `{a, b, c}` OR replication `{N{expr}}`. Distinguished
+// by the first item: if it's followed by `{` then it's replication,
+// otherwise concatenation.
+CONCAT_OR_REPLICATION: choice {
+  <REPLICATION>,
+  <CONCAT>
+}
+
+// Concat: `{ a, b, c }`. Two Choice forms — structured for plain
+// expression lists, raw-captured for concat bodies containing
+// preprocessor directives that interleave with the elements
+// (`` `ifdef ``/`` `endif `` mid-list, common in formal & UVM code).
+// PEG tries structured first; if directives break the EXPR
+// repeat, the alt rolls back and CONCAT_RAW captures the body
+// uniformly. Host re-parses if directive structure is needed.
+CONCAT: choice {
+  <CONCAT_STRUCTURED>,
+  <CONCAT_RAW>
+}
+
+CONCAT_STRUCTURED: sequence dict {
+  "{":type="concat",
+  repeat <EXPR>:elements[]=@ separator ",",
+  "}"
+}
+
+CONCAT_RAW: sequence dict {
+  "{":type="concat_with_directives",
+  sv_balanced_braces:body=@,
+  "}"
+}
+
+REPLICATION: sequence dict {
+  "{":type="replication",
+  <EXPR>:count=@,
+  "{",
+  repeat+ <EXPR>:elements[]=@ separator ",",
+  "}",
+  "}"
+}
+
+// Number primary — Choice composition over the four numeric kinds.
+// The custom `sv_based_digits` parser handles only the digit run of
+// based literals (the genuinely Verilog-specific lexical concern);
+// everything else uses std parsers + grammar-level matching.
+//
+// Order matters in NUMBER's Choice: BASED tried first because `8'hFF`
+// shares the leading integer with plain `42`; TIME_LIT before INTEGER
+// for the same reason (`42ns` shares its `42` with `42` alone).
+// Each NUMBER variant carries its own `type` discriminator — no
+// outer wrapper needed. A plain `42` emits `{type:"integer",value:42}`
+// directly instead of `{type:"number",number:{kind:"integer",value:42}}`
+// — same information without the redundant nesting.
+NUMBER: choice {
+  <BASED_NUM>,
+  <TIME_LIT>,
+  <REAL_NUM>,
+  <INTEGER_NUM>
+}
+
+// `ignore:` (empty list) disables whitespace skipping for this rule's
+// body so `8'hFF` parses as a single token — no spaces allowed between
+// size, `'`, base, or digit run.
+BASED_NUM ignore: sequence dict {
+  ?<INT_OR_MACRO>:size=@,
+  "'":type="based_num",
+  ?<SIGNED_FLAG>:signed=true,
+  <BASE_CHAR>:base=@,
+  sv_based_digits:value=@
+}
+
+SIGNED_FLAG: choice { "s":@, "S":@ }
+
+BASE_CHAR: choice {
+  "b":@, "B":@, "o":@, "O":@,
+  "d":@, "D":@, "h":@, "H":@
+}
+
+// Time literal — `42ns`, `1.5us`. Tight matching via `ignore:` so the
+// number and unit aren't separable by whitespace.
+// LIMITATION: uses std.int so doesn't accept underscores in the
+// numeric prefix (`1_000ns` won't match here, but `1000ns` will).
+TIME_LIT ignore: sequence dict {
+  <INT_OR_MACRO>:value=@:type="time_lit",
+  <TIME_UNIT>:unit=@
+}
+
+TIME_UNIT: choice {
+  'fs':@, 'ps':@, 'ns':@, 'us':@, 'ms':@, 's':@
+}
+
+// REAL_NUM and INTEGER_NUM do NOT use the macro-or-X wraps. Their
+// CONTENT must be a real terminal (float/int) — a bare `` `MACRO ``
+// at expression position should reach MACRO_USE in PRIMARY, NOT be
+// classified as a "real number" or "integer" whose value happens
+// to be a macro. The macro wraps live in BASED_NUM (size) and
+// TIME_LIT (value) because in those rules a *required* follow-up
+// token (`'b/'d/'h` or a time unit) disambiguates.
+REAL_NUM: sequence dict {
+  float:value=@:type="real"
+}
+
+INTEGER_NUM: sequence dict {
+  int:value=@:type="integer"
+}
+
+STRING_PRIMARY: sequence dict {
+  string:value=@:type="string"
+}
+
+// Function call: `name(arg, ...)`. Distinguished from a plain
+// hierarchical reference by the presence of `(` immediately after.
+FUNC_CALL: sequence dict {
+  sv_identifier:name=@:type="func_call",
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")"
+}
+
+// System function call: `$name(arg, ...)` — same shape as task call
+// but used in expression context.
+// System function calls start with `$` per LRM §20. The `$` is
+// part of the lexical form — we match it as a literal then take
+// the identifier portion. (`sv_identifier` accepts the system form
+// as a single token, but having the literal `$` here is what stops
+// SYSTEM_FUNC_CALL from claiming plain identifiers like `clk` —
+// the earlier behavior was a bug surfaced by save-direction round-
+// tripping.)
+// Uses sv_system_name to capture the entire name including any
+// multi-segment forms like `$value$plusargs`, `$test$plusargs`.
+// The captured string includes the leading `$`. Tight-binding
+// between `$` and identifier is enforced by the terminal parser,
+// so the rule itself uses the surrounding (whitespace-skipping)
+// ignore policy — previously this rule used `ignore:` to prevent
+// `$ display`-with-space matches, but the terminal handles that
+// now AND the override was breaking SYSTEM_FUNC_ARGS's comma
+// separator inside arg lists.
+SYSTEM_FUNC_CALL: sequence dict {
+  sv_system_name:name=@:type="system_func",
+  ?<SYSTEM_FUNC_ARGS>:args=@
+}
+
+SYSTEM_FUNC_ARGS: sequence dict {
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")"
+}
+
+// Hierarchical reference: identifier, optionally with `.subident`
+// chains and array-index selects at any point. `mod.inst[i].q[7:0]`
+// parses as alternating dot-paths and bracket-selects.
+HIER_REF: sequence dict {
+  sv_identifier:name=@:type="ref",
+  repeat <HIER_PART>:path[]=@,
+  repeat <RANGE_OR_INDEX>:selects[]=@
+}
+
+// Either a `.field` step or a chained bracket-select. Each path
+// element captures one step.
+HIER_PART: choice {
+  <HIER_DOT>,
+  <HIER_SELECT>
+}
+
+HIER_DOT: sequence dict { ".", sv_identifier:field=@ }
+HIER_SELECT: sequence dict { "[", <EXPR>:index=@, "]" }
+
+// ─── Preprocessor — recognition only, no expansion ──────────────────────
+//
+// The grammar recognizes preprocessor SYNTAX and emits AST nodes for
+// directives and macro uses. It does NOT expand macros, evaluate
+// `ifdef branches, or follow `include paths — those are the
+// application's concern. This keeps the grammar stateless (no
+// macro table threaded through the parse) and the AST faithful to
+// the source.
+//
+// Limitation: this approach handles macros that appear at SYNTACTIC
+// positions (expression, statement, module-item) and at the specific
+// token-internal positions wrapped below (size of based-number,
+// value of int/real/time literals, certain identifier slots). It
+// does NOT handle truly lexical macros — ones whose expansion fuses
+// with adjacent characters to form a new token (`define FOO bar`
+// followed by `assign x = FOO;` where `FOO` becomes the identifier
+// `bar`, not a macro use). For files using lexical macros, run a
+// preprocessor pass first.
+
+// Use-site: `IDENT (with optional `(args)` for function-like
+// macros). `ignore:` keeps the backtick tight against the name.
+// The args list is captured as an array of strings — each arg is
+// matched by `sv_balanced_arg` (a depth-tracking parser that scans
+// up to the next top-level `,` or `)`, with nested `(...)`
+// properly balanced). So `` `FOO(g(a, b), c) `` yields two args:
+// `g(a, b)` and ` c`.
+MACRO_USE ignore: sequence dict {
+  "`",
+  sv_identifier:name=@:type="macro_use",
+  ?<MACRO_CALL_ARGS>:args=@
+}
+
+// Bare macro use: `IDENT only, no `(args)`. Used where the
+// surrounding rule (e.g. MODULE_INSTANTIATION's INSTANCE) takes
+// `(...)` as its OWN structural element — the full MACRO_USE
+// would gobble those parens as its args, breaking the outer
+// parse. This form parses just the backtick + name.
+MACRO_USE_BARE ignore: sequence dict {
+  "`",
+  sv_identifier:name=@:type="macro_use"
+}
+
+MACRO_CALL_ARGS: sequence array {
+  "(",
+  repeat sv_balanced_arg separator ",",
+  ")"
+}
+
+// Choice wraps. Wherever the grammar previously pinned a specific
+// terminal that a macro might substitute for, route through one of
+// these so MACRO_USE is an accepted alternative. The terminal's
+// emitted value (int/string) and macro_use AST node are both
+// passable in the same slot — the host distinguishes by checking
+// for `{type: "macro_use"}`.
+//
+// (No FLOAT_OR_MACRO: real-number literals can't usefully be
+// supplanted by a macro; a bare `` `MACRO `` at expression position
+// reaches MACRO_USE in PRIMARY, which is the correct classification.)
+INT_OR_MACRO:   choice { <INT_VAL>,    <MACRO_USE> }
+// IDENT_OR_MACRO uses the BARE form because identifier slots are
+// inside rules that have their own `(...)` (port lists, parameter
+// lists, etc.); the full MACRO_USE would gobble those.
+IDENT_OR_MACRO: choice { <IDENT_VAL>,  <MACRO_USE_BARE> }
+
+// Non-container wrappers — the parser's value flows through the
+// Sequence and becomes the Choice alternative's emitted value.
+// (rawast's `:@` binding syntax is shorthand for Key alternatives;
+//  for Parse terminals in Choice position, this wrapper form is
+//  the canonical way to forward the parsed value.)
+INT_VAL:   sequence { int }
+IDENT_VAL: sequence { sv_identifier }
+
+// Preprocessor directives are inlined directly into the host
+// Choice rules (DESCRIPTION, MODULE_ITEM, STATEMENT) rather than
+// being collected under a nested DIRECTIVE Choice. The flat-
+// Choice form is required for save-side dispatch: save walks each
+// host-Choice alt looking for a `:type=` discriminator on the
+// resolved rule body, and won't recurse through a nested Choice
+// to find one. The cost is the keyword list being repeated in
+// three places; the benefit is round-trip save/load works.
+
+// `define NAME [params] body
+// Body extends to the next un-escaped newline. We capture as raw
+// text via `*` up to the literal `\n` — the host can post-process
+// backslash-continued lines if needed.
+// `define NAME body — `ignore:` (empty) keeps the rule line-aware
+// (the usual whitespace ignore policy would skip newlines too,
+// causing the body to swallow the next line). Horizontal whitespace
+// between the keyword/name/body is consumed via `linespace` (from
+// std). The body extends to the next un-escaped newline, with
+// `\` line-continuation handled by sv_line_text. Discriminator
+// `:type="define"` lives on the leading keyword so save-side
+// dispatch picks it up from the first item.
+DEFINE ignore: sequence dict {
+  "`define":type="define",
+  linespace,
+  sv_identifier:name=@,
+  linespace,
+  sv_line_text:body=@
+}
+
+UNDEF: sequence dict {
+  "`undef", sv_identifier:name=@:type="undef"
+}
+
+INCLUDE: sequence dict {
+  "`include",
+  string:file=@:type="include"
+}
+
+// `ifdef NAME body `endif (and `ifndef variant). Body captured as
+// raw text up to `` `endif ``. Any `` `else `` inside stays in the
+// body; the host evaluates the condition and re-parses the active
+// branch. Nested `` `ifdef `` is opaque — host's preprocessor
+// handles nesting.
+IFDEF: sequence dict {
+  "`ifdef",
+  sv_identifier:cond=@:type="ifdef",
+  *:body=@,
+  "`endif"
+}
+
+IFNDEF: sequence dict {
+  "`ifndef",
+  sv_identifier:cond=@:type="ifndef",
+  *:body=@,
+  "`endif"
+}
+
+// ─── Package and interface (parse-only; semantics deferred to host) ────
+
+// `package NAME; <items> endpackage [: NAME]`. The package body uses
+// the same MODULE_ITEM Choice — most things (parameters, typedefs,
+// user-typed decls, function/task decls) work in both module and
+// package position. Imports inside packages also use IMPORT_STMT.
+PACKAGE_DECL: sequence dict {
+  'package':@:type="package",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endpackage',
+  ?<END_LABEL>:end_label=@
+}
+
+// `interface NAME (...); <items> endinterface`. Same body shape as
+// MODULE_DECL — interfaces are modules with a different keyword and
+// a more permissive item list. For now, share MODULE_ITEMS as the
+// body grammar; modport declarations can be added when needed.
+INTERFACE_DECL: sequence dict {
+  'interface':@:type="interface",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<MODULE_HEADER_IMPORT>:header_import=@,
+  ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<INTERFACE_EXTENDS>:extends=@,
+  ?<PORT_LIST>:ports=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endinterface',
+  ?<END_LABEL>:end_label=@
+}
+
+// `extends parent_if [#(params)] [, parent_if2 ...]` — interface
+// inheritance (SV-1800 LRM §25.5.1). Comma-separated list of
+// parent interfaces, each optionally parameterized.
+INTERFACE_EXTENDS: sequence dict {
+  'extends':@,
+  repeat+ <INTERFACE_PARENT>:parents[]=@ separator ","
+}
+
+INTERFACE_PARENT: sequence dict {
+  sv_identifier:name=@,
+  ?<PARAM_OVERRIDE>:params=@
+}
+
+// `import pkg::*;` or `import pkg::ident;`. One or more comma-
+// separated entries per statement; each entry is `<pkg>::<sym>` or
+// `<pkg>::*`.
+IMPORT_STMT: sequence dict {
+  'import':@:type="import",
+  <IMPORT_ENTRIES>:entries=@,
+  ";"
+}
+
+IMPORT_ENTRIES: sequence array {
+  repeat+ <IMPORT_ENTRY> separator ","
+}
+
+IMPORT_ENTRY: sequence dict {
+  <IMPORT_PKG>:pkg=@,
+  "::",
+  <IMPORT_TARGET>:target=@
+}
+
+// Package qualifier: an identifier or `*` (wildcard, used by
+// `export *::*;`).
+IMPORT_PKG: choice {
+  "*":@,
+  sv_identifier
+}
+
+// Either `*` (wildcard) or an identifier.
+IMPORT_TARGET: choice {
+  "*":@,
+  sv_identifier
+}
+
+// `export pkg::*;` / `export *::*;` — semantics-equivalent surface form.
+EXPORT_STMT: sequence dict {
+  'export':@:type="export",
+  <IMPORT_ENTRIES>:entries=@,
+  ";"
+}
+
+// Trailing `: NAME` after end-keyword. Used by packages, interfaces,
+// blocks, classes — captures the optional label that some users
+// write for readability. Pure recognition; host may verify it
+// matches the opening name if desired.
+//
+// Some codebases emit a stray trailing `;` after the label
+// (`endtask: name;`), not in the LRM but common in practice — the
+// optional `?";"` swallows it here so every consumer of END_LABEL
+// gets the lenient form for free.
+END_LABEL: sequence dict {
+  ":", sv_identifier:label=@,
+  ?";"
+}
+
+// ─── Class declarations (parse-only, semantics deferred) ──────────────
+
+// Class is split into `virtual class`/plain `class` variants —
+// otherwise the optional-leading-keyword (`?'virtual'`) interacts
+// badly with the surrounding DESCRIPTION Choice when peek-and-skip
+// has to decide whether to enter CLASS_DECL.
+CLASS_DECL: choice {
+  <CLASS_DECL_VIRTUAL>,
+  <CLASS_DECL_PLAIN>
+}
+
+CLASS_DECL_VIRTUAL: sequence dict {
+  'virtual':virtual=true,
+  'class':@:type="class",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:params=@,
+  ?<CLASS_EXTENDS>:extends=@,
+  ?<CLASS_IMPLEMENTS>:implements=@,
+  ";",
+  <CLASS_ITEMS>:items=@,
+  'endclass',
+  ?<END_LABEL>:end_label=@
+}
+
+CLASS_DECL_PLAIN: sequence dict {
+  'class':@:type="class",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:params=@,
+  ?<CLASS_EXTENDS>:extends=@,
+  ?<CLASS_IMPLEMENTS>:implements=@,
+  ";",
+  <CLASS_ITEMS>:items=@,
+  'endclass',
+  ?<END_LABEL>:end_label=@
+}
+
+// `extends BASE [#(params)]` — class inheritance. BASE can be a
+// plain identifier OR a package-qualified `pkg::Name`. Tried in
+// order: pkg-qualified first (would otherwise leave `::Name`
+// unconsumed).
+CLASS_EXTENDS: sequence dict {
+  'extends':@,
+  <CLASS_BASE>:base=@,
+  ?<PARAM_OVERRIDE>:params=@
+}
+
+CLASS_BASE: choice {
+  <CLASS_BASE_QUALIFIED>,
+  <CLASS_BASE_PLAIN>
+}
+
+CLASS_BASE_QUALIFIED: sequence dict {
+  sv_identifier:pkg=@:type="qualified_base",
+  "::",
+  sv_identifier:name=@
+}
+
+CLASS_BASE_PLAIN: sequence { sv_identifier }
+
+// `implements I1, I2, ...` — class implements one or more
+// interfaces (SV-1800 interface classes).
+CLASS_IMPLEMENTS: sequence dict {
+  'implements':@,
+  repeat+ sv_identifier:interfaces[]=@ separator ","
+}
+
+CLASS_ITEMS: sequence array {
+  repeat <CLASS_ITEM>
+}
+
+CLASS_ITEM: choice {
+  <DEFINE>,
+  <UNDEF>,
+  <INCLUDE>,
+  <IFDEF>,
+  <IFNDEF>,
+  <TYPEDEF_FORWARD_CLASS>,
+  <TYPEDEF_REGULAR>,
+  <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_STMT>,
+  <CLASS_PURE_VIRTUAL_FUNCTION>,
+  <CLASS_EXTERN_FUNCTION>,
+  <CLASS_PURE_VIRTUAL_TASK>,
+  <CLASS_EXTERN_TASK>,
+  <CLASS_FUNCTION_TYPED>,
+  <CLASS_FUNCTION_VOID>,
+  <CLASS_TASK>,
+  <CLASS_CONSTRAINT_EXTERN>,
+  <CONSTRAINT_DECL>,
+  <COVERGROUP_DECL>,
+  <VIRTUAL_INTERFACE_DECL>,
+  <CLASS_PROPERTY>,
+  <CLASS_USER_PROPERTY>,
+  <MACRO_STMT>
+}
+
+// `[<vis>] [pure virtual | extern] function [<TYPE>] NAME(args);` —
+// method PROTOTYPE (no body, ends at first `;`). Tried before
+// CLASS_FUNCTION so `pure virtual` and `extern` declarations don't
+// match the full-body form and then fail on missing `endfunction`.
+CLASS_PROTO_FUNCTION: choice {
+  <CLASS_PURE_VIRTUAL_FUNCTION>,
+  <CLASS_EXTERN_FUNCTION>
+}
+
+CLASS_PURE_VIRTUAL_FUNCTION: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  'pure':@:type="pure_virtual_function",
+  'virtual',
+  'function',
+  ?<LIFETIME>:lifetime=@,
+  ?<TYPE_SPEC>:return_type=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";"
+}
+
+CLASS_EXTERN_FUNCTION: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  'extern':@:type="extern_function",
+  ?'virtual':is_virtual=true,
+  'function',
+  ?<LIFETIME>:lifetime=@,
+  ?<TYPE_SPEC>:return_type=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";"
+}
+
+CLASS_PROTO_TASK: choice {
+  <CLASS_PURE_VIRTUAL_TASK>,
+  <CLASS_EXTERN_TASK>
+}
+
+CLASS_PURE_VIRTUAL_TASK: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  'pure':@:type="pure_virtual_task",
+  'virtual',
+  'task',
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";"
+}
+
+CLASS_EXTERN_TASK: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  'extern':@:type="extern_task",
+  ?'virtual':is_virtual=true,
+  'task',
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";"
+}
+
+// `[pure] [virtual] [extern] constraint NAME;` — extern constraint
+// declaration (body lives outside the class). Captured by raw
+// body up to the `;`.
+CLASS_CONSTRAINT_EXTERN: sequence dict {
+  ?'pure':is_pure=true,
+  ?'extern':is_extern=true,
+  'constraint':@:type="constraint_extern",
+  sv_identifier:name=@,
+  ";"
+}
+
+// `[local|protected] [static|automatic] [const] [var] [rand|randc]
+// <TYPE> name [array_kind_suffix] [= expr];`
+CLASS_PROPERTY: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?<LIFETIME>:lifetime=@,
+  ?'const':is_const=true,
+  ?'var':is_var=true,
+  ?<RAND_QUAL>:rand=@,
+  <TYPE_SPEC>:type_spec=@:type="class_property",
+  ?<SIGNING_KW>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<CLASS_PROPERTY_INIT>:init=@,
+  ";"
+}
+
+// User-typed class property: same shape as CLASS_PROPERTY but the
+// type slot is an sv_identifier (typedef'd type) instead of a
+// keyword. Engine repeat-iteration marks (added at grammar.cpp's
+// Repeat case) ensure a failed match rolls back cleanly so this
+// alt doesn't gobble `endclass` from the CLASS_ITEMS repeat.
+// Multi-name form (`uvm_event a, b, c;`) supported via the same
+// repeat+ pattern used by NET_DECL and friends. SV's per-name init
+// quirk (`type a = init_a, b = init_b;`) isn't surfaced here — the
+// optional CLASS_PROPERTY_INIT applies to the last name in the
+// list, matching how most production code writes these decls.
+CLASS_USER_PROPERTY: sequence dict {
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?<LIFETIME>:lifetime=@,
+  ?'const':is_const=true,
+  ?'virtual':is_virtual=true,
+  ?<RAND_QUAL>:rand=@,
+  sv_qualified_type:type_spec=@:type="class_user_property",
+  ?<PARAM_OVERRIDE>:params=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<CLASS_PROPERTY_INIT>:init=@,
+  ";"
+}
+
+CLASS_VISIBILITY: choice { 'local':@, 'protected':@ }
+
+RAND_QUAL: choice { 'randc':@, 'rand':@ }
+
+CLASS_PROPERTY_INIT: sequence dict { "=", <EXPR>:value=@ }
+
+// `[local|protected] function [<TYPE>] NAME(args); body endfunction`
+// CLASS_FUNCTION/CLASS_TASK don't use `:@` on the keyword Key
+// because a peek-and-skipped leading `?<CLASS_VISIBILITY>` would
+// otherwise pair its V-name "visibility" marker with the keyword's
+// emitted text ("function" or "task") and corrupt the AST. The
+// `:type=` const binding works regardless of which optional was
+// skipped because it's an explicit V-name + V-const pair, not a
+// "use the parser's emission" binding.
+// Split into TYPED (with explicit return type — keyword or
+// user-defined) and VOID (no return type, just method name) so
+// `function int foo()`, `function M get()`, and `function bar()`
+// all parse correctly. TYPED tried first; falls through to VOID
+// when there's only one identifier between `function` and `(`.
+CLASS_FUNCTION: choice {
+  <CLASS_FUNCTION_TYPED>,
+  <CLASS_FUNCTION_VOID>
+}
+
+CLASS_FUNCTION_TYPED: sequence dict {
+  ?'virtual':is_virtual=true,
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?'virtual':is_virtual=true,
+  ?'static':is_static=true,
+  'function':type="class_function_typed",
+  ?<LIFETIME>:lifetime=@,
+  sv_qualified_type:return_type=@,
+  ?<SIGNING_KW>:return_signing=@,
+  ?<RANGE>:return_range=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endfunction',
+  ?<END_LABEL>:end_label=@
+}
+
+CLASS_FUNCTION_VOID: sequence dict {
+  ?'virtual':is_virtual=true,
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?'virtual':is_virtual=true,
+  ?'static':is_static=true,
+  'function':type="class_function",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endfunction',
+  ?<END_LABEL>:end_label=@
+}
+
+// SV-1800 §8.4 method_qualifier — any order of `virtual` /
+// `protected|local` / `static`. Slot `virtual` in two positions so
+// both `protected virtual task` and `virtual protected task` parse;
+// the duplicate `?'virtual'` binding harmlessly re-asserts the same
+// flag if the keyword shows up in either spot.
+CLASS_TASK: sequence dict {
+  ?'virtual':is_virtual=true,
+  ?<CLASS_VISIBILITY>:visibility=@,
+  ?'virtual':is_virtual=true,
+  ?'extern':is_extern=true,
+  ?'static':is_static=true,
+  'task':type="class_task",
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endtask',
+  ?<END_LABEL>:end_label=@
+}
+
+METHOD_PORT_LIST: sequence dict {
+  "(",
+  *:text=@,
+  ")"
+}
+
+// `constraint NAME { … }` — body captured as raw text; downstream
+// Body uses sv_balanced_braces so nested `{ [a:b], c }` inside-set
+// patterns don't terminate the capture at the first `}`.
+//
+// Note: a subparse=CONSTRAINT_BLOCK would re-parse the body into
+// structured per-statement form. Deferred until a proper
+// CONSTRAINT_STMT grammar (with dist, solve before, foreach,
+// implication, etc.) is defined — splitting on `;` alone loses
+// the `{...}` nesting context needed for dist clauses and `if`
+// branches inside constraints.
+CONSTRAINT_DECL: sequence dict {
+  'constraint':@:type="constraint",
+  sv_identifier:name=@,
+  "{",
+  sv_balanced_braces:body=@,
+  "}"
+}
+
+// ─── Miscellaneous module-item constructs (parse-only) ──────────────────
+
+// `modport NAME (input a, b, output c, ...);` — interface modport.
+//
+// Body parsed directly as a list of direction-or-inherit entries.
+// Each entry is either `<dir> <name>` (direction-headed) or just
+// `<name>` (inheriting direction from the preceding entry). Host
+// walks left-to-right to apply inherited directions.
+MODPORT_DECL: sequence dict {
+  'modport':@:type="modport",
+  sv_identifier:name=@,
+  "(",
+  repeat+ <MODPORT_GROUP>:ports[]=@ separator ",",
+  ")",
+  ";"
+}
+
+MODPORT_GROUP: choice {
+  <MODPORT_GROUP_DIR>,
+  <MODPORT_GROUP_INHERIT>
+}
+
+MODPORT_GROUP_DIR: sequence dict {
+  <PORT_DIRECTION>:direction=@:type="modport_group",
+  sv_identifier:name=@
+}
+
+MODPORT_GROUP_INHERIT: sequence dict {
+  sv_identifier:name=@:type="modport_group_inherit"
+}
+
+// `let NAME(args) = expr;` — SV-1800 macro-like substitution. Body
+// captured as raw text up to the trailing `;`. Host re-parses if it
+// needs to manipulate the body.
+LET_DECL: sequence dict {
+  'let':@:type="let",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  "=",
+  *:body=@,
+  ";"
+}
+
+// `bind <target> <module> <instance> (...);` — out-of-module
+// directive. Target is either a module type or an instance path;
+// captured as opaque text up to the binding clause.
+BIND_STMT: sequence dict {
+  'bind':@:type="bind",
+  *:body=@,
+  ";"
+}
+
+// `defparam path.to.param = value;` — overrides a parameter on an
+// instance after the fact. Deprecated in SV-1800 but still legal.
+DEFPARAM_STMT: sequence dict {
+  'defparam':@:type="defparam",
+  *:body=@,
+  ";"
+}
+
+// `specify … endspecify` — timing specifications. Body is highly
+// dialect-specific (timing paths, edge specifications); capture as
+// raw text and let host re-parse if needed.
+SPECIFY_BLOCK: sequence dict {
+  'specify':@:type="specify",
+  *:body=@,
+  'endspecify'
+}
+
+// ─── SystemVerilog Assertions (SVA) — parse-only ──────────────────────
+
+// SVA introduces a temporal property language (sequences, properties,
+// assert/cover/assume statements) layered on top of expressions. The
+// surface forms are well-defined but the temporal operators (`##`,
+// `|->`, `|=>`, `s_eventually`, `s_always`, `throughout`, `within`,
+// repetition `[*N]`, `[->N]`, `[=N]`, etc.) form an entire sub-
+// language. For pure parse, we capture the property body as raw text
+// and let the host re-parse it via a dedicated SVA pass.
+
+// `assert property (<expr>) [<action>];`
+// `cover property (<expr>) [<action>];`
+// `assume property (<expr>) [<action>];`
+//
+// The `action` is an optional `else <stmt>` or `; <stmt>` clause —
+// captured as part of the raw body up to the trailing `;`.
+// Either `<kind> property (...)` or `cover sequence (...)`. The
+// `sequence` form is only valid for `cover` per SV-1800, but we
+// don't enforce that — pure parse, host validates.
+CONCURRENT_ASSERT: sequence dict {
+  ?<ASSERTION_LABEL>:label=@,
+  <ASSERT_KIND>:kind=@:type="assert_concurrent",
+  <ASSERT_KIND_KW>:kind_kw=@,
+  "(",
+  sv_balanced_arg:body=@,
+  ")",
+  *:action=@,
+  ";"
+}
+
+// `label_name :` — optional name prefix on a concurrent assertion.
+// Common pattern: `a1: assert property (...)`. Captured as a
+// separate field so the host can use the label for tooling.
+ASSERTION_LABEL: sequence dict { sv_identifier:name=@, ":" }
+
+ASSERT_KIND: choice {
+  'assert':@, 'cover':@, 'assume':@, 'restrict':@
+}
+
+// `property` (the LRM-standard) OR `sequence` (only valid for
+// `cover`). Captured separately so the host knows which form.
+ASSERT_KIND_KW: choice { 'property':@, 'sequence':@ }
+
+// `property NAME([args]); <body> endproperty [: NAME]`
+PROPERTY_DECL: sequence dict {
+  'property':@:type="property",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endproperty',
+  ?<END_LABEL>:end_label=@
+}
+
+// `sequence NAME([args]); <body> endsequence [: NAME]`
+SEQUENCE_DECL: sequence dict {
+  'sequence':@:type="sequence",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endsequence',
+  ?<END_LABEL>:end_label=@
+}
+
+// ─── Coverage, clocking, checkers, fork/join, immediate assertions ─────
+
+// `covergroup NAME [(args)] [coverage_event]; <items> endgroup
+// [: NAME]`. Coverpoints, crosses, options, types — all live in
+// the body which is captured raw. Host has a dedicated covergroup
+// pass to extract structure.
+COVERGROUP_DECL: sequence dict {
+  'covergroup':@:type="covergroup",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  *:body=@,
+  'endgroup',
+  ?<END_LABEL>:end_label=@
+}
+
+// `clocking [NAME] @(<event>); <items> endclocking [: NAME]`.
+// Used in testbenches to declare a clock domain with timing/skew
+// info for signals. Body captured raw.
+CLOCKING_BLOCK: sequence dict {
+  ?<DEFAULT_KW>:is_default=@,
+  'clocking':@:type="clocking",
+  ?<IDENT_OPT>:name=@,
+  *:body=@,
+  'endclocking',
+  ?<END_LABEL>:end_label=@
+}
+
+// Single-key rules wrapped in Choice (rawast doesn't allow bare
+// keys as rule bodies).
+// `default` or `global` prefix on a clocking block. Both forms
+// (per SV-1800) tag the block as a module-wide default or a
+// system-wide global. Pure parse: host distinguishes via the
+// captured keyword string.
+DEFAULT_KW: choice { 'default':@, 'global':@ }
+IDENT_OPT: sequence { sv_identifier:name=@ }
+
+// `checker NAME(args); <items> endchecker [: NAME]`. SV-1800
+// construct for reusable verification IP. Body captured raw.
+CHECKER_DECL: sequence dict {
+  'checker':@:type="checker",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endchecker',
+  ?<END_LABEL>:end_label=@
+}
+
+// `fork <stmts> join` / `join_any` / `join_none` — concurrent block.
+// Split into three rules because `*` raw-consume requires a literal
+// Key terminator (not a Choice/Ref). Tried in order: most-specific
+// suffix first so `join_none` and `join_any` aren't claimed as
+// plain `join` followed by garbage.
+FORK_JOIN: choice {
+  <FORK_JOIN_NONE>,
+  <FORK_JOIN_ANY>,
+  <FORK_JOIN_PLAIN>
+}
+
+FORK_JOIN_NONE: sequence dict {
+  'fork':@:type="fork_join_none",
+  *:body=@,
+  'join_none'
+}
+
+FORK_JOIN_ANY: sequence dict {
+  'fork':@:type="fork_join_any",
+  *:body=@,
+  'join_any'
+}
+
+FORK_JOIN_PLAIN: sequence dict {
+  'fork':@:type="fork_join",
+  *:body=@,
+  'join'
+}
+
+// Immediate assertion inside procedural code:
+// `assert(expr) [else <stmt>];` or `assert(expr);` or
+// `cover(expr);` or `assume(expr);`. Body and optional action
+// captured raw to the next `;`.
+//
+// Distinguished from CONCURRENT_ASSERT by the lack of `property`
+// keyword after the kind — that lookahead would need negative
+// peek, so we use Choice ordering: CONCURRENT_ASSERT (which
+// requires `property`) lives in MODULE_ITEM; IMMEDIATE_ASSERT
+// lives in STATEMENT (procedural context).
+IMMEDIATE_ASSERT: sequence dict {
+  ?<ASSERTION_LABEL>:label=@,
+  <ASSERT_KIND>:kind=@:type="assert_immediate",
+  "(",
+  sv_balanced_arg:body=@,
+  ")",
+  *:action=@,
+  ";"
+}
+
+// ─── Extern, UDP, config, program (parse-only) ─────────────────────────
+
+// `extern module NAME (...);` / `extern task NAME;` /
+// `extern function ... NAME;` — forward declarations. Captured as
+// raw text up to `;` for host to re-parse.
+EXTERN_DECL: sequence dict {
+  'extern':@:type="extern",
+  *:body=@,
+  ";"
+}
+
+// `primitive NAME (...); <body> endprimitive [: NAME]` — UDP
+// (user-defined primitive). Body is a small DSL of input/output
+// declarations + a truth table. Captured raw.
+UDP_DECL: sequence dict {
+  'primitive':@:type="primitive",
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ";",
+  *:body=@,
+  'endprimitive',
+  ?<END_LABEL>:end_label=@
+}
+
+// `config NAME; <items> endconfig [: NAME]` — design configuration.
+CONFIG_DECL: sequence dict {
+  'config':@:type="config",
+  sv_identifier:name=@,
+  ";",
+  *:body=@,
+  'endconfig',
+  ?<END_LABEL>:end_label=@
+}
+
+// `program NAME (...); <items> endprogram [: NAME]` — program
+// blocks for testbench code. Body is essentially the same as a
+// module body so we reuse MODULE_ITEMS.
+//
+// Conflict note: MODULE_KEYWORD already accepts 'program' (a
+// long-standing alias for 'module' in this grammar). Real LRM
+// SV makes them distinct — `endprogram` ends a program, not
+// `endmodule`. We've kept the alias for back-compat with
+// existing tests; PROGRAM_DECL here adds the LRM-correct form
+// alongside, with explicit `program`/`endprogram` matching.
+// MODULE_KEYWORD's `program` alt would only fire as a fallback
+// when PROGRAM_DECL fails (e.g. when `endmodule` is used).
+PROGRAM_DECL: sequence dict {
+  'program':@:type="program",
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:param_ports=@,
+  ?<PORT_LIST>:ports=@,
+  ";",
+  <MODULE_ITEMS>:items=@,
+  'endprogram',
+  ?<END_LABEL>:end_label=@
+}
+
+// ─── Small remaining gaps (genvar, nettype, randsequence, fork-ctrl) ───
+
+// `genvar i, j, k;` — generate-loop variable declarations. Standalone
+// form (not inside a `for` header). Multiple names per declaration
+// supported via the `:[]=@` list-append pattern.
+GENVAR_DECL: sequence dict {
+  'genvar':@:type="genvar",
+  repeat+ sv_identifier:names[]=@ separator ",",
+  ";"
+}
+
+// `nettype <type> <name> [with <function>];` — SV-1800-2012
+// user-defined nettypes. Body captured raw up to `;`.
+NETTYPE_DECL: sequence dict {
+  'nettype':@:type="nettype",
+  *:body=@,
+  ";"
+}
+
+// `randsequence (<id>) <productions> endsequence` — class
+// randomization construct. Body captured raw.
+RANDSEQUENCE_STMT: sequence dict {
+  'randsequence':@:type="randsequence",
+  *:body=@,
+  'endsequence'
+}
+
+// `wait fork ;` — wait for all forked threads to terminate.
+WAIT_FORK_STMT: sequence dict {
+  'wait':@:type="wait_fork",
+  'fork',
+  ";"
+}
+
+// `disable fork ;` — terminate all forked threads.
+DISABLE_FORK_STMT: sequence dict {
+  'disable':@:type="disable_fork",
+  'fork',
+  ";"
+}
+
+// ─── Global clocking (top-level / module-item) ────────────────────────
+
+// `global clocking [NAME] @(<event>); endclocking [: NAME];`
+// SV-1800 top-level clocking domain. Module-item position.
+//
+// Note: tried via the regular CLOCKING_BLOCK path with `default`
+// or `global` as the prefix keyword. CLOCKING_BLOCK's `?<DEFAULT_KW>`
+// handles `default`; add `global` to that Choice in the DEFAULT_KW
+// rule definition. Keeps the body shape identical.
+
+// ─── Control-flow statements (return / break / continue / do-while / foreach) ─
+
+// `return [<expr>];` — function return.
+RETURN_STMT: sequence dict {
+  'return':@:type="return",
+  ?<EXPR>:value=@,
+  ";"
+}
+
+// `break;` and `continue;` — loop control.
+BREAK_STMT: sequence dict {
+  'break':@:type="break",
+  ";"
+}
+
+CONTINUE_STMT: sequence dict {
+  'continue':@:type="continue",
+  ";"
+}
+
+// `do <stmt> while (<expr>);` — post-test loop.
+DO_WHILE_STMT: sequence dict {
+  'do':@:type="do_while",
+  <STATEMENT>:body=@,
+  'while',
+  "(", <EXPR>:cond=@, ")",
+  ";"
+}
+
+// `foreach (array[i, j, ...]) <stmt>` — array iteration.
+// The bracket-section captures iteration variables as raw text;
+// host re-parses the comma-separated index list.
+FOREACH_STMT: sequence dict {
+  'foreach':@:type="foreach",
+  "(", *:iter=@, ")",
+  <STATEMENT>:body=@
+}
+
+// `obj.method(args);` / `obj.field.method(args);` — method call
+// as a statement. Distinct from TASK_CALL which is just
+// `name(args);`. The trailing `with { ... }` clause is supported
+// via the same METHOD_CALL primary rule's optional with-clause.
+METHOD_CALL_STMT: sequence dict {
+  sv_identifier:name=@:type="method_call_stmt",
+  repeat+ <HIER_PART>:path[]=@,
+  "(",
+  repeat <EXPR>:args[]=@ separator ",",
+  ")",
+  ?<WITH_CLAUSE>:with=@,
+  ";"
+}
+
+// `virtual [interface] <type_name> [#(params)] name [, name2, ...];` —
+// virtual-interface reference declaration. SV-1800 LRM allows the
+// `interface` keyword to be omitted when followed by a typedef'd
+// interface name. Used in testbench classes to hold a handle to
+// an interface instance.
+//
+// Body captured raw between `virtual [interface]` and the trailing
+// `;` so the optional `#(...)` parameter override and the
+// comma-separated identifier list are both handled by the host.
+VIRTUAL_INTERFACE_DECL: sequence dict {
+  'virtual':@:type="virtual_interface",
+  ?'interface',
+  *:body=@,
+  ";"
+}
+
+
