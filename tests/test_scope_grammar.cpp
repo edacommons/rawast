@@ -8,6 +8,7 @@
 #include <rawast/grammar.hpp>
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
+#include <rawast/to_value.hpp>
 #include <rawast/value.hpp>
 
 #include <sstream>
@@ -432,6 +433,63 @@ TEST_CASE("scope: #subparse re-entry produces structured AST (self-contained)") 
     REQUIRE(value);
     CHECK(tag->data()   == "foo");
     CHECK(value->data() == "bar");
+}
+
+// ─── Multi-stop grammar round-trip via to_value → loader ────────────────
+
+// to_value emits the grammar's STRUCTURE (scope node with INNERs +
+// surrounding sibling shape). It does NOT serialise resolved stops —
+// stops are derived at load time from the Repeat-context the
+// resolver finds. So a multi-stop grammar round-trips correctly as
+// long as the structure round-trips: the re-loaded grammar's
+// resolver recomputes the same stop set from the same structure.
+TEST_CASE("scope: multi-stop grammar round-trips through to_value → load") {
+    register_std_parser_group();
+    Grammar g1;
+    auto r1 = load_rawast_grammar_from_string(g1, R"GRAM(
+        use: std
+        start: <PROG>
+        PROG: sequence array {
+          "(",
+          repeat scope { std.string } separator ",",
+          ")"
+        }
+    )GRAM");
+    REQUIRE_MESSAGE(r1, "initial load: " << (r1 ? "" : r1.error()));
+
+    // First-load behaviour: multi-stop scope correctly splits args.
+    {
+        std::istringstream is{"(a,b,c)"};
+        StreamReader sr{is};
+        auto p = g1.parse(sr);
+        REQUIRE(p);
+        auto arr = as_array(*p);
+        REQUIRE(arr);
+        CHECK(arr->data().size() == 3);
+    }
+
+    // Dump → JSON-form load → re-parse the same input. The resolver
+    // re-derives the stops from the same Repeat + sibling structure
+    // and the parse should produce the same 3-element array.
+    auto v = to_value(g1);
+    REQUIRE(v);
+    Grammar g2;
+    auto r2 = load_json_grammar_into(g2, *v);
+    REQUIRE_MESSAGE(r2, "round-trip load: " << (r2 ? "" : r2.error()));
+
+    {
+        std::istringstream is{"(a,b,c)"};
+        StreamReader sr{is};
+        auto p = g2.parse(sr);
+        REQUIRE_MESSAGE(p, "round-trip parse: "
+                       << (p ? "" : p.error().message));
+        auto arr = as_array(*p);
+        REQUIRE(arr);
+        CHECK(arr->data().size() == 3);
+        CHECK(as_string(arr->data()[0])->data() == "a");
+        CHECK(as_string(arr->data()[1])->data() == "b");
+        CHECK(as_string(arr->data()[2])->data() == "c");
+    }
 }
 
 // ─── Different bracket flavours ─────────────────────────────────────────
