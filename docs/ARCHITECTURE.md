@@ -13,6 +13,20 @@ rawast is a **predictive PEG parser** with always-on alt-failure recovery on Cho
 
 These invariants are load-bearing for the `.jast` container model (M2): a grammar header + value tree is enough to round-trip indefinitely, with no implicit host configuration.
 
+## Input handoff — `Stream`
+
+`rawast::Stream` is the canonical parser-input type — the only thing `Grammar::parse(...)` accepts (the `std::string` and `parse_file` / `parse_string` Python overloads are convenience wrappers that build a Stream and call the same engine entry).
+
+A Stream owns three things:
+
+- a `std::unique_ptr<std::istream>` — the byte source (string, file, custom buffer);
+- a `std::unique_ptr<StreamReader>` — the engine cursor with the mark / accept / reject machinery;
+- a `std::shared_ptr<void>` — type-erased ownership of any upstream backing state (e.g. the expanded byte buffer that `Preprocessor::preprocess` produces).
+
+The istream is heap-allocated so its address stays stable across Stream moves; the StreamReader's reference to it remains valid even after the Stream changes hands. This matters when a producer (preprocessor, code generator, future segment streamer) returns a Stream by value and the consumer holds it across scopes before parsing.
+
+Two factories cover almost every case (`Stream::from_string(...)`, `Stream::from_file(...)`); the general `Stream(unique_ptr<istream>, shared_ptr<void>)` constructor exists for producers that need to ship arbitrary upstream state alongside the bytes. Internally, `Grammar::parse_from(StreamReader&, …)` is kept as the engine's own subparse entry — that's how `walk_scan` keeps stream marks coherent across INNER subparses. External callers always go through Stream.
+
 ## Parser groups, `use:`, and ignore policy
 
 Every grammar declares the parsers it needs and attaches the ignore policy to whichever rule should be the default-active scope — typically the start rule. The host loader never injects parsers or ignores implicitly.

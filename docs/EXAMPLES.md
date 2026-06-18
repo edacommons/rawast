@@ -261,6 +261,64 @@ corpus profile: 263 files, 60.92ms total parse, 4,201,318 frames, max depth 28, 
 
 The profile counters are shared between the parse engine and the linter, so what you see in profiling matches what the engine actually dispatched.
 
+## Stream — share one input across grammars
+
+`rawast.Stream` is the canonical parser-input type. `parse_string` / `parse_file` / `parse_bytes` are sugar over `Stream.from_string` / `Stream.from_file`. Hold a Stream when you want to control where the bytes come from, or compose pipeline stages without re-reading.
+
+```python
+import rawast
+
+g = rawast.Grammar("json")
+
+s = rawast.Stream.from_string('{"name": "alice", "items": [1, 2, 3]}')
+ast = g.parse_stream(s)
+
+# Same idea from a file path:
+ast = g.parse_stream(rawast.Stream.from_file("config.json"))
+
+# parse_stream accepts the `start=...` kwarg the same way the other
+# overloads do (multi-top-rule grammars like lefdef):
+g2 = rawast.Grammar("lefdef")
+ast = g2.parse_stream(rawast.Stream.from_file("flow.def"), start="DEF")
+```
+
+## SystemVerilog preprocessor — three modes
+
+The `Preprocessor` exposes its pipeline at three independent joints. Pick the joint that matches your use case.
+
+```python
+import rawast
+
+pp_g = rawast.Grammar("sv_preprocessor")
+pp   = rawast.Preprocessor(pp_g)
+
+src = open("design.sv").read()
+
+# Mode 1 — parse the directives into an AST without expanding anything.
+# Useful for inspecting `define / `include / `ifdef structure (LSP-ish
+# tooling, dependency tracking, lint of macro hygiene before expansion).
+# No state mutation: pp.macros stays empty.
+ast = pp.parse(src)
+for item in ast:
+    if item["type"] == "define":
+        print("defines macro:", item["name"])
+
+# Mode 2 — expand the AST into a Stream of preprocessed bytes. Walker
+# state (macros, included_files, warnings, source spans) accumulates on
+# the Preprocessor instance.
+stream = pp.preprocess(ast, src)
+
+# Mode 3 — feed the Stream straight into the host SV grammar.
+sv = rawast.Grammar("systemverilog")
+top = sv.parse_stream(stream)
+
+# One-shot shortcut when you don't need the intermediate stages:
+expanded_text = pp.process(src)            # -> str of expanded bytes
+top = sv.parse_string(expanded_text)
+```
+
+Modes can be combined freely — Mode 1 alone is enough if you only want directive structure; Mode 2 → Mode 3 is the typical "preprocess then parse" pipeline. The same `Preprocessor` instance accumulates macro state across calls, so a multi-file corpus reuses one `pp`.
+
 ## See also
 
 - [`FEATURES.md`](FEATURES.md) — what each example exercises

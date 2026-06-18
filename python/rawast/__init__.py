@@ -76,7 +76,14 @@ class Grammar(_Grammar):
         Grammar.from_dict(d)  — build from an in-memory grammar dict.
 
     All factories return objects with the same instance methods
-    (`parse_file`, `parse_string`, `parse_bytes`, `save`, `lint`).
+    (`parse_file`, `parse_string`, `parse_bytes`, `parse_stream`,
+    `save`, `lint`).
+
+    `parse_stream` consumes a `rawast.Stream` — the canonical
+    parser-input type. Use it directly when you already hold a
+    Stream (e.g. the output of `Preprocessor.preprocess(...)`) or
+    want to compose a Stream once and pass it across stages. The
+    other parse methods are sugar that build a Stream internally.
     """
 
     def __new__(cls, name=None):

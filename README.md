@@ -46,6 +46,32 @@ json_g = rawast.Grammar("json")
 print(json_g.save(gdsii.parse_file("layout.gds")).decode("utf-8"))
 ```
 
+`parse_file` / `parse_string` / `parse_bytes` cover the common cases. If you already hold a stream — say, the expanded output of a preprocessor, or one Stream you want to consume through several grammars in sequence — use the canonical `parse_stream` entry instead:
+
+```python
+stream = rawast.Stream.from_file("layout.gds")
+ast    = gdsii.parse_stream(stream)
+```
+
+`rawast.Stream` is the canonical parser-input type as of v0.1.9 — `parse_string` / `parse_file` / `parse_bytes` are sugar over `Stream.from_string` / `Stream.from_file`. You can construct your own Stream and pass it to any grammar.
+
+### Preprocessing pipeline (SystemVerilog and similar)
+
+The `Preprocessor` exposes the same pipeline at three independent joints:
+
+```python
+pp_g = rawast.Grammar("sv_preprocessor")
+pp   = rawast.Preprocessor(pp_g)
+sv_g = rawast.Grammar("systemverilog")   # any host grammar
+
+src  = open("design.sv").read()
+ast  = pp.parse(src)                     # Mode 1: directives as AST, no expansion
+stream = pp.preprocess(ast, src)         # Mode 2: expand macros, returns Stream
+top  = sv_g.parse_stream(stream)         # Mode 3: host parse on the expanded bytes
+```
+
+Useful when you want to inspect macro / `\`include` / `\`ifdef` structure (Mode 1) without paying expansion cost, or when one stage of a build pipeline expands and another consumes. `pp.process(src)` still works as the one-call "give me the expanded bytes" shortcut.
+
 CLI:
 
 ```sh
