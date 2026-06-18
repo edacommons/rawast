@@ -478,7 +478,7 @@ NB_MODULE(_native, m) {
                 if (!m) return nb::none();
                 nb::dict d;
                 d["name"] = m->name;
-                d["body"] = m->body;
+                d["body"] = m->body_text();
                 nb::list params;
                 for (const auto& p : m->params) params.append(p);
                 d["params"] = params;
@@ -500,7 +500,7 @@ NB_MODULE(_native, m) {
                 for (const auto& [name, m] : pp.macros()) {
                     nb::dict d;
                     d["name"] = m.name;
-                    d["body"] = m.body;
+                    d["body"] = m.body_text();
                     nb::list params;
                     for (const auto& p : m.params) params.append(p);
                     d["params"] = params;
