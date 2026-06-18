@@ -522,6 +522,67 @@ TEST_CASE("scope: stop_strict propagates from strict-Key sibling") {
     CHECK(sv->data() == " some endpoint actually ");
 }
 
+// ─── Choice backtracking inside subparse — has_consumed stays correct ──
+
+// The first-content guard sets has_consumed_content=true on any Key /
+// Parse / Raw / Scope success and doesn't clear it on Choice / negative-
+// lookahead backtracks. The concern: if alt A matches a Key (setting the
+// flag), then alt A's later child fails and the Choice backtracks, alt B
+// starts at the original (rewound) cursor with has_consumed=true. Does
+// alt B then fire run_ignore inappropriately?
+//
+// Investigation: the flag could only matter if alt B's first run_ignore
+// would eat bytes that should stay in scope body text. After backtrack,
+// the cursor is at the SAME position alt A started — which was content
+// (alt A's first Key matched there). run_ignore at content is a no-op.
+// So sticky vs reset gives the same observable behaviour in this case.
+//
+// Test: subparse INNER = sequence { K1, choice { A, B } }. After K1
+// matches and Choice tries alt A (which fails after eating some bytes),
+// alt B should match cleanly. Locks in the working behaviour.
+TEST_CASE("scope: Choice backtracking after content match leaves alt-B intact") {
+    auto g = load(R"GRAM(
+        use: std
+        start: <PROG>
+        PROG ignore linespace: sequence array {
+          "{", scope array { <ITEM> }, "}"
+        }
+        ITEM: sequence dict {
+          "x":mark="x",
+          <SUFFIX>:suffix=@
+        }
+        SUFFIX: choice {
+          <A>,
+          <B>
+        }
+        A: sequence dict {
+          "p":a_marker="p",
+          "q":a_after="q"
+        }
+        B: sequence dict {
+          "p":b_marker="p"
+        }
+    )GRAM");
+    auto v = parse_input(g, "{x p}");
+    auto outer = as_array(v);
+    REQUIRE(outer);
+    REQUIRE(outer->data().size() == 1);
+    auto segs = std::dynamic_pointer_cast<ArrayValue>(outer->data()[0]);
+    REQUIRE(segs);
+    REQUIRE(segs->data().size() == 1);
+    auto item = std::dynamic_pointer_cast<DictValue>(segs->data()[0]);
+    REQUIRE(item);
+    auto suffix = std::dynamic_pointer_cast<DictValue>(item->data()["suffix"]);
+    REQUIRE_MESSAGE(suffix,
+        "suffix wasn't structured — Choice backtracking after alt A's "
+        "partial match may have left the parser in a bad state");
+    // Alt A would have matched "p" then failed on "q" (no "q" in input).
+    // Choice backtracks, alt B matches just "p". Verify the produced
+    // suffix is alt B's shape (b_marker present, no a_after).
+    REQUIRE(suffix->data().find("b_marker") != suffix->data().end());
+    CHECK(suffix->data().find("a_after") == suffix->data().end());
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {
