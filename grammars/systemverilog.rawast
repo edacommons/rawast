@@ -1507,86 +1507,94 @@ WAIT_STMT: sequence dict {
 // the design-choice comment at the top of this file. The grammar
 // emits `{op, args:[lhs, rhs]}` only for exactly two operands.
 
-// Each binop precedence level uses the `NEXT (OP NEXT)*` pattern:
+// Each precedence level uses the `choice { CHAIN, NEXT }` pattern from
+// PP_EXPR (grammars/sv_pp_expr.rawast). CHAIN matches an always-wrap
+// `{lhs, tail:[…]}` shape with at least one tail entry (`repeat+`);
+// a bare atom falls through to <NEXT> with no wrapper. The top of the
+// binary chain is tagged `#opchain`, so the engine post-parse compacts
+// the nested `{lhs, tail:[…]}` into `{op, args:[…]}` with same-op
+// collapse. Save reverses.
 //
-//   LEVEL: sequence dict {
-//     <NEXT>:lhs=@,
-//     repeat <LEVEL_TAIL>:tail[]=@
-//   }
-//   LEVEL_TAIL: sequence dict { <OP>:op=@, <NEXT>:rhs=@ }
-//
-// This parses NEXT *once*, then loops looking for `OP NEXT` greedily.
-// Linear in the number of operands. CRITICALLY: this avoids the 2^N
-// exponential blowup of the `choice { LEVEL_BINOP, NEXT }` pattern
-// where the binop alt re-parses NEXT just to fail on the missing
-// operator. See issue #8 for the diagnosis — single set of parens
-// went from 209M frames (100s) to ~600 frames (<1ms).
-//
-// IR shape:
-//   no operator         → `{lhs: <inner>, tail: []}` (or just <inner>
-//                          if the host strips empty-tail wrappers)
-//   one or more ops     → `{lhs: <inner>, tail: [{op, rhs}, …]}`
-//
-// Left-associativity (`a + b - c` should mean `(a + b) - c`) is
-// encoded structurally in the tail list order; host applies a
-// left-fold pass if it needs nested `{op, args}` form.
+// Ternary `cond ? then : else` sits ABOVE the binary chain — it's a
+// 3-way shape, not a binary op, and `#opchain` only compacts binary
+// chains. Top EXPR rule is a choice over TERNARY and the binary chain.
 
-// EXPR also uses the linear pattern: parse LOR once, then optionally
-// try the ternary `? : ` tail. If "?" isn't present, LOR is the
-// result. No re-parse. (The `choice {<TERNARY>, <LOR>}` form would
-// parse LOR twice when there's no ternary — the shared-leading-ref
-// lint pass detects this.)
-EXPR: sequence dict {
-  <LOR>:lhs=@,
-  ?<TERNARY_REST>
-}
+EXPR: choice { <TERNARY>, <BIN_EXPR> }
 
-TERNARY_REST: sequence dict {
+TERNARY: sequence dict {
+  <BIN_EXPR>:cond=@,
   "?":op="?:",
   <EXPR>:then=@,
   ":",
   <EXPR>:else=@
 }
 
-LOR: sequence dict { <LAND>:lhs=@, repeat <LOR_TAIL>:tail[]=@ }
-LOR_TAIL: sequence dict { "||":op="||", <LAND>:rhs=@ }
+// Top of the binary chain — `#opchain` annotation runs post-parse
+// compaction.
+BIN_EXPR: <LOR_EXPR>:#opchain
 
-LAND: sequence dict { <BOR>:lhs=@, repeat <LAND_TAIL>:tail[]=@ }
-LAND_TAIL: sequence dict { "&&":op="&&", <BOR>:rhs=@ }
+LOR_EXPR:  choice { <LOR_CHAIN>,  <LAND_EXPR> }
+LOR_CHAIN: sequence dict {
+  <LAND_EXPR>:lhs=@,
+  repeat+ <LOR_TAIL>:tail[]=@
+}
+LOR_TAIL:  sequence dict { "||":op="||", <LAND_EXPR>:rhs=@ }
 
-BOR: sequence dict { <BXOR>:lhs=@, repeat <BOR_TAIL>:tail[]=@ }
-BOR_TAIL: sequence dict { "|":op="|", <BXOR>:rhs=@ }
+LAND_EXPR:  choice { <LAND_CHAIN>, <BOR_EXPR> }
+LAND_CHAIN: sequence dict {
+  <BOR_EXPR>:lhs=@,
+  repeat+ <LAND_TAIL>:tail[]=@
+}
+LAND_TAIL:  sequence dict { "&&":op="&&", <BOR_EXPR>:rhs=@ }
 
-BXOR: sequence dict { <BAND>:lhs=@, repeat <BXOR_TAIL>:tail[]=@ }
-BXOR_TAIL: sequence dict { <BXOR_OP>:op=@, <BAND>:rhs=@ }
+BOR_EXPR:  choice { <BOR_CHAIN>, <BXOR_EXPR> }
+BOR_CHAIN: sequence dict {
+  <BXOR_EXPR>:lhs=@,
+  repeat+ <BOR_TAIL>:tail[]=@
+}
+BOR_TAIL:  sequence dict { "|":op="|", <BXOR_EXPR>:rhs=@ }
 
-BXOR_OP: choice { "^~":@, "~^":@, "^":@ }
+BXOR_EXPR:  choice { <BXOR_CHAIN>, <BAND_EXPR> }
+BXOR_CHAIN: sequence dict {
+  <BAND_EXPR>:lhs=@,
+  repeat+ <BXOR_TAIL>:tail[]=@
+}
+BXOR_TAIL:  sequence dict { <BXOR_OP>:op=@, <BAND_EXPR>:rhs=@ }
+BXOR_OP:    choice { "^~":@, "~^":@, "^":@ }
 
-BAND: sequence dict { <EQUALITY>:lhs=@, repeat <BAND_TAIL>:tail[]=@ }
-BAND_TAIL: sequence dict { "&":op="&", <EQUALITY>:rhs=@ }
+BAND_EXPR:  choice { <BAND_CHAIN>, <EQUALITY_EXPR> }
+BAND_CHAIN: sequence dict {
+  <EQUALITY_EXPR>:lhs=@,
+  repeat+ <BAND_TAIL>:tail[]=@
+}
+BAND_TAIL:  sequence dict { "&":op="&", <EQUALITY_EXPR>:rhs=@ }
 
-EQUALITY: sequence dict { <RELATIONAL>:lhs=@, repeat <EQUALITY_TAIL>:tail[]=@ }
-EQUALITY_TAIL: sequence dict { <EQUALITY_OP>:op=@, <RELATIONAL>:rhs=@ }
+EQUALITY_EXPR:  choice { <EQUALITY_CHAIN>, <RELATIONAL_EXPR> }
+EQUALITY_CHAIN: sequence dict {
+  <RELATIONAL_EXPR>:lhs=@,
+  repeat+ <EQUALITY_TAIL>:tail[]=@
+}
+EQUALITY_TAIL:  sequence dict { <EQUALITY_OP>:op=@, <RELATIONAL_EXPR>:rhs=@ }
 
 // Longest-first so `===` wins over `==` and `!==` wins over `!=`.
 EQUALITY_OP: choice {
   "===":@, "!==":@, "==?":@, "!=?":@, "==":@, "!=":@
 }
 
-RELATIONAL: sequence dict { <SHIFT>:lhs=@, repeat <RELATIONAL_OR_INSIDE_TAIL>:tail[]=@ }
+RELATIONAL_EXPR:  choice { <RELATIONAL_CHAIN>, <SHIFT_EXPR> }
+RELATIONAL_CHAIN: sequence dict {
+  <SHIFT_EXPR>:lhs=@,
+  repeat+ <RELATIONAL_OR_INSIDE_TAIL>:tail[]=@
+}
 
-// At the relational precedence level, either a regular comparison
-// (`<`/`<=`/`>`/`>=`) or an `inside { ... }` set membership test.
 RELATIONAL_OR_INSIDE_TAIL: choice {
   <RELATIONAL_TAIL>,
   <INSIDE_TAIL>
 }
 
-RELATIONAL_TAIL: sequence dict { <RELATIONAL_OP>:op=@, <SHIFT>:rhs=@ }
+RELATIONAL_TAIL: sequence dict { <RELATIONAL_OP>:op=@, <SHIFT_EXPR>:rhs=@ }
 
-// `inside { [1:10], 20, 30, ... }` — set membership. The body
-// (open ranges + comma-separated values) is captured raw; host
-// re-parses if it needs to enumerate members.
+// `inside { [1:10], 20, 30, ... }` — set membership. Body captured raw.
 INSIDE_TAIL: sequence dict {
   'inside':op="inside",
   "{",
@@ -1598,36 +1606,47 @@ RELATIONAL_OP: choice {
   "<=":@, ">=":@, "<":@, ">":@
 }
 
-SHIFT: sequence dict { <ADD>:lhs=@, repeat <SHIFT_TAIL>:tail[]=@ }
-SHIFT_TAIL: sequence dict { <SHIFT_OP>:op=@, <ADD>:rhs=@ }
+SHIFT_EXPR:  choice { <SHIFT_CHAIN>, <ADD_EXPR> }
+SHIFT_CHAIN: sequence dict {
+  <ADD_EXPR>:lhs=@,
+  repeat+ <SHIFT_TAIL>:tail[]=@
+}
+SHIFT_TAIL:  sequence dict { <SHIFT_OP>:op=@, <ADD_EXPR>:rhs=@ }
 
-// Arithmetic shifts (<<<, >>>) before logical shifts so longer wins.
+// Arithmetic shifts (<<<, >>>) before logical so longer wins.
 SHIFT_OP: choice {
   "<<<":@, ">>>":@, "<<":@, ">>":@
 }
 
-ADD: sequence dict { <MUL>:lhs=@, repeat <ADD_TAIL>:tail[]=@ }
-ADD_TAIL: sequence dict { <ADD_OP>:op=@, <MUL>:rhs=@ }
-
-ADD_OP: choice { "+":@, "-":@ }
-
-MUL: sequence dict { <POWER>:lhs=@, repeat <MUL_TAIL>:tail[]=@ }
-MUL_TAIL: sequence dict { <MUL_OP>:op=@, <POWER>:rhs=@ }
-
-MUL_OP: choice { "*":@, "/":@, "%":@ }
-
-// POWER is right-associative per SV LRM. Right-recursive pattern
-// (?<POWER_REST>) instead of repeat-tail — still linear because
-// UNARY on each side is parsed exactly once.
-POWER: sequence dict {
-  <UNARY>:lhs=@,
-  ?<POWER_REST>
+ADD_EXPR:  choice { <ADD_CHAIN>, <MUL_EXPR> }
+ADD_CHAIN: sequence dict {
+  <MUL_EXPR>:lhs=@,
+  repeat+ <ADD_TAIL>:tail[]=@
 }
-POWER_REST: sequence dict { "**":op="**", <POWER>:rhs=@ }
+ADD_TAIL:  sequence dict { <ADD_OP>:op=@, <MUL_EXPR>:rhs=@ }
+ADD_OP:    choice { "+":@, "-":@ }
 
-UNARY: choice { <UNARY_OP_EXPR>, <PRIMARY> }
+MUL_EXPR:  choice { <MUL_CHAIN>, <POWER_EXPR> }
+MUL_CHAIN: sequence dict {
+  <POWER_EXPR>:lhs=@,
+  repeat+ <MUL_TAIL>:tail[]=@
+}
+MUL_TAIL:  sequence dict { <MUL_OP>:op=@, <POWER_EXPR>:rhs=@ }
+MUL_OP:    choice { "*":@, "/":@, "%":@ }
+
+// POWER is right-associative per SV LRM §11.4.4 — chain recurses on
+// POWER_EXPR (right side), so `a ** b ** c` → `a ** (b**c)`.
+POWER_EXPR:  choice { <POWER_CHAIN>, <UNARY_EXPR> }
+POWER_CHAIN: sequence dict {
+  <UNARY_EXPR>:lhs=@,
+  "**":op="**",
+  <POWER_EXPR>:rhs=@
+}
+
+UNARY_EXPR:    choice { <UNARY_OP_EXPR>, <PRIMARY> }
 UNARY_OP_EXPR: sequence dict {
-  <UNARY_OP>:op=@, <PRIMARY>:arg=@
+  <UNARY_OP>:op=@,
+  <UNARY_EXPR>:args[]=@
 }
 
 UNARY_OP: choice {
@@ -1844,7 +1863,25 @@ STREAMING_CONCAT: sequence dict {
 
 STREAM_DIR: choice { "<<":@, ">>":@ }
 
-PAREN_EXPR: sequence { "(", <EXPR>, ")" }
+// Captured as a scope so the body re-parses through EXPR as its own
+// sub-tree — the inner `#opchain` runs at its own frame exit, instead
+// of getting threaded through the surrounding chain's compaction.
+// Mirrors PP_EXPR's PAREN_EXPR pattern. Self-Ref INNER lets nested
+// parens be transparent (`(a (b) c)` → body is `a (b) c`); `std.string`
+// INNER keeps embedded `"...(...)..."` literals atomic so a `)` inside
+// a string can't close the scope.
+// Captured as a scope so the body re-parses through EXPR as its own
+// sub-tree — the inner `#opchain` runs at its own frame exit, instead
+// of being threaded through the surrounding chain's compaction.
+// Mirrors PP_EXPR's PAREN_EXPR pattern. Self-Ref INNER lets nested
+// parens be transparent (`(a (b) c)` → body is `a (b) c`); `std.string`
+// INNER keeps embedded `"...(...)..."` literals atomic so a `)` inside
+// a string can't close the scope.
+PAREN_EXPR: sequence dict {
+  "(":type="paren",
+  scope { <PAREN_EXPR>, std.string }:value=@:#subparse="EXPR",
+  ")"
+}
 
 // Concatenation `{a, b, c}` OR replication `{N{expr}}`. Distinguished
 // by the first item: if it's followed by `{` then it's replication,
