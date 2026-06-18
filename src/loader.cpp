@@ -1219,12 +1219,16 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
     auto kind_label = [](NodeKind k) {
         return k == NodeKind::Raw ? "raw consume (`*`)" : "scope";
     };
-    // Extract the literal byte string of a Key node (must be non-empty).
-    // Used both for direct next-sibling stops and for repeat-separator /
-    // post-repeat-sibling stops in the multi-stop case.
+    // Extract the literal byte string + strict flag of a Key node
+    // (must be non-empty). Used both for direct next-sibling stops
+    // and for repeat-separator / post-repeat-sibling stops in the
+    // multi-stop case. The strict bit propagates to the scan node's
+    // stops_strict so a sibling `'X'` (strict) bounds the scope with
+    // word-boundary checking.
+    struct KeyLit { std::string literal; bool strict; };
     auto key_literal =
         [&g](NodeId id, const char* boundary_label,
-             const char* node_label_str) -> tl::expected<std::string, std::string> {
+             const char* node_label_str) -> tl::expected<KeyLit, std::string> {
         const Node& n = g.node(g.resolve_ref(id));
         if (n.kind != NodeKind::Key) {
             return tl::unexpected(
@@ -1237,7 +1241,7 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
                 std::string(node_label_str) + " " + boundary_label +
                 " Key has no literal or empty literal");
         }
-        return sv->data();
+        return KeyLit{sv->data(), n.strict};
     };
 
     // Descend through wrapping Sequence / Value chains to find the
@@ -1293,11 +1297,13 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
             Node& body = g.node(body_id);
             const char* label = kind_label(body.kind);
             std::vector<std::string> stops;
+            bool any_strict = false;
             if (kid.has_separator && !kid.children.empty()) {
                 auto sep_r = key_literal(kid.children[0],
                                          "repeat separator", label);
                 if (!sep_r) return tl::unexpected(sep_r.error());
-                stops.push_back(*sep_r);
+                stops.push_back(sep_r->literal);
+                if (sep_r->strict) any_strict = true;
             }
             if (k + 1 >= kids.size()) {
                 return tl::unexpected(
@@ -1308,9 +1314,11 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
             auto post_r = key_literal(kids[k + 1],
                                       "post-repeat sibling", label);
             if (!post_r) return tl::unexpected(post_r.error());
-            stops.push_back(*post_r);
+            stops.push_back(post_r->literal);
+            if (post_r->strict) any_strict = true;
             body.stops = std::move(stops);
             body.value = make_string(body.stops.front());
+            body.stops_strict = any_strict;
             multi_stop_filled.insert(body_id.value());
         }
     }
@@ -1337,8 +1345,9 @@ load_json_grammar_into(Grammar& g, const Value& tree) {
             auto lit_r = key_literal(kids[k + 1],
                                      "next sibling", label);
             if (!lit_r) return tl::unexpected(lit_r.error());
-            kid.stops = {*lit_r};
-            kid.value = make_string(*lit_r);  // legacy / save-side
+            kid.stops = {lit_r->literal};
+            kid.stops_strict = lit_r->strict;
+            kid.value = make_string(lit_r->literal);  // legacy / save-side
         }
     }
 

@@ -492,6 +492,36 @@ TEST_CASE("scope: multi-stop grammar round-trips through to_value → load") {
     }
 }
 
+// ─── Scope/Raw stop_strict propagates from sibling Key's strict flag ────
+
+// The sibling Key's strict semantic (`'X'` = word-bounded) must
+// propagate to the scope/Raw's stop check. Without propagation, the
+// scope's byte-scan matches `end` as a prefix of `endpoint`, stops
+// early, and the surrounding parse fails when the strict Key sibling
+// tries to match `end` at a non-word boundary.
+TEST_CASE("scope: stop_strict propagates from strict-Key sibling") {
+    register_std_parser_group();
+    Grammar g;
+    auto r = load_rawast_grammar_from_string(g, R"GRAM(
+        use: std
+        start: <PROG>
+        PROG: sequence { "begin", scope { }, 'end' }
+    )GRAM");
+    REQUIRE_MESSAGE(r, "load: " << (r ? "" : r.error()));
+
+    std::istringstream is{"begin some endpoint actually end"};
+    StreamReader sr{is};
+    auto p = g.parse(sr);
+    REQUIRE_MESSAGE(p, "parse failed (strict-Key sibling didn't "
+                       "propagate to scope's stop check): "
+                       << (p ? "" : p.error().message));
+    auto sv = as_string(*p);
+    REQUIRE(sv);
+    // Captured body should be everything between "begin" and the
+    // word-bounded "end" — including "endpoint" as ordinary content.
+    CHECK(sv->data() == " some endpoint actually ");
+}
+
 // ─── Different bracket flavours ─────────────────────────────────────────
 
 TEST_CASE("scope: square brackets work the same as parens") {

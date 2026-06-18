@@ -891,6 +891,7 @@ inline bool scope_is_word_char(char c) noexcept {
 ScanConfig scan_config_from_scope(const Node& n) {
     ScanConfig cfg;
     cfg.stops          = n.stops;
+    cfg.stop_strict    = n.stops_strict;
     cfg.inners         = n.children;
     cfg.container      = n.container;
     cfg.subparse_start = n.subparse_start;
@@ -905,6 +906,7 @@ ScanConfig scan_config_from_scope(const Node& n) {
 ScanConfig scan_config_from_raw(const Node& n) {
     ScanConfig cfg;
     cfg.stops          = n.stops;
+    cfg.stop_strict    = n.stops_strict;
     cfg.subparse_start = n.subparse_start;
     cfg.consume_stop   = false;
     return cfg;

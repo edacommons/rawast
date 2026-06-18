@@ -195,6 +195,18 @@ public:
     // so it isn't on the critical path.
     std::vector<std::string> stops;
 
+    // Raw/Scope stops_strict — word-boundary check on the matching
+    // stop literal, mirroring the Key node's `strict` flag. Set by
+    // the load-time resolver when any of the sibling Keys that
+    // supply the stops carries the strict bit (`'X'` surface form
+    // vs `"X"`). Uniform across all stops in the multi-stop case —
+    // strict word-boundary checking applies to every stop literal
+    // whose last byte is a word character; for punctuation stops
+    // (`,`, `)`, `;`) the check is a no-op since no word
+    // continuation is possible, so making the flag uniform doesn't
+    // affect mixed punctuation+word stop sets.
+    bool stops_strict = false;
+
     // Save-direction pretty-print metadata. All ignored by parse.
     //
     // The save direction emits, for each Node entered:
