@@ -1519,7 +1519,7 @@ WAIT_STMT: sequence dict {
 // 3-way shape, not a binary op, and `#opchain` only compacts binary
 // chains. Top EXPR rule is a choice over TERNARY and the binary chain.
 
-EXPR: choice { <TERNARY>, <BIN_EXPR> }
+EXPR ignore whitespace line_comment block_comment: choice { <TERNARY>, <BIN_EXPR> }
 
 TERNARY: sequence dict {
   <BIN_EXPR>:cond=@,
