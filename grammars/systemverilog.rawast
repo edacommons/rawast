@@ -188,7 +188,31 @@ PARAM_DECL_OR_LOCAL: choice {
   <PARAM_DECL_VALUE>,
   <PARAM_DECL_UNTYPED>,
   <PARAM_DECL_USERTYPE>,
+  <PARAM_DECL_USERTYPE_BARE>,
   <PARAM_DECL_IMPLICIT>
+}
+
+// Inside a `#(...)` parameter port list the `parameter` keyword is
+// optional — per IEEE 1800-2017 §8.10 the parser treats subsequent
+// entries as parameters by context. Common in parameterised class
+// declarations:
+//
+//   class riscv_page_table #(satp_mode_t MODE = SV39) extends uvm_object;
+//                            ^^^^^^^^^^^^ no `parameter` keyword
+//
+// PARAM_DECL_USERTYPE_BARE catches the bare `usertype name = default`
+// form. Tried AFTER the explicit-`parameter`-keyword USERTYPE so it
+// doesn't shadow when the keyword IS present, and BEFORE
+// PARAM_DECL_IMPLICIT so the two-identifier "type name" pattern is
+// preferred over the one-identifier "name = expr" pattern.
+//
+// Reference: Verilator verilog.y `paramPortDecl` shape.
+PARAM_DECL_USERTYPE_BARE: sequence dict {
+  sv_qualified_type:type_spec=@:type="param_usertype",
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
 // `localparam [type] NAME = expr` — non-overridable derived parameter.
