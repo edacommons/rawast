@@ -87,6 +87,7 @@ DESCRIPTION: choice {
   <UDP_DECL>,
   <CONFIG_DECL>,
   <PROGRAM_DECL>,
+  <INTERFACE_CLASS_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
   <PARAM_DECL_STMT>,
@@ -913,8 +914,24 @@ ASSIGNMENT_PAIR: sequence dict {
 // Reference: Verilator verilog.y `variable_lvalue` production
 // (IEEE: variable_lvalue or net_lvalue).
 LVALUE: choice {
+  <LVALUE_STREAM>,
   <LVALUE_CONCAT>,
   <LVALUE_PLAIN>
+}
+
+// `{<<{a, b, c}} = data;` — streaming concatenation on the LHS of
+// an assignment (IEEE 1800-2017 §11.4.14.3). The body shape mirrors
+// STREAMING_CONCAT but lives here so an ASSIGN_STMT's LHS can hold
+// the unpacking form. Body captured raw; host re-parses if it needs
+// per-element structure.
+LVALUE_STREAM: sequence dict {
+  "{":type="lvalue_stream",
+  <STREAM_DIR>:direction=@,
+  *:slice=@,
+  "{",
+  *:body=@,
+  "}",
+  "}"
 }
 
 LVALUE_PLAIN: sequence dict {
@@ -1845,6 +1862,7 @@ PRIMARY: choice {
   <PAREN_EXPR>,
   <NULL_LIT>,
   <NEW_EXPR>,
+  <TYPED_ASSIGNMENT_PATTERN>,
   <TYPE_CAST>,
   <ASSIGNMENT_PATTERN>,
   <DEFAULT_VALUE_PATTERN>,
@@ -1861,6 +1879,23 @@ PRIMARY: choice {
   <SUPER_REF>,
   <PKG_QUAL_PRIMARY>,
   <HIER_REF>
+}
+
+// `type_name'{<fields>}` — typed assignment pattern (IEEE 1800-2017
+// §10.9.2). Same body shape as ASSIGNMENT_PATTERN but with an
+// explicit type prefix used for struct/array literals where the
+// surrounding context isn't enough to infer the type:
+//
+//   axi_req_t r = axi_req_t'{addr: 0, len: 3, default: '0};
+//
+// Tried BEFORE TYPE_CAST so `name '` followed by `{` wins over
+// TYPE_CAST_IDENT's expectation of `(`.
+TYPED_ASSIGNMENT_PATTERN: sequence dict {
+  sv_qualified_type:type=@:type="typed_assignment_pattern",
+  "'",
+  "{",
+  sv_balanced_braces:body=@,
+  "}"
 }
 
 // `TypeName#(arg1, arg2)` — a parameterized type reference used as
@@ -2418,6 +2453,24 @@ PACKAGE_DECL: sequence dict {
   ";",
   <MODULE_ITEMS>:items=@,
   'endpackage',
+  ?<END_LABEL>:end_label=@
+}
+
+// `interface class NAME [#(params)] [extends I1, I2]; <items> endclass`
+// — interface class declaration (IEEE 1800-2017 §8.26). Same body
+// shape as a normal class; the leading `interface` is just a marker
+// keyword. Tried BEFORE INTERFACE_DECL so the `interface class …`
+// path wins over the bare `interface NAME …` form.
+INTERFACE_CLASS_DECL: sequence dict {
+  'interface':type="interface_class",
+  'class':@,
+  ?<LIFETIME>:lifetime=@,
+  sv_identifier:name=@,
+  ?<PARAM_PORT_LIST>:params=@,
+  ?<CLASS_EXTENDS>:extends=@,
+  ";",
+  <CLASS_ITEMS>:items=@,
+  'endclass',
   ?<END_LABEL>:end_label=@
 }
 
