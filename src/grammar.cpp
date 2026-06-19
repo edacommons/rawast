@@ -1261,6 +1261,25 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         std::cerr << msg << "\n";
     };
 
+    // Sequence-success cache --------------------------------------------
+    //
+    // Append-only vector of `(node, start_offset, end_offset, emitted)`
+    // entries captured at the moment a frame successfully completes.
+    // The cache is consulted at every push site (via push_or_skip_optional)
+    // — when the top entry matches the resolved node at the current
+    // offset, the frame is skipped entirely and its emissions are
+    // replayed to the parent. This kills the doubling at every Choice
+    // {CHAIN, NEXT} retry in deep cascade ladders (e.g. SV's 12-level
+    // expression chain). Memory is bounded because each successful
+    // frame's pop retires the interior entries it accumulated.
+    struct CacheEntry {
+        NodeId      node;
+        std::size_t start_offset;
+        std::size_t end_offset;
+        std::vector<Frame::EmittedValue> emitted;
+    };
+    std::vector<CacheEntry> cache;
+
     // Rule-local ignore overrides ---------------------------------------
     //
     // An IgnoreScope captures "stack depth at which this override was
@@ -1387,7 +1406,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     };
 
     auto push_with_optional_mark = [&](NodeId id) {
+        std::size_t entry_offset = sr.position().bytes;
         push_node(stack, *this, id);
+        if (!stack.empty()) {
+            stack.back().set_cache_size_at_push(cache.size());
+            stack.back().set_start_offset(entry_offset);
+        }
         if (trace_enabled && !stack.empty()) {
             const auto& f = stack.back();
             std::string opt = f.is_optional() ? " ?" : "";
@@ -1428,6 +1452,29 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // lambda below.
     std::function<void(const ParseError&)> handle_failure_fn;
     auto handle_failure = [&](const ParseError& err) { handle_failure_fn(err); };
+
+    // Record a successful frame's result in the cache. Called between
+    // popped.finish() and popped.pass_values_to(). Retires every cache
+    // entry appended while this frame was live (they're all inside the
+    // frame's byte range and unreachable now that the outer match
+    // committed) — keeping the cache bounded — then appends this
+    // frame's own entry so future re-entries at the same offset hit.
+    auto record_cache_entry = [&](const Frame& popped) {
+        cache.resize(popped.cache_size_at_push());
+        std::size_t end_offset = sr.position().bytes;
+        // Skip caching zero-consumption frames (Value, empty optionals,
+        // skipped predictives). They have no work worth memoizing, and
+        // letting them sit at the cache top blocks real entries beneath
+        // from being found via the top-only lookup. (No information is
+        // lost — a re-parse of a zero-consumption frame is free anyway.)
+        if (end_offset == popped.start_offset()) return;
+        CacheEntry entry;
+        entry.node = popped.node_id();
+        entry.start_offset = popped.start_offset();
+        entry.end_offset = end_offset;
+        entry.emitted = popped.emitted();
+        cache.push_back(std::move(entry));
+    };
 
     // Advance after a child has just completed successfully. Pops frames
     // until we either find one with more work to do, or reach the top.
@@ -1508,6 +1555,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 popped.set_has_mark(false);
             }
             popped.finish(pool);
+            record_cache_entry(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -1525,11 +1573,35 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // fallback path — just skips the frame churn. Use this in
     // place of `push_with_optional_mark` at the dispatch sites
     // where the next child can be optional.
+    // Cache-hit short-circuit. If the cache top matches the resolved
+    // node at the current stream offset, replay its emissions into the
+    // parent and advance the cursor — skipping the frame push and all
+    // the work that would happen inside it. Returns true on hit.
+    auto try_cache_hit = [&](NodeId id) -> bool {
+        if (cache.empty() || stack.empty()) return false;
+        NodeId resolved = resolve_ref(id);
+        std::size_t offset = sr.position().bytes;
+        const CacheEntry& top = cache.back();
+        if (top.node.value() != resolved.value()) return false;
+        if (top.start_offset != offset) return false;
+        // Replay emissions into the parent frame.
+        Frame& parent = stack.back();
+        for (const auto& ev : top.emitted) {
+            parent.add_value(ev.value, ev.is_name);
+        }
+        // Advance the cursor to where the cached frame ended.
+        while (sr.position().bytes < top.end_offset && !sr.eof()) sr.get();
+        advance_after_child();
+        return true;
+    };
+
     auto push_or_skip_optional = [&](NodeId child_id) {
         if (should_skip_optional(child_id)) {
             if (stack.empty()) return;
             bool more = stack.back().step_next();
             if (!more) advance_after_child();
+        } else if (try_cache_hit(child_id)) {
+            // Cache hit handled the frame in full.
         } else {
             push_with_optional_mark(child_id);
         }
@@ -1643,6 +1715,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 // Iteration ended -- accept what we collected so far.
                 popped.finish(pool);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1763,6 +1836,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     popped.set_has_mark(false);
                 }
                 popped.finish(pool);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1861,6 +1935,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     popped.set_has_mark(false);
                 }
                 popped.finish(pool);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1930,6 +2005,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         popped.set_has_mark(false);
                     }
                     popped.finish(pool);
+                    record_cache_entry(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -2028,6 +2104,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         popped.set_has_mark(false);
                     }
                     popped.finish(pool);
+                    record_cache_entry(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -2048,6 +2125,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             Frame popped = std::move(stack.back());
             stack.pop_back();
             popped.finish(pool);
+            record_cache_entry(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -2093,6 +2171,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -2125,6 +2204,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -2144,6 +2224,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;

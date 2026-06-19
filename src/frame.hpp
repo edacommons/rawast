@@ -93,6 +93,23 @@ public:
     // accumulated value, or nullptr if none.
     ValuePtr result();
 
+    // Sequence-success cache support. Set when the frame is pushed so
+    // the driver can (a) retire interior cache entries appended while
+    // this frame was active and (b) re-detect the entry point on cache
+    // lookup for sibling-choice retries.
+    std::size_t cache_size_at_push() const noexcept { return cache_size_at_push_; }
+    void set_cache_size_at_push(std::size_t s) noexcept { cache_size_at_push_ = s; }
+    std::size_t start_offset() const noexcept { return start_offset_; }
+    void set_start_offset(std::size_t o) noexcept { start_offset_ = o; }
+
+    // Read-only view of the frame's emitted values. Used by the cache
+    // to snapshot what would be passed to the parent before the frame
+    // is popped, so a future cache hit can replay the same emissions.
+    const std::vector<EmittedValue>& emitted() const noexcept { return emitted_; }
+    void append_emitted(const std::vector<EmittedValue>& evs) {
+        for (const auto& ev : evs) emitted_.push_back(ev);
+    }
+
 private:
     NodeId node_id_;
     NodeKind kind_;
@@ -109,6 +126,8 @@ private:
     std::uint32_t iter_count_ = 0;
     std::uint32_t min_ = 0;
     std::vector<EmittedValue> emitted_;
+    std::size_t cache_size_at_push_ = 0;
+    std::size_t start_offset_ = 0;
 };
 
 } // namespace rawast
