@@ -1237,7 +1237,8 @@ FUNCTION_DECL: sequence dict {
   ?<TASK_PORT_LIST>:ports=@,
   ";",
   repeat <TASK_ITEM>:items[]=@,
-  'endfunction'
+  'endfunction',
+  ?<END_LABEL>:end_label=@
 }
 
 FUNCTION_HEAD: choice {
