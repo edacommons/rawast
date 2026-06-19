@@ -833,12 +833,18 @@ PARAM_DECL_STMT: sequence dict {
   ";"
 }
 
+// SV-1800 §6.20.4 / §7.4 — localparams may carry unpacked
+// dimensions after the name (`logic [31:0] M [4] = '{...};`),
+// the same way ordinary variable declarations do. Without the
+// `?<UNPACKED_DIMENSIONS>` slot the parser stopped at the `[`
+// and failed with "expected literal '='".
 LOCALPARAM_DECL_STMT: sequence dict {
   'localparam':@:type="localparam",
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
   sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   "=", <EXPR>:value=@,
   ";"
 }
@@ -854,6 +860,7 @@ LOCALPARAM_DECL_USERTYPE_STMT: sequence dict {
   sv_qualified_type:type_spec=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   "=", <EXPR>:value=@,
   ";"
 }
