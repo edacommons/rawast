@@ -2072,12 +2072,25 @@ NUMBER: choice {
 // `ignore:` (empty list) disables whitespace skipping for this rule's
 // body so `8'hFF` parses as a single token — no spaces allowed between
 // size, `'`, base, or digit run.
+// Per IEEE 1800-2017 §22.5.1, macros expand to text — a sized
+// based-number may use a macro for its digit run:
+//
+//   32'h`DM_ADDR    // <-- `DM_ADDR expands to hex digits
+//
+// Engine doesn't expand macros; treat `<MACRO_USE>` as a permitted
+// stand-in for the `sv_based_digits` literal. Macro form tried first
+// (first byte `\``) so the literal-digits form gets a clean miss.
 BASED_NUM ignore: sequence dict {
   ?<INT_OR_MACRO>:size=@,
   "'":type="based_num",
   ?<SIGNED_FLAG>:signed=true,
   <BASE_CHAR>:base=@,
-  sv_based_digits:value=@
+  <BASED_DIGITS_OR_MACRO>:value=@
+}
+
+BASED_DIGITS_OR_MACRO: choice {
+  <MACRO_USE>,
+  sv_based_digits
 }
 
 SIGNED_FLAG: choice { "s":@, "S":@ }
