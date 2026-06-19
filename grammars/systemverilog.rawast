@@ -105,6 +105,8 @@ DESCRIPTION: choice {
   <ALWAYS_BLOCK>,
   <INITIAL_BLOCK>,
   <CONCURRENT_ASSERT>,
+  <BIND_STMT>,
+  <CHECKER_DECL>,
   <USER_TYPED_DECL>
 }
 
@@ -796,6 +798,8 @@ STRUCT_FIELD: sequence dict {
 }
 
 STRUCT_FIELD_TYPE: choice {
+  <STRUCT_TYPE>,
+  <UNION_TYPE>,
   <TYPE_SPEC>,
   <STRUCT_FIELD_PKG_TYPE>,
   <STRUCT_FIELD_USER_TYPE>
@@ -937,15 +941,25 @@ LVALUE_HEAD: choice {
 THIS_KW:  sequence { 'this':@ }
 SUPER_KW: sequence { 'super':@ }
 
-// `[N]` (bit-select) or `[N:M]` (part-select). The Choice is between
-// a single expression (bit) and a range (part).
+// `[N]` (bit-select), `[N:M]` (part-select), or `[base +: width]` /
+// `[base -: width]` (indexed part-select, IEEE 1800-2017 §11.5.1).
+// RANGE first (msb : lsb), then the indexed forms (+: / -:), then
+// the bare bit-select fallback.
 RANGE_OR_INDEX: choice {
   <RANGE>,
+  <INDEXED_PART_SELECT>,
   <BIT_SELECT>
 }
 
 BIT_SELECT: sequence dict {
   "[", <EXPR>:index=@, "]"
+}
+
+INDEXED_PART_SELECT: sequence dict {
+  "[", <EXPR>:base=@,
+  choice { "+:":type="indexed_plus", "-:":type="indexed_minus" },
+  <EXPR>:width=@,
+  "]"
 }
 
 DELAY: sequence dict {
@@ -1169,7 +1183,7 @@ GEN_NAMED_BLOCK: sequence dict {
 TASK_DECL: sequence dict {
   'task':@:type="task",
   ?<LIFETIME>:lifetime=@,
-  sv_identifier:name=@,
+  sv_qualified_type:name=@,
   ?<TASK_PORT_LIST>:ports=@,
   ";",
   repeat <TASK_ITEM>:items[]=@,
@@ -1201,13 +1215,17 @@ FUNCTION_HEAD: choice {
   <FUNCTION_UNTYPED_HEAD>
 }
 
+// Name slot is `sv_qualified_type` so out-of-class definitions
+// like `function int A::foo();` (IEEE 1800-2017 §8.24) accept the
+// `Class::method` form. `sv_qualified_type` matches the bare name
+// too, so in-class / module-scope functions keep working.
 FUNCTION_TYPED_HEAD: sequence {
   <FUNCTION_RETURN>:return_type=@,
-  sv_identifier:name=@
+  sv_qualified_type:name=@
 }
 
 FUNCTION_UNTYPED_HEAD: sequence {
-  sv_identifier:name=@
+  sv_qualified_type:name=@
 }
 
 LIFETIME: choice { 'automatic':@, 'static':@ }
@@ -1329,7 +1347,18 @@ STATEMENT: choice {
   <DISABLE_STMT>,
   <WAIT_STMT>,
   <DELAY_OR_EVENT_STMT>,
+  <EVENT_TRIGGER_STMT>,
   <NULL_STMT>
+}
+
+// `-> event;` / `->> #N event;` — event trigger statement
+// (IEEE 1800-2017 §15.5). Blocking (`->`) and non-blocking (`->>`)
+// forms; capture the hierarchical reference as opaque text up to
+// the terminating `;`.
+EVENT_TRIGGER_STMT: sequence dict {
+  choice { "->>":type="event_nonblocking", "->":type="event_blocking" },
+  *:event=@,
+  ";"
 }
 
 // `void'(expr);` — SV idiom for "call expr (typically a function)
@@ -2569,6 +2598,8 @@ CLASS_ITEM: choice {
   <CONSTRAINT_DECL>,
   <COVERGROUP_DECL>,
   <VIRTUAL_INTERFACE_DECL>,
+  <CLASS_DECL_VIRTUAL>,
+  <CLASS_DECL_PLAIN>,
   <CLASS_PROPERTY>,
   <CLASS_USER_PROPERTY>,
   <MACRO_STMT>
@@ -3189,8 +3220,15 @@ METHOD_CALL_STMT: sequence dict {
 // Body captured raw between `virtual [interface]` and the trailing
 // `;` so the optional `#(...)` parameter override and the
 // comma-separated identifier list are both handled by the host.
+// `virtual interface IFC name;` / `virtual NAME name;` — a virtual
+// interface handle. The leading negative lookahead for `class`
+// prevents this rule from swallowing `virtual class …` (which is
+// CLASS_DECL_VIRTUAL); without it, the wildcard body would consume
+// `class Inner` up to the `;` and the enclosing class-body repeat
+// would see only `endclass int x; endclass` as stray content.
 VIRTUAL_INTERFACE_DECL: sequence dict {
   'virtual':@:type="virtual_interface",
+  !'class',
   ?'interface',
   *:body=@,
   ";"
