@@ -360,7 +360,29 @@ PORT_BODY_NEXT: sequence { ",", <PORT_BODY_ANY> }
 PORT_BODY_ANY: choice {
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
+  <PORT_DECL_NODIR_TYPED>,
   <PORT_NAME_CONT>
+}
+
+// Port with an explicit type but no direction — per IEEE 1800-2017
+// §23.2.2.1, in an ANSI port list a port may omit its direction;
+// the direction defaults to the most-recent one specified in the
+// list. Common in interface declarations:
+//
+//   interface my_if (
+//     input  logic clk,
+//     input  logic [7:0] addr,    // direction "input" inherited
+//     logic [7:0] data            // <-- no direction, just a type
+//   );
+//
+// Tried AFTER the direction-headed forms so it doesn't shadow them.
+// Reference: Verilator verilog.y `ansi_port_declaration` shape.
+PORT_DECL_NODIR_TYPED: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="port_decl_nodir",
+  ?<SIGNING_KW>:signing=@,
+  ?<RANGE>:range=@,
+  <IDENT_OR_MACRO>:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
 
 // Continuation form: `input a, b, c` is shorthand for
