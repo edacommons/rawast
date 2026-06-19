@@ -1737,7 +1737,7 @@ PRIMARY: choice {
   <STREAMING_CONCAT>,
   <CONCAT_OR_REPLICATION>,
   <NUMBER>,
-  <MACRO_USE>,
+  <MACRO_HIER_REF>,
   <STRING_PRIMARY>,
   <THIS_REF>,
   <SUPER_REF>,
@@ -2102,6 +2102,22 @@ SYSTEM_FUNC_ARGS: sequence dict {
 // parses as alternating dot-paths and bracket-selects.
 HIER_REF: sequence dict {
   sv_identifier:name=@:type="ref",
+  repeat <HIER_PART>:path[]=@,
+  repeat <RANGE_OR_INDEX>:selects[]=@
+}
+
+// Macro use as primary that supports hierarchical-path continuation:
+// `\`MACRO.field`, `\`MACRO[3:0]`, etc. Many UVM-style codebases use
+// macros as backdoor hierarchy aliases (`\`WB.rf_we_wb_o`), so allow
+// the same `.field` / `[…]` chain HIER_REF has. The actual MACRO_USE
+// terminal captures `\`name` (and optional `(args)`); HIER_PARTs and
+// selects are accumulated on top.
+//
+// Reference: SV-1800 §22.5 (macro use is lexically text-substituted)
+// — once expanded the expression behaves like any other identifier
+// chain, so the same path/selector grammar applies.
+MACRO_HIER_REF: sequence dict {
+  <MACRO_USE>:macro=@:type="macro_ref",
   repeat <HIER_PART>:path[]=@,
   repeat <RANGE_OR_INDEX>:selects[]=@
 }
