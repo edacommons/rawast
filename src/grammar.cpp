@@ -549,27 +549,6 @@ const std::vector<Parser*>* Grammar::rule_ignore(NodeId rule_node) const {
     return it == rule_ignore_resolved_.end() ? nullptr : &it->second;
 }
 
-void Grammar::on_rule_complete(const std::string& rule_name, RuleCallback cb) {
-    auto it = named_rules_.find(rule_name);
-    assert(it != named_rules_.end() && "on_rule_complete: unknown rule");
-    callbacks_by_node_[it->second.value()].push_back(std::move(cb));
-}
-
-void Grammar::replace_parser(std::unique_ptr<Parser> p) const {
-    std::string name = p->name();
-    parsers_[name] = std::move(p);
-    // If this parser was on the ignore list, refresh the pointer so the
-    // driver's ignore loop picks up the new instance.
-    for (std::size_t i = 0; i < ignore_names_.size(); ++i) {
-        if (ignore_names_[i] == name) {
-            ignore_[i] = parsers_[name].get();
-        }
-    }
-    // The same parser may appear in rule-local override lists; rebuild
-    // them lazily next time rule_ignore() is called.
-    rule_ignore_dirty_ = true;
-}
-
 void Grammar::set_top(NodeId node) {
     top_ = node;
 }
@@ -1282,56 +1261,24 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         std::cerr << msg << "\n";
     };
 
-    // Rule-callback machinery -------------------------------------------
+    // Sequence-success cache --------------------------------------------
     //
-    // pending_per_mark[i] is the queue of callbacks-to-fire that
-    // accumulated while stream mark #i was active. On sr.accept() we
-    // pop the back queue and either fire its contents (if no outer
-    // mark) or merge them into the new back queue (their fate now
-    // depends on the outer mark's resolution). On sr.reject() we pop
-    // and discard — callbacks in a rejected branch never fire.
-    struct PendingCallback {
-        RuleCallback cb;
-        ValuePtr     value;
+    // Append-only vector of `(node, start_offset, end_offset, emitted)`
+    // entries captured at the moment a frame successfully completes.
+    // The cache is consulted at every push site (via push_or_skip_optional)
+    // — when the top entry matches the resolved node at the current
+    // offset, the frame is skipped entirely and its emissions are
+    // replayed to the parent. This kills the doubling at every Choice
+    // {CHAIN, NEXT} retry in deep cascade ladders (e.g. SV's 12-level
+    // expression chain). Memory is bounded because each successful
+    // frame's pop retires the interior entries it accumulated.
+    struct CacheEntry {
+        NodeId      node;
+        std::size_t start_offset;
+        std::size_t end_offset;
+        std::vector<Frame::EmittedValue> emitted;
     };
-    std::vector<std::vector<PendingCallback>> pending_per_mark;
-
-    auto fire_or_queue = [&](const RuleCallback& cb, ValuePtr v) {
-        if (pending_per_mark.empty()) {
-            cb(v);
-        } else {
-            pending_per_mark.back().push_back({cb, std::move(v)});
-        }
-    };
-
-    auto fire_callbacks_for_frame = [&](Frame& popped) {
-        auto it = callbacks_by_node_.find(popped.node_id().value());
-        if (it == callbacks_by_node_.end()) return;
-        ValuePtr v = popped.result();
-        for (const auto& cb : it->second) {
-            fire_or_queue(cb, v);
-        }
-    };
-
-    auto on_mark_accept = [&]() {
-        sr.accept();
-        if (pending_per_mark.empty()) return;
-        auto popped_q = std::move(pending_per_mark.back());
-        pending_per_mark.pop_back();
-        if (pending_per_mark.empty()) {
-            for (auto& p : popped_q) p.cb(p.value);
-        } else {
-            auto& outer = pending_per_mark.back();
-            for (auto& p : popped_q) outer.push_back(std::move(p));
-        }
-    };
-
-    auto on_mark_reject = [&]() {
-        sr.reject();
-        if (!pending_per_mark.empty()) {
-            pending_per_mark.pop_back();
-        }
-    };
+    std::vector<CacheEntry> cache;
 
     // Rule-local ignore overrides ---------------------------------------
     //
@@ -1459,7 +1406,12 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     };
 
     auto push_with_optional_mark = [&](NodeId id) {
+        std::size_t entry_offset = sr.position().bytes;
         push_node(stack, *this, id);
+        if (!stack.empty()) {
+            stack.back().set_cache_size_at_push(cache.size());
+            stack.back().set_start_offset(entry_offset);
+        }
         if (trace_enabled && !stack.empty()) {
             const auto& f = stack.back();
             std::string opt = f.is_optional() ? " ?" : "";
@@ -1468,7 +1420,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!stack.empty() && stack.back().is_optional()
             && !stack.back().has_mark()) {
             sr.mark();
-            pending_per_mark.emplace_back();
             stack.back().set_has_mark(true);
         }
         // Negative-lookahead entry: take a stream mark so the cursor
@@ -1478,7 +1429,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!stack.empty() && stack.back().is_negative()
             && !stack.back().has_neg_mark()) {
             sr.mark();
-            pending_per_mark.emplace_back();
             stack.back().set_has_neg_mark(true);
         }
         // Rule-local ignore: if the just-pushed frame's node has an
@@ -1503,6 +1453,29 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     std::function<void(const ParseError&)> handle_failure_fn;
     auto handle_failure = [&](const ParseError& err) { handle_failure_fn(err); };
 
+    // Record a successful frame's result in the cache. Called between
+    // popped.finish() and popped.pass_values_to(). Retires every cache
+    // entry appended while this frame was live (they're all inside the
+    // frame's byte range and unreachable now that the outer match
+    // committed) — keeping the cache bounded — then appends this
+    // frame's own entry so future re-entries at the same offset hit.
+    auto record_cache_entry = [&](const Frame& popped) {
+        cache.resize(popped.cache_size_at_push());
+        std::size_t end_offset = sr.position().bytes;
+        // Skip caching zero-consumption frames (Value, empty optionals,
+        // skipped predictives). They have no work worth memoizing, and
+        // letting them sit at the cache top blocks real entries beneath
+        // from being found via the top-only lookup. (No information is
+        // lost — a re-parse of a zero-consumption frame is free anyway.)
+        if (end_offset == popped.start_offset()) return;
+        CacheEntry entry;
+        entry.node = popped.node_id();
+        entry.start_offset = popped.start_offset();
+        entry.end_offset = end_offset;
+        entry.emitted = popped.emitted();
+        cache.push_back(std::move(entry));
+    };
+
     // Advance after a child has just completed successfully. Pops frames
     // until we either find one with more work to do, or reach the top.
     auto advance_after_child = [&]() {
@@ -1515,7 +1488,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // this Choice was backtracking and had marked the stream
                 // for the just-succeeded alternative, accept that mark.
                 if (top.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     top.set_has_mark(false);
                 }
                 more = false;
@@ -1532,7 +1505,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // mark) would leave the cursor advanced even if a
                 // later required item failed.
                 if (top.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     top.set_has_mark(false);
                 }
                 more = top.step_next();
@@ -1564,7 +1537,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // "no", not "yes with empty payload."
             if (popped.is_negative()) {
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (trace_enabled) {
@@ -1578,11 +1551,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // Optional frame completed successfully — accept the entry
             // mark so the stream advances permanently.
             if (popped.is_optional() && popped.has_mark()) {
-                on_mark_accept();
+                sr.accept();
                 popped.set_has_mark(false);
             }
             popped.finish(pool);
-            fire_callbacks_for_frame(popped);
+            record_cache_entry(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -1600,11 +1573,35 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // fallback path — just skips the frame churn. Use this in
     // place of `push_with_optional_mark` at the dispatch sites
     // where the next child can be optional.
+    // Cache-hit short-circuit. If the cache top matches the resolved
+    // node at the current stream offset, replay its emissions into the
+    // parent and advance the cursor — skipping the frame push and all
+    // the work that would happen inside it. Returns true on hit.
+    auto try_cache_hit = [&](NodeId id) -> bool {
+        if (cache.empty() || stack.empty()) return false;
+        NodeId resolved = resolve_ref(id);
+        std::size_t offset = sr.position().bytes;
+        const CacheEntry& top = cache.back();
+        if (top.node.value() != resolved.value()) return false;
+        if (top.start_offset != offset) return false;
+        // Replay emissions into the parent frame.
+        Frame& parent = stack.back();
+        for (const auto& ev : top.emitted) {
+            parent.add_value(ev.value, ev.is_name);
+        }
+        // Advance the cursor to where the cached frame ended.
+        while (sr.position().bytes < top.end_offset && !sr.eof()) sr.get();
+        advance_after_child();
+        return true;
+    };
+
     auto push_or_skip_optional = [&](NodeId child_id) {
         if (should_skip_optional(child_id)) {
             if (stack.empty()) return;
             bool more = stack.back().step_next();
             if (!more) advance_after_child();
+        } else if (try_cache_hit(child_id)) {
+            // Cache hit handled the frame in full.
         } else {
             push_with_optional_mark(child_id);
         }
@@ -1643,7 +1640,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // Reject it now so the stream rewinds to the position
                 // before this alternative was tried.
                 if (popped.has_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_mark(false);
                 }
                 if (popped.step_next()) {
@@ -1671,7 +1668,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // `!` — the result of the operator must be empty, not
                 // a partial inner match.
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (trace_enabled) {
@@ -1688,7 +1685,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // the optional started — without this, any consumed
                 // input before the inner failure is left dangling.
                 if (popped.has_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_mark(false);
                 }
                 // Treat as success-with-empty.
@@ -1707,7 +1704,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // failed) leaves the cursor advanced and breaks the
                 // outer rule's continuation.
                 if (popped.has_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_mark(false);
                 }
                 // `repeat+` (min=1) form: the Repeat itself fails if too
@@ -1718,7 +1715,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 // Iteration ended -- accept what we collected so far.
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1773,7 +1770,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -1835,11 +1832,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // NEXT mark-pop (Choice accept or any reject) targets
                 // the WRONG mark — subtle and ugly.
                 if (popped.is_optional() && popped.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     popped.set_has_mark(false);
                 }
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1871,7 +1868,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -1934,11 +1931,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.is_optional() && popped.has_mark()) {
-                    on_mark_accept();
+                    sr.accept();
                     popped.set_has_mark(false);
                 }
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -1971,7 +1968,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -2004,11 +2001,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     // See the Raw / Parse cases for why the optional
                     // mark accept is required here.
                     if (popped.is_optional() && popped.has_mark()) {
-                        on_mark_accept();
+                        sr.accept();
                         popped.set_has_mark(false);
                     }
                     popped.finish(pool);
-                    fire_callbacks_for_frame(popped);
+                    record_cache_entry(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -2041,7 +2038,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 if (popped.has_neg_mark()) {
-                    on_mark_reject();
+                    sr.reject();
                     popped.set_has_neg_mark(false);
                 }
                 if (r) {
@@ -2103,11 +2100,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     // See the Raw / Key cases for why the optional
                     // mark accept is required here.
                     if (popped.is_optional() && popped.has_mark()) {
-                        on_mark_accept();
+                        sr.accept();
                         popped.set_has_mark(false);
                     }
                     popped.finish(pool);
-                    fire_callbacks_for_frame(popped);
+                    record_cache_entry(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
                         parse_finished = true;
@@ -2128,7 +2125,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             Frame popped = std::move(stack.back());
             stack.pop_back();
             popped.finish(pool);
-            fire_callbacks_for_frame(popped);
+            record_cache_entry(popped);
             if (stack.empty()) {
                 result_value = popped.result();
                 parse_finished = true;
@@ -2157,7 +2154,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // alternative failure) before we move on.
                 if (top.is_backtrack() && !top.has_mark()) {
                     sr.mark();
-                    pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
                 push_or_skip_optional(top.current_child());
@@ -2175,7 +2171,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -2200,7 +2196,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // unable to roll back over the committed Choice.
                 if (!top.has_mark()) {
                     sr.mark();
-                    pending_per_mark.emplace_back();
                     top.set_has_mark(true);
                 }
                 push_or_skip_optional(top.current_child());
@@ -2209,7 +2204,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
@@ -2229,7 +2224,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
                 popped.finish(pool);
-                fire_callbacks_for_frame(popped);
+                record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
                     parse_finished = true;
