@@ -1016,12 +1016,61 @@ void Preprocessor::handle_define(const DictValue& d) {
                     m.is_function_like = true;
                 }
             }
-            // Store the segments AST directly — substitution at
-            // expansion time walks segments and replaces typed `ref`
-            // entries with the corresponding arg value, no string
-            // round-trip.
-            m.body_segments = std::dynamic_pointer_cast<ArrayValue>(
-                body_it->second);
+            // Strip `\<newline>` line continuations from "literal"
+            // segments. The grammar captures them as part of the
+            // source text but the macro's logical body should be the
+            // joined form. Without this, multi-line `\`define` bodies
+            // expand with stray `\` chars that the SV grammar then
+            // rejects. Same transform as the legacy-string path
+            // below — applied here on a per-segment basis.
+            auto strip_continuations = [](std::string in) {
+                std::string out;
+                out.reserve(in.size());
+                for (std::size_t i = 0; i < in.size(); ++i) {
+                    if (in[i] == '\\' && i + 1 < in.size()) {
+                        if (in[i + 1] == '\n') { out.push_back(' '); ++i; continue; }
+                        if (in[i + 1] == '\r') {
+                            out.push_back(' ');
+                            ++i;
+                            if (i + 1 < in.size() && in[i + 1] == '\n') ++i;
+                            continue;
+                        }
+                    }
+                    out.push_back(in[i]);
+                }
+                return out;
+            };
+            auto rewritten = std::make_shared<ArrayValue>();
+            for (const auto& seg : body_arr->data()) {
+                auto sd = as_dict(seg);
+                if (!sd) { rewritten->data().push_back(seg); continue; }
+                auto type_it = sd->data().find("type");
+                auto val_it = sd->data().find("value");
+                bool is_literal = type_it != sd->data().end()
+                    && val_it != sd->data().end()
+                    && [&]{
+                        auto ts = as_string(type_it->second);
+                        return ts && ts->data() == "literal";
+                    }();
+                if (is_literal) {
+                    auto vs = as_string(val_it->second);
+                    if (vs) {
+                        auto new_seg = std::make_shared<DictValue>();
+                        for (const auto& [k, v] : sd->data()) {
+                            if (k == "value") {
+                                new_seg->data()[k] =
+                                    make_string(strip_continuations(vs->data()));
+                            } else {
+                                new_seg->data()[k] = v;
+                            }
+                        }
+                        rewritten->data().push_back(new_seg);
+                        continue;
+                    }
+                }
+                rewritten->data().push_back(seg);
+            }
+            m.body_segments = rewritten;
             state_.macros[m.name] = std::move(m);
             return;
         }

@@ -131,12 +131,26 @@ TEXT_LINE ignore: sequence dict {
 //
 //   `\`define FOO(x) bar`    → parameterised: params=["x"], body=[bar]
 //   `\`define FOO (x) bar`   → object-like:   no params,   body=[(x) bar]
+// `\`define NAME [(p1, …)] body` — per SV-1800 §22.5.1, `body` ends
+// at the next UNESCAPED newline. A backslash immediately before a
+// newline (`\<newline>`) is a line continuation: both bytes belong
+// to the body, and the body keeps going. Add `LINE_CONT` as an
+// explicit INNER so scope's byte-scanner consumes it instead of
+// treating the trailing `\n` as the body's terminator.
 DEFINE: sequence dict {
   "`define":type="define" space,
   <DECL>:decl=@ space,
-  scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
+  scope array { <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT> }:body=@,
   "\n"
 }
+
+// `\<newline>` — line continuation inside a macro body. Engine
+// consumes both bytes as one INNER match so the surrounding scope's
+// terminator check (looking for an UNESCAPED `\n`) doesn't fire.
+// The captured text still contains the literal `\` + `\n`;
+// Preprocessor::handle_define strips them at store time so the
+// expanded body is the joined form.
+LINE_CONT ignore: sequence { "\\", "\n" }
 
 // `ignore:` empty — the engine runs the OUTER PP_FILE's `ignore
 // linespace` at DECL's boundary (eats the space after `\`define`),
