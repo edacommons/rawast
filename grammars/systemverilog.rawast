@@ -659,9 +659,23 @@ TYPEDEF_BASE: choice {
   <ENUM_TYPE>,
   <STRUCT_TYPE>,
   <UNION_TYPE>,
+  <VIRTUAL_IF_TYPEDEF>,
   <PARAMETERIZED_TYPE_REF>,
   <TYPE_SPEC>,
   sv_qualified_type
+}
+
+// `typedef virtual [interface] NAME [#(...)]` — virtual interface
+// type alias used to declare a handle to an interface instance in
+// class properties / sequence args. Per SV-1800 §6.18 and §25.9.
+// `interface` keyword is optional (UVM usually omits it). The
+// parameterised form (`virtual push_pull_if#(...)`) reuses
+// PARAM_BINDING for the named-or-positional bindings.
+VIRTUAL_IF_TYPEDEF: sequence dict {
+  'virtual':@:type="virtual_if_type",
+  ?'interface':is_interface_kw=true,
+  sv_identifier:name=@,
+  ?<PARAM_OVERRIDE>:params=@
 }
 
 // `enum [base_type] { label [= value], ... }` — enumerated type.
