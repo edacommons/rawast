@@ -223,7 +223,7 @@ PARAM_DECL_LOCALPARAM: sequence {
   'localparam':@:type="localparam_port",
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
@@ -452,7 +452,7 @@ MODPORT_SUFFIX: sequence { ".", sv_identifier }
 // re-applies the inherited direction by walking the port array
 // left-to-right.
 PORT_NAME_CONT: sequence dict {
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   <IDENT_OR_MACRO>:name=@:type="port_name_cont",
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
@@ -640,7 +640,7 @@ PORT_DECL_STMT: sequence dict {
   <PORT_DIRECTION>:direction=@:type="port_decl",
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   repeat+ sv_identifier:names[]=@ separator ",",
   ";"
 }
@@ -728,7 +728,7 @@ TYPEDEF_FORWARD_CLASS: sequence dict {
 TYPEDEF_REGULAR: sequence dict {
   'typedef':@:type="typedef",
   <TYPEDEF_BASE>:base=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ";"
@@ -881,7 +881,7 @@ LOCALPARAM_DECL_STMT: sequence dict {
   'localparam':@:type="localparam",
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   "=", <EXPR>:value=@,
@@ -1283,7 +1283,7 @@ FUNCTION_RETURN: choice {
 FUNCTION_RETURN_TYPED: sequence dict {
   sv_qualified_type:type_spec=@:type="function_return",
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@
+  ?<PACKED_DIMENSIONS>:range=@
 }
 
 FUNCTION_RETURN_RANGED: sequence dict {
@@ -1315,7 +1315,7 @@ TASK_PORT_USERTYPED: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
   sv_qualified_type:type_spec=@,
   ?<PARAM_OVERRIDE>:type_params=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
@@ -1327,7 +1327,7 @@ TASK_PORT_BUILTIN: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@
 }
 
@@ -1428,9 +1428,9 @@ LOCAL_VAR_DECL_BUILTIN: sequence dict {
   ?<LIFETIME>:lifetime=@,
   <TYPE_SPEC>:type_spec=@:type="local_var_decl",
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
-  ?<RANGE>:unpacked=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<LOCAL_VAR_INIT>:init=@,
   ";"
 }
@@ -1564,7 +1564,7 @@ FOR_INIT_GENVAR: sequence dict {
 FOR_INIT_DECL: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="for_init_decl",
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   "=", <EXPR>:value=@
 }
