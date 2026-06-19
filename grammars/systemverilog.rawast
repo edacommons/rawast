@@ -375,7 +375,8 @@ PORT_LIST_ANSI: sequence dict {
 PORT_BODY_FIRST: choice {
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
-  <PORT_DECL_INTERFACE>
+  <PORT_DECL_INTERFACE>,
+  <PORT_MACRO>
 }
 
 // Subsequent ports: comma + port-body. The port-body Choice
@@ -390,7 +391,18 @@ PORT_BODY_ANY: choice {
   <PORT_DECL_ANSI>,
   <PORT_DECL_NODIR_TYPED>,
   <PORT_DECL_INTERFACE>,
+  <PORT_MACRO>,
   <PORT_NAME_CONT>
+}
+
+// Macro use as a whole port slot. UVM/lowRISC heavily use
+// `\`UVM_DRIVER_PORTS` / `\`PORTS_DECL` etc. inside port lists to
+// emit multiple ports from one call site. The grammar can't expand
+// the macro — capture it opaquely so the surrounding port-list
+// repeat continues unbroken. Tried after the structured forms so
+// it doesn't shadow real declarations.
+PORT_MACRO: sequence dict {
+  <MACRO_USE>:macro=@:type="port_macro"
 }
 
 // Port with an explicit type but no direction — per IEEE 1800-2017
@@ -1664,9 +1676,12 @@ SYSTEM_TASK_CALL: sequence dict {
 // Regular task call: `[pkg::]task_name(args);` — identifier without
 // `$`. Uses `sv_qualified_type` so package-qualified forms
 // (`env_dpi::env_initial(...)`) match without a parallel rule.
+// Optional arg list — per IEEE 1800-2017 §13.4, calling a task
+// with no arguments may omit the parentheses entirely:
+//   foo;          equivalent to foo();
 TASK_CALL: sequence dict {
   sv_qualified_type:name=@:type="task_call",
-  <TASK_ARG_LIST>:args=@,
+  ?<TASK_ARG_LIST>:args=@,
   ";"
 }
 
@@ -1724,7 +1739,29 @@ WAIT_STMT: sequence dict {
 // 3-way shape, not a binary op, and `#opchain` only compacts binary
 // chains. Top EXPR rule is a choice over TERNARY and the binary chain.
 
-EXPR ignore whitespace line_comment block_comment: choice { <TERNARY>, <BIN_EXPR> }
+// Top of the EXPR ladder. Implication `->` / equivalence `<->`
+// (IEEE 1800-2017 §11.4.7) sit at the LOWEST precedence — below
+// ternary `?:`. Add IMPL_TAIL chain here so the chain compactor
+// folds `a -> b -> c` (right-associative) without each `->` having
+// to dedicate its own rule. TERNARY/BIN_EXPR underneath cover
+// everything else.
+EXPR ignore whitespace line_comment block_comment: choice {
+  <IMPL_CHAIN>,
+  <TERNARY>,
+  <BIN_EXPR>
+}
+
+IMPL_CHAIN: sequence dict {
+  <IMPL_OPND>:lhs=@,
+  repeat+ <IMPL_TAIL>:tail[]=@
+}
+
+IMPL_TAIL: sequence dict {
+  choice { "<->":op="<->", "->":op="->" },
+  <IMPL_OPND>:rhs=@
+}
+
+IMPL_OPND: choice { <TERNARY>, <BIN_EXPR> }
 
 TERNARY: sequence dict {
   <BIN_EXPR>:cond=@,
@@ -1946,7 +1983,7 @@ TYPE_CAST: choice {
 }
 
 TYPE_CAST_IDENT: sequence dict {
-  sv_identifier:type=@:type="type_cast",
+  sv_qualified_type:type=@:type="type_cast",
   "'",
   "(",
   <EXPR>:value=@,
