@@ -409,7 +409,7 @@ PORT_BODY_ANY: choice {
 PORT_DECL_NODIR_TYPED: sequence dict {
   <TYPE_SPEC>:type_spec=@:type="port_decl_nodir",
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
@@ -456,7 +456,7 @@ PORT_NAME_CONT: sequence dict {
 PORT_DECL_ANSI_USERTYPE: sequence dict {
   <PORT_DIRECTION>:direction=@,
   sv_qualified_type:type_spec=@:type="port_decl_usertype",
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
@@ -472,7 +472,7 @@ PORT_DECL_ANSI: sequence dict {
   <PORT_DIRECTION>:direction=@,
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
-  ?<RANGE>:range=@,
+  ?<PACKED_DIMENSIONS>:range=@,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
@@ -1192,7 +1192,8 @@ GEN_BLOCK: choice {
 GEN_NAMED_BLOCK: sequence dict {
   'begin':@:type="gen_block", ?<BLOCK_LABEL>,
   repeat <GENERATE_ITEM>:items[]=@,
-  'end':@
+  'end':@,
+  ?<END_LABEL>:end_label=@
 }
 
 // ─── Tasks and functions ────────────────────────────────────────────────
@@ -2178,7 +2179,16 @@ BASED_NUM ignore: sequence dict {
   "'":type="based_num",
   ?<SIGNED_FLAG>:signed=true,
   <BASE_CHAR>:base=@,
-  <BASED_DIGITS_OR_MACRO>:value=@
+  <BASED_VALUE>:value=@
+}
+
+// Per IEEE 1800-2017 §5.7.1, whitespace is permitted between the
+// base character and the digit run: `'h 30`, `8'b 1010_0101`. Push a
+// `whitespace` ignore here so the boundary before BASED_DIGITS_OR_MACRO
+// eats the optional spaces — BASED_NUM's outer `ignore:` (strict)
+// still applies to the size/`'`/base prefix.
+BASED_VALUE ignore whitespace: sequence {
+  <BASED_DIGITS_OR_MACRO>
 }
 
 BASED_DIGITS_OR_MACRO: choice {
