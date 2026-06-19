@@ -1302,9 +1302,14 @@ TASK_PORT: choice {
 TASK_PORT_USERTYPED: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
   sv_qualified_type:type_spec=@,
+  ?<PARAM_OVERRIDE>:type_params=@,
   ?<RANGE>:range=@,
-  sv_identifier:name=@
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<TASK_PORT_INIT>:init=@
 }
+
+TASK_PORT_INIT: sequence dict { "=", <EXPR>:value=@ }
 
 TASK_PORT_BUILTIN: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
@@ -1408,6 +1413,7 @@ LOCAL_VAR_DECL: choice {
 }
 
 LOCAL_VAR_DECL_BUILTIN: sequence dict {
+  ?<LIFETIME>:lifetime=@,
   <TYPE_SPEC>:type_spec=@:type="local_var_decl",
   ?<SIGNING_KW>:signing=@,
   ?<RANGE>:range=@,
@@ -1429,6 +1435,7 @@ LOCAL_VAR_DECL_BUILTIN: sequence dict {
 // repeat-over-BLOCK_ITEM would consume the closing `end` instead
 // of bailing out. See SV_RESERVED comment above.
 LOCAL_VAR_DECL_USER: sequence dict {
+  ?<LIFETIME>:lifetime=@,
   !<SV_RESERVED>,
   sv_identifier:type_spec=@:type="local_var_decl_user",
   sv_identifier:name=@,
@@ -2859,9 +2866,14 @@ CLASS_TASK: sequence dict {
   ?<END_LABEL>:end_label=@
 }
 
+// Each port is captured as a balanced-paren text run so a nested
+// `#(...)` (parameterised type) or `= (1+2)` (default expr) doesn't
+// end the port at the first `)`. Splits on top-level `,` between
+// ports. Host re-parses the per-port text into direction/type/name
+// when it needs structured access.
 METHOD_PORT_LIST: sequence dict {
   "(",
-  *:text=@,
+  repeat sv_balanced_arg:ports[]=@ separator ",",
   ")"
 }
 
