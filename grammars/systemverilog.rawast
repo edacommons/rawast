@@ -1363,12 +1363,23 @@ FOR_INIT_DECL: sequence dict {
   "=", <EXPR>:value=@
 }
 
-// For-loop step is typically `i++`, `i--`, or `i = i + 1`.
-// Plus an inline expression form so `i++` and `i--` parse.
+// For-loop step per IEEE 1800-2017 genvar_iteration / for_variable_assignment:
+// `i = expr` | `i op= expr` (compound) | `i++` | `++i` | `i--` | `--i`.
+// Compound `op=` tried BEFORE plain `=` so `i += 1` doesn't get
+// half-parsed by ASSIGNMENT_PAIR which only knows `=`.
+//
+// Reference: Verilator verilog.y `genvar_iteration` (IEEE: genvar_iteration).
 FOR_STEP: choice {
+  <FOR_STEP_COMPOUND>,
   <ASSIGNMENT_PAIR>,
   <FOR_STEP_INCDEC>,
   <FOR_STEP_PRE_INCDEC>
+}
+
+FOR_STEP_COMPOUND: sequence dict {
+  <LVALUE>:lhs=@,
+  <ASSIGN_OP>:type=@,
+  <EXPR>:rhs=@
 }
 
 FOR_STEP_INCDEC: sequence dict {
