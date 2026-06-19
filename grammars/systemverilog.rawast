@@ -1688,10 +1688,14 @@ PRIMARY: choice {
 // value: `extends Base #(.ITEM_T(my_item#(W, H)))`). Tried before
 // FUNC_CALL because both start with an identifier; the trailing `#`
 // disambiguates.
+// Per IEEE 1800-2017 §6.20.3 / §23.10: parameter_value_assignment for
+// a parameterised type ref takes either positional or named bindings,
+// same shape as instance-side `MODULE_INSTANTIATION#(.X(v))`. Reuse
+// `PARAM_BINDING` so the named (`.NAME(EXPR)`) form is supported.
 PARAMETERIZED_TYPE_REF: sequence dict {
   sv_identifier:name=@:type="param_type_ref",
   "#", "(",
-  repeat+ <EXPR>:params[]=@ separator ",",
+  repeat+ <PARAM_BINDING>:params[]=@ separator ",",
   ")"
 }
 
