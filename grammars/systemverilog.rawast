@@ -1160,7 +1160,28 @@ TASK_PORT_LIST: sequence dict {
   ")"
 }
 
-TASK_PORT: sequence dict {
+// Task/function port. SV-1800 §13.4.2 permits ports typed by either
+// a built-in keyword (logic, int, …) OR a user-defined type
+// (typedef'd name, optionally pkg-qualified). The user-typed form is
+// tried first so `sail_bits x` (user type + name) doesn't fall
+// through to TASK_PORT's "no type, just name" interpretation that
+// then expects `,` or `)` immediately — surfacing as the deepest
+// "expected literal ','" error in the cluster analysis.
+//
+// Reference: Verilator verilog.y `tf_port_item` / `taskRef` rules.
+TASK_PORT: choice {
+  <TASK_PORT_USERTYPED>,
+  <TASK_PORT_BUILTIN>
+}
+
+TASK_PORT_USERTYPED: sequence dict {
+  ?<PORT_DIRECTION>:direction=@,
+  sv_qualified_type:type_spec=@,
+  ?<RANGE>:range=@,
+  sv_identifier:name=@
+}
+
+TASK_PORT_BUILTIN: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
