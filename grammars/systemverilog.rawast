@@ -895,12 +895,23 @@ FINAL_BLOCK: sequence dict {
 
 // ─── Event control ──────────────────────────────────────────────────────
 
+// Per IEEE 1800-2017 `event_control` production. Forms:
+//   @*                                  — implicit always-comb-style
+//   @(*)                                — same, parenthesised
+//   @(event_expression)                 — explicit sensitivity list
+//   @hierarchical_event_identifier      — clocking-block ref / named event
+//                                         (`@cb`, `@my_event`)
+//
+// The hier-event-identifier form is dispatched on first-byte =
+// identifier-start, disjoint from `*`/`(`. Reference: Verilator
+// verilog.y `event_control` (line ~3366, `@ senitemVar` alt).
 EVENT_CONTROL: sequence dict {
   "@",
   choice {
     sequence { "*":wildcard=true },
     sequence { "(", "*":wildcard=true, ")" },
-    sequence { "(", <EVENT_EXPR>:events=@, ")" }
+    sequence { "(", <EVENT_EXPR>:events=@, ")" },
+    sequence { sv_identifier:event_id=@ }
   }
 }
 
