@@ -811,10 +811,29 @@ ASSIGNMENT_PAIR: sequence dict {
   <LVALUE>:lhs=@, "=", <EXPR>:rhs=@
 }
 
-LVALUE: sequence dict {
+// Per IEEE 1800-2017 `variable_lvalue` (also `net_lvalue` and
+// `streaming_concatenation` reach here): either a plain hier-selector
+// chain (`this.x.field[3:0]`) or a concatenation of lvalues
+// (`{a, b[1], c.f}`). The concatenation form is recursive — each
+// element is itself an LVALUE, so `{a, {b, c}, d}` works.
+//
+// Reference: Verilator verilog.y `variable_lvalue` production
+// (IEEE: variable_lvalue or net_lvalue).
+LVALUE: choice {
+  <LVALUE_CONCAT>,
+  <LVALUE_PLAIN>
+}
+
+LVALUE_PLAIN: sequence dict {
   <LVALUE_HEAD>:name=@,
   repeat <HIER_PART>:path[]=@,
   ?<RANGE_OR_INDEX>:select=@
+}
+
+LVALUE_CONCAT: sequence dict {
+  "{":type="lvalue_concat",
+  repeat+ <LVALUE>:elements[]=@ separator ",",
+  "}"
 }
 
 // LVALUE head accepts `this`, `super`, plain identifier, or a
