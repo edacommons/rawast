@@ -2091,7 +2091,20 @@ HIER_SELECT: sequence dict { "[", <EXPR>:index=@, "]" }
 // up to the next top-level `,` or `)`, with nested `(...)`
 // properly balanced). So `` `FOO(g(a, b), c) `` yields two args:
 // `g(a, b)` and ` c`.
-MACRO_USE ignore: sequence dict {
+// Per IEEE 1800-2017 §22.5.1, whitespace IS permitted between the
+// macro name and the opening `(` of its actual-argument list
+// (whitespace inside MACRO_CALL_ARGS is also tolerated). The previous
+// `ignore:` (empty) policy treated that whitespace as content and
+// caused the optional MACRO_CALL_ARGS to be predictively skipped on
+// `\`name (args)` (with space) — only `\`name(args)` (no space)
+// matched. Permit whitespace between name and call-args so the
+// common UVM form `\`uvm_field_int (addr, UVM_DEFAULT)` parses.
+//
+// The leading `` ` `` and `sv_identifier` are still adjacent (Key
+// doesn't run ignore before matching, and `sv_identifier` itself is
+// reached without intervening run_ignore because it's the next item
+// in the sequence after a Key).
+MACRO_USE ignore whitespace line_comment block_comment: sequence dict {
   "`",
   sv_identifier:name=@:type="macro_use",
   ?<MACRO_CALL_ARGS>:args=@
