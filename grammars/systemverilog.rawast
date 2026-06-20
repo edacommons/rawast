@@ -906,11 +906,21 @@ LOCALPARAM_DECL_USERTYPE_STMT: sequence dict {
 
 // ─── Continuous assignment ──────────────────────────────────────────────
 
+// Continuous assign — optionally carries a `(drive0, drive1)` /
+// `(strong0, weak1)` drive-strength tuple (IEEE 1800-2017 §28).
+//   assign (pull0, pull1) pins[i] = expr;
+// Body captured as raw text so the parser doesn't need to enumerate
+// the strength keyword set.
 CONT_ASSIGN: sequence dict {
   'assign':@:type="cont_assign",
+  ?<DRIVE_STRENGTH>:strength=@,
   ?<DELAY>:delay=@,
   repeat+ <ASSIGNMENT_PAIR>:assignments[]=@ separator ",",
   ";"
+}
+
+DRIVE_STRENGTH: sequence dict {
+  "(", *:text=@, ")"
 }
 
 ASSIGNMENT_PAIR: sequence dict {
