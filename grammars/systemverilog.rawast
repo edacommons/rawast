@@ -1697,10 +1697,35 @@ TASK_CALL: sequence dict {
   ";"
 }
 
+// Per IEEE 1800-2017 §13.5.3, a function/task call accepts both
+// positional and named argument bindings:
+//   foo(a, b)             // positional
+//   foo(.arg1(a), .arg2)  // named (.name(expr) or .name with default)
+//   foo(.*)               // wildcard pass-through
+// Named form tried first so a leading `.` doesn't fall through into
+// the EXPR positional alt.
 TASK_ARG_LIST: sequence dict {
   "(",
-  repeat <EXPR>:args[]=@ separator ",",
+  repeat <TASK_ARG>:args[]=@ separator ",",
   ")"
+}
+
+TASK_ARG: choice {
+  <TASK_ARG_NAMED>,
+  <TASK_ARG_POSITIONAL>
+}
+
+TASK_ARG_NAMED: sequence dict {
+  ".", sv_identifier:name=@:style="named",
+  ?<TASK_ARG_NAMED_VALUE>:value=@
+}
+
+TASK_ARG_NAMED_VALUE: sequence dict {
+  "(", ?<EXPR>:value=@, ")"
+}
+
+TASK_ARG_POSITIONAL: sequence dict {
+  <EXPR>:value=@:style="positional"
 }
 
 DISABLE_STMT: sequence dict {
@@ -2296,7 +2321,7 @@ STRING_PRIMARY: sequence dict {
 FUNC_CALL: sequence dict {
   sv_identifier:name=@:type="func_call",
   "(",
-  repeat <EXPR>:args[]=@ separator ",",
+  repeat <TASK_ARG>:args[]=@ separator ",",
   ")"
 }
 
