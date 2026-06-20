@@ -1156,6 +1156,7 @@ GENERATE_ITEM: choice {
   <GEN_FOR>,
   <GEN_IF>,
   <GEN_CASE>,
+  <GEN_NAMED_BLOCK>,
   <MODULE_ITEM>
 }
 
