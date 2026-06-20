@@ -803,6 +803,7 @@ UNION_TYPE: sequence dict {
 // Struct/union field: `<TYPE> [range] <NAME> [unpacked-dim] [= init];`.
 STRUCT_FIELD: sequence dict {
   <STRUCT_FIELD_TYPE>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,

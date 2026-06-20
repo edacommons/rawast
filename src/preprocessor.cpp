@@ -705,6 +705,26 @@ std::shared_ptr<ArrayValue> substitute_segments(
             // substitution time. The neighbouring text/ref segments
             // fuse because no separator survives.
             if (type == "token_paste") continue;
+            // `\`"…\`"` stringification — recurse on the inner
+            // segments to substitute parameters first, then render
+            // the whole thing as a string literal at expand time.
+            // Push a marker segment carrying the substituted inner
+            // body so render_macro_body_segments can wrap it in `"`.
+            if (type == "stringify") {
+                auto inner_segs = std::dynamic_pointer_cast<ArrayValue>(
+                    dict_value_or_null(*d, "segments"));
+                std::shared_ptr<ArrayValue> sub_inner;
+                if (inner_segs) {
+                    sub_inner = substitute_segments(*inner_segs, params, args);
+                } else {
+                    sub_inner = std::make_shared<ArrayValue>();
+                }
+                auto marker = std::make_shared<DictValue>();
+                marker->data()["type"] = make_string("stringify");
+                marker->data()["segments"] = sub_inner;
+                result->data().push_back(marker);
+                continue;
+            }
             if (type == "ref" && has_params) {
                 auto name = dict_string_or_empty(*d, "value");
                 auto it = param_idx.find(name);
@@ -905,6 +925,19 @@ std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
             auto type = dict_string_or_empty(*d, "type");
             if (type == "macro_use") {
                 out += render_macro_use_inline(*d);
+                continue;
+            }
+            // `\`"…\`"` stringification — wrap the rendered inner
+            // body in literal double-quotes. Inner segments have
+            // already had parameter substitution applied at
+            // substitute_segments time.
+            if (type == "stringify") {
+                out += '"';
+                if (auto inner = std::dynamic_pointer_cast<ArrayValue>(
+                        dict_value_or_null(*d, "segments"))) {
+                    out += render_macro_body_segments(*inner);
+                }
+                out += '"';
                 continue;
             }
             // ref / string / other typed segments — render leaf.

@@ -140,7 +140,7 @@ TEXT_LINE ignore: sequence dict {
 DEFINE: sequence dict {
   "`define":type="define" space,
   <DECL>:decl=@ space,
-  scope array { <TOKEN_PASTE>, <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT> }:body=@,
+  scope array { <STRINGIFY>, <TOKEN_PASTE>, <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT> }:body=@,
   "\n"
 }
 
@@ -151,6 +151,17 @@ DEFINE: sequence dict {
 // can't be misread as the start of a `\`X` macro use.
 TOKEN_PASTE: sequence dict {
   "``":type="token_paste"
+}
+
+// `\`"..\`"` — stringification (IEEE 1800-2017 §22.5.1). Opens
+// and closes a string literal in the expanded text; parameters
+// referenced inside undergo substitution before the literal is
+// formed. Tried BEFORE STRING so the leading `\`"` doesn't get
+// half-parsed as text-`\`` plus a regular `"…"` string.
+STRINGIFY: sequence dict {
+  "`\"":type="stringify",
+  scope array { <MACRO_USE>, <PARAM_REF>, <TOKEN_PASTE> }:segments=@,
+  "`\""
 }
 
 // `\<newline>` — line continuation inside a macro body. Engine
