@@ -144,7 +144,7 @@ DPI_EXPORT: sequence dict {
 MODULE_DECL: sequence dict {
   <MODULE_KEYWORD>:keyword=@:type="module",
   <IDENT_OR_MACRO>:name=@,
-  ?<MODULE_HEADER_IMPORT>:header_import=@,
+  repeat <MODULE_HEADER_IMPORT>:header_imports[]=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<PORT_LIST>:ports=@,
   ";",
@@ -2574,7 +2574,7 @@ INTERFACE_DECL: sequence dict {
   'interface':@:type="interface",
   ?<LIFETIME>:lifetime=@,
   sv_identifier:name=@,
-  ?<MODULE_HEADER_IMPORT>:header_import=@,
+  repeat <MODULE_HEADER_IMPORT>:header_imports[]=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<INTERFACE_EXTENDS>:extends=@,
   ?<PORT_LIST>:ports=@,
