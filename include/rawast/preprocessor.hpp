@@ -56,9 +56,18 @@ std::optional<PpOnUndefined> parse_pp_on_undefined(std::string_view name) noexce
 // Legacy bodies that arrived as a single string (mini_preprocessor
 // synthesized ASTs, process_ast callers) are normalised to a one-
 // element segments array at register time.
+// A single formal parameter on a function-like `\`define`.
+// `default_text` is the raw substitution text (per IEEE 1800-2017
+// §22.5.1) inserted when the call site omits the corresponding
+// positional argument. Empty `default_text` means "no default".
+struct MacroParam {
+    std::string name;
+    std::string default_text;
+};
+
 struct MacroDef {
     std::string name;
-    std::vector<std::string> params;
+    std::vector<MacroParam> params;
     std::shared_ptr<ArrayValue> body_segments;
     bool is_function_like = false;
 

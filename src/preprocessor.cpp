@@ -459,24 +459,45 @@ void trim_horiz(std::string& s) {
 // into trimmed identifier names. Splits on `,` at paren depth 0
 // so a param like `f(x, y)` would stay one token — though real
 // macro parameter lists are flat identifiers in practice.
-std::vector<std::string> split_params(const std::string& body) {
-    std::vector<std::string> out;
+// Split `(name1, name2 = default, …)` body text into formals.
+// Each formal is `name [= default_text]` per IEEE 1800-2017 §22.5.1.
+// Top-level `,` separates formals; `=` (if present) marks the start
+// of the default-text run, which continues to the next top-level
+// `,` or end of input. Balanced `(` / `)` tracked so a default like
+// `ARGS_ = ()` doesn't get half-eaten.
+std::vector<MacroParam> split_params(const std::string& body) {
+    std::vector<MacroParam> out;
     int depth = 0;
     std::size_t start = 0;
+    auto emit = [&](std::size_t end) {
+        std::string segment = body.substr(start, end - start);
+        MacroParam p;
+        auto eq = segment.find('=');
+        // First `=` is the default-text delimiter — it can only
+        // appear at depth 0 by construction (we only scan here
+        // after the depth-tracking scanner has already split on
+        // top-level commas). Nested `=` inside `()` stays inside
+        // the default_text run.
+        if (eq != std::string::npos) {
+            p.name = segment.substr(0, eq);
+            p.default_text = segment.substr(eq + 1);
+            trim_horiz(p.default_text);
+        } else {
+            p.name = std::move(segment);
+        }
+        trim_horiz(p.name);
+        if (!p.name.empty()) out.push_back(std::move(p));
+    };
     for (std::size_t i = 0; i < body.size(); ++i) {
         char c = body[i];
         if (c == '(') ++depth;
         else if (c == ')') --depth;
         else if (c == ',' && depth == 0) {
-            std::string p = body.substr(start, i - start);
-            trim_horiz(p);
-            if (!p.empty()) out.push_back(std::move(p));
+            emit(i);
             start = i + 1;
         }
     }
-    std::string last = body.substr(start);
-    trim_horiz(last);
-    if (!last.empty()) out.push_back(std::move(last));
+    emit(body.size());
     return out;
 }
 
@@ -496,7 +517,7 @@ std::vector<std::string> split_params(const std::string& body) {
 // `\`"…\`"` (a stray `"` in an arg) are left to host parsing —
 // the SV LRM is permissive here too.
 std::string substitute_params(const std::string& body,
-                              const std::vector<std::string>& params,
+                              const std::vector<MacroParam>& params,
                               const std::vector<std::string>& args) {
     std::unordered_map<std::string, std::string> map;
     bool has_params = (params.size() == args.size()) && !params.empty();
@@ -504,7 +525,7 @@ std::string substitute_params(const std::string& body,
         for (std::size_t i = 0; i < params.size(); ++i) {
             std::string arg = args[i];
             trim_horiz(arg);
-            map[params[i]] = std::move(arg);
+            map[params[i].name] = std::move(arg);
         }
     }
     std::string out;
@@ -635,13 +656,13 @@ std::string render_segment(const ValuePtr& seg);   // forward decl
 // still firing stringify/paste markers in text segments.
 std::shared_ptr<ArrayValue> substitute_segments(
         const ArrayValue& body_segs,
-        const std::vector<std::string>& params,
+        const std::vector<MacroParam>& params,
         const std::vector<ValuePtr>& args) {
     std::unordered_map<std::string, std::size_t> param_idx;
     bool has_params = (params.size() == args.size()) && !params.empty();
     if (has_params) {
         for (std::size_t i = 0; i < params.size(); ++i) {
-            param_idx[params[i]] = i;
+            param_idx[params[i].name] = i;
         }
     }
 
@@ -680,6 +701,10 @@ std::shared_ptr<ArrayValue> substitute_segments(
         }
         if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
             auto type = dict_string_or_empty(*d, "type");
+            // `\`\`` paste marker — drops out of the body at
+            // substitution time. The neighbouring text/ref segments
+            // fuse because no separator survives.
+            if (type == "token_paste") continue;
             if (type == "ref" && has_params) {
                 auto name = dict_string_or_empty(*d, "value");
                 auto it = param_idx.find(name);
@@ -721,6 +746,24 @@ std::shared_ptr<ArrayValue> substitute_segments(
         result->data().push_back(seg);
     }
     return result;
+}
+
+// Per IEEE 1800-2017 §22.5.1, a function-like macro call may omit
+// trailing arguments whose formals carry a `= default_text` clause.
+// If a tail formal has no default, the call is short and the
+// caller's arity-mismatch path fires. Returns the padded arg list
+// (size == params.size()) on success, or std::nullopt if any
+// missing position can't be filled.
+template <typename ArgT, typename Make>
+std::optional<std::vector<ArgT>> fill_defaults(
+        const std::vector<MacroParam>& params,
+        std::vector<ArgT> args, Make make_from_default) {
+    if (args.size() >= params.size()) return args;
+    for (std::size_t i = args.size(); i < params.size(); ++i) {
+        if (params[i].default_text.empty()) return std::nullopt;
+        args.push_back(make_from_default(params[i].default_text));
+    }
+    return args;
 }
 
 } // namespace
@@ -799,11 +842,23 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
         for (const auto& a : args) args_ast.push_back(make_string(a));
 
         std::shared_ptr<ArrayValue> substituted;
-        if (macro.is_function_like && macro.params.size() != args.size()) {
+        if (macro.is_function_like
+                && macro.params.size() != args_ast.size()) {
+            // Short call — try filling missing tail args from
+            // each formal's `= default_text` clause.
+            auto padded = fill_defaults(macro.params, std::move(args_ast),
+                [](const std::string& d) -> ValuePtr {
+                    return make_string(d);
+                });
+            if (padded) {
+                args_ast = std::move(*padded);
+            }
+        }
+        if (macro.is_function_like && macro.params.size() != args_ast.size()) {
             state_.warnings.push_back(
                 {"macro `" + name + " expects " +
                  std::to_string(macro.params.size()) +
-                 " args, got " + std::to_string(args.size()),
+                 " args, got " + std::to_string(args_ast.size()),
                  state_.current_file, state_.current_line});
             substituted = substitute_segments(*macro.body_segments, {}, {});
         } else {
@@ -898,17 +953,28 @@ std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
     }
     const auto& macro = it->second;
 
+    auto args_filled = args;
+    if (macro.is_function_like
+            && macro.params.size() != args_filled.size()) {
+        auto padded = fill_defaults(macro.params, std::move(args_filled),
+            [](const std::string& d) -> ValuePtr {
+                return make_string(d);
+            });
+        if (padded) args_filled = std::move(*padded);
+        else args_filled = args;
+    }
+
     std::shared_ptr<ArrayValue> substituted;
-    if (macro.is_function_like && macro.params.size() != args.size()) {
+    if (macro.is_function_like && macro.params.size() != args_filled.size()) {
         state_.warnings.push_back(
             {"macro `" + name + " expects " +
              std::to_string(macro.params.size()) +
-             " args, got " + std::to_string(args.size()),
+             " args, got " + std::to_string(args_filled.size()),
              state_.current_file, state_.current_line});
         substituted = substitute_segments(*macro.body_segments, {}, {});
     } else {
         substituted = substitute_segments(*macro.body_segments,
-                                          macro.params, args);
+                                          macro.params, args_filled);
     }
 
     state_.active_expansions.insert(name);
@@ -1009,9 +1075,25 @@ void Preprocessor::handle_define(const DictValue& d) {
                 params_it != decl->data().end()) {
                 if (auto pa = as_array(params_it->second)) {
                     for (const auto& p : pa->data()) {
+                        MacroParam mp;
+                        // sv_preprocessor.rawast captures PARAM_FORMAL
+                        // as `{name: "…", default: {value: "…"}}`.
+                        // Older / synthesized shapes pass a bare
+                        // string — read both.
                         if (auto s = as_string(p)) {
-                            m.params.push_back(s->data());
+                            mp.name = s->data();
+                        } else if (auto pd = as_dict(p)) {
+                            mp.name = dict_string_or_empty(*pd, "name");
+                            if (auto def_v = dict_value_or_null(*pd, "default")) {
+                                if (auto dd = as_dict(def_v)) {
+                                    mp.default_text =
+                                        dict_string_or_empty(*dd, "value");
+                                } else if (auto ds = as_string(def_v)) {
+                                    mp.default_text = ds->data();
+                                }
+                            }
                         }
+                        if (!mp.name.empty()) m.params.push_back(std::move(mp));
                     }
                     m.is_function_like = true;
                 }
@@ -1240,15 +1322,26 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     auto it = state_.macros.find(name);
     if (it != state_.macros.end()) {
         const auto& macro = it->second;
+        auto args_filled = args;
+        if (macro.is_function_like
+                && macro.params.size() != args_filled.size()) {
+            auto padded = fill_defaults(macro.params, std::move(args_filled),
+                [](const std::string& d) -> ValuePtr {
+                    return make_string(d);
+                });
+            if (padded) args_filled = std::move(*padded);
+            else args_filled = args;
+        }
         std::shared_ptr<ArrayValue> substituted;
-        if (macro.is_function_like && macro.params.size() != args.size()) {
+        if (macro.is_function_like
+                && macro.params.size() != args_filled.size()) {
             // Arity mismatch — warn; still substitute (with empty
             // param/arg lists) so `\`"…\`"` stringification and
             // `\`\`` token-paste markers fire regardless.
             state_.warnings.push_back(
                 {"macro `" + name + " expects " +
                  std::to_string(macro.params.size()) +
-                 " args, got " + std::to_string(args.size()),
+                 " args, got " + std::to_string(args_filled.size()),
                  state_.current_file, state_.current_line});
             substituted = substitute_segments(*macro.body_segments, {}, {});
         } else {
@@ -1258,7 +1351,7 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
             // fire, and typed `ref` segments stay verbatim (which
             // is what we want — they were never parameter refs).
             substituted = substitute_segments(*macro.body_segments,
-                                              macro.params, args);
+                                              macro.params, args_filled);
         }
         // Render the substituted segments. macro_use segments
         // recurse through render_macro_use_inline — no string

@@ -24,7 +24,7 @@
 //                         parse as parameterised vs object-like.
 //   TEXT_LINE           — line content captured verbatim by scope.
 
-use: std
+use: std, sv
 
 start: <PP_FILE>
 
@@ -140,8 +140,17 @@ TEXT_LINE ignore: sequence dict {
 DEFINE: sequence dict {
   "`define":type="define" space,
   <DECL>:decl=@ space,
-  scope array { <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT> }:body=@,
+  scope array { <TOKEN_PASTE>, <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT> }:body=@,
   "\n"
+}
+
+// `\`\`` — token paste operator (IEEE 1800-2017 §22.5.1). Adjacent
+// to a parameter or identifier on either side; substituted text on
+// the two sides fuses because the operator is dropped at expansion
+// time. Tried BEFORE MACRO_USE so the second backtick of `\`\`X`
+// can't be misread as the start of a `\`X` macro use.
+TOKEN_PASTE: sequence dict {
+  "``":type="token_paste"
 }
 
 // `\<newline>` — line continuation inside a macro body. Engine
@@ -165,10 +174,25 @@ DECL ignore: sequence dict {
 // PARAMS overrides with its own `ignore linespace` so internal
 // whitespace works — DECL above has empty ignore which would
 // otherwise propagate into PARAMS via inheritance.
+//
+// Per IEEE 1800-2017 §22.5.1, each formal accepts an optional
+// `= default_text` clause. `default_text` is balanced text up to
+// the next top-level `,` or `)` — `sv_balanced_arg` is exactly
+// this scanner, so the default value captures cleanly even when
+// it itself contains balanced parens (`ARGS_ = ()`, `X = (a+b)`).
 PARAMS ignore linespace: sequence array {
   "(",
-  repeat identifier separator ",",
+  repeat <PARAM_FORMAL> separator ",",
   ")"
+}
+
+PARAM_FORMAL: sequence dict {
+  identifier:name=@,
+  ?<PARAM_FORMAL_DEFAULT>:default=@
+}
+
+PARAM_FORMAL_DEFAULT: sequence dict {
+  "=", sv_balanced_arg:value=@
 }
 
 // `\`NAME[(args)]` use site. No explicit ignore — inherit from

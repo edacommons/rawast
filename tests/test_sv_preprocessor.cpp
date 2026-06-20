@@ -9,6 +9,7 @@
 #include <rawast/grammar.hpp>
 #include <rawast/loader.hpp>
 #include <rawast/parsers.hpp>
+#include <rawast/parsers_sv.hpp>
 #include <rawast/preprocessor.hpp>
 #include <rawast/value.hpp>
 
@@ -20,6 +21,7 @@ namespace {
 
 Grammar load_grammar() {
     register_std_parser_group();
+    register_sv_parser_group();
     Grammar g;
     auto r = load_rawast_grammar_from_file(g, "grammars/sv_preprocessor.rawast");
     REQUIRE_MESSAGE(r, "loading sv_preprocessor.rawast failed: "
@@ -263,8 +265,10 @@ TEST_CASE("sv_pp define: macro with one parameter") {
     auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 1);
-    auto p0 = as_string(params->data()[0]);
-    REQUIRE(p0); CHECK(p0->data() == "x");
+    // PARAM_FORMAL now wraps each formal as `{name: "…", [default: …]}`
+    // so a `= default_text` clause can hang off the same node.
+    auto p0 = std::dynamic_pointer_cast<DictValue>(params->data()[0]);
+    REQUIRE(p0); CHECK(str_field(p0, "name") == "x");
     auto body = body_of(ast);
     REQUIRE(body);
     REQUIRE(body->data().size() == 1);
@@ -281,8 +285,8 @@ TEST_CASE("sv_pp define: macro with multiple parameters") {
     auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 2);
-    CHECK(as_string(params->data()[0])->data() == "x");
-    CHECK(as_string(params->data()[1])->data() == "y");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[0]), "name") == "x");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[1]), "name") == "y");
 }
 
 TEST_CASE("sv_pp define: macro params accept canonical SV spacing `(x, y)`") {
@@ -294,8 +298,8 @@ TEST_CASE("sv_pp define: macro params accept canonical SV spacing `(x, y)`") {
     auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 2);
-    CHECK(as_string(params->data()[0])->data() == "x");
-    CHECK(as_string(params->data()[1])->data() == "y");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[0]), "name") == "x");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[1]), "name") == "y");
 }
 
 TEST_CASE("sv_pp define: macro params accept spacing around `,`") {
@@ -312,9 +316,9 @@ TEST_CASE("sv_pp define: macro params accept spacing around `,`") {
     auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 3);
-    CHECK(as_string(params->data()[0])->data() == "a");
-    CHECK(as_string(params->data()[1])->data() == "b");
-    CHECK(as_string(params->data()[2])->data() == "c");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[0]), "name") == "a");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[1]), "name") == "b");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[2]), "name") == "c");
 }
 
 TEST_CASE("sv_pp define: macro params accept arbitrary internal spacing `( a , b , c )`") {
@@ -324,9 +328,9 @@ TEST_CASE("sv_pp define: macro params accept arbitrary internal spacing `( a , b
     auto params = params_of(ast);
     REQUIRE(params);
     REQUIRE(params->data().size() == 3);
-    CHECK(as_string(params->data()[0])->data() == "a");
-    CHECK(as_string(params->data()[1])->data() == "b");
-    CHECK(as_string(params->data()[2])->data() == "c");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[0]), "name") == "a");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[1]), "name") == "b");
+    CHECK(str_field(std::dynamic_pointer_cast<DictValue>(params->data()[2]), "name") == "c");
 }
 
 TEST_CASE("sv_pp define: macro with no parameter list when `(` not adjacent") {
@@ -603,8 +607,8 @@ TEST_CASE("Preprocessor::process: parameterised define registers params") {
     auto m = pp.get_macro("ADD");
     REQUIRE(m);
     REQUIRE(m->params.size() == 2);
-    CHECK(m->params[0] == "x");
-    CHECK(m->params[1] == "y");
+    CHECK(m->params[0].name == "x");
+    CHECK(m->params[1].name == "y");
     CHECK(m->is_function_like);
     CHECK(m->body_text() == "x + y");
 }
