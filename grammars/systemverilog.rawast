@@ -2310,7 +2310,7 @@ REAL_NUM: sequence dict {
 }
 
 INTEGER_NUM: sequence dict {
-  int:value=@:type="integer"
+  sv_int:value=@:type="integer"
 }
 
 STRING_PRIMARY: sequence dict {
@@ -2472,7 +2472,7 @@ IDENT_OR_MACRO: choice { <IDENT_VAL>,  <MACRO_USE_BARE> }
 // (rawast's `:@` binding syntax is shorthand for Key alternatives;
 //  for Parse terminals in Choice position, this wrapper form is
 //  the canonical way to forward the parsed value.)
-INT_VAL:   sequence { int }
+INT_VAL:   sequence { sv_int }
 IDENT_VAL: sequence { sv_identifier }
 
 // Preprocessor directives are inlined directly into the host

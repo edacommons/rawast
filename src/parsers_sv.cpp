@@ -4,6 +4,8 @@
 #include <rawast/value.hpp>
 
 #include <cctype>
+#include <charconv>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -656,6 +658,67 @@ SaveResult SvQualifiedTypeParser::unparse(const Value& v) const {
         "SvQualifiedTypeParser::unparse expects StringValue"});
 }
 
+// --- SvIntParser --------------------------------------------------------
+
+SvIntParser::SvIntParser() : Parser("sv_int") {}
+
+WalkResult SvIntParser::walk(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+    accum_.clear();
+    auto first = sr.peek();
+    if (first && *first == '-') {
+        accum_.push_back('-');
+        sr.get();
+    }
+    bool seen_digit = false;
+    while (auto c = sr.peek()) {
+        if (std::isdigit(static_cast<unsigned char>(*c))) {
+            accum_.push_back(*c);
+            sr.get();
+            seen_digit = true;
+            continue;
+        }
+        // Underscore separator — IEEE 1800-2017 §5.7. Allowed only
+        // between digits; never as the leading char and not as the
+        // final char (the next iteration must see another digit).
+        if (*c == '_' && seen_digit) {
+            sr.mark();
+            sr.get();
+            auto next = sr.peek();
+            if (next && std::isdigit(static_cast<unsigned char>(*next))) {
+                sr.accept();
+                continue;
+            }
+            sr.reject();
+        }
+        break;
+    }
+    if (!seen_digit) {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected sv_int"});
+    }
+    sr.accept();
+    return {};
+}
+
+ValuePtr SvIntParser::value() const {
+    std::int64_t result = 0;
+    auto [ptr, ec] = std::from_chars(accum_.data(),
+                                     accum_.data() + accum_.size(),
+                                     result);
+    if (ec != std::errc{}) return make_int(0);
+    return make_int(result);
+}
+
+SaveResult SvIntParser::unparse(const Value& v) const {
+    if (auto iv = dynamic_cast<const IntValue*>(&v)) {
+        return std::to_string(iv->data());
+    }
+    return tl::unexpected(SaveError{
+        "SvIntParser::unparse expects IntValue"});
+}
+
 // --- Group registration -------------------------------------------------
 
 namespace {
@@ -700,6 +763,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_balanced_brackets", []() {
             return std::make_unique<SvBalancedBracketsParser>();
+        }},
+        ParserSpec{"sv_int", []() {
+            return std::make_unique<SvIntParser>();
         }},
     };
     return g;

@@ -228,6 +228,20 @@ public:
     SaveResult  unparse(const Value& value) const override;
 };
 
+// `1234` / `20_000` — Verilog decimal integer with optional
+// underscore digit separators per IEEE 1800-2017 §5.7. Same shape
+// as std.int but tolerates `_` between digits; the captured value
+// has underscores stripped before std::from_chars.
+class SvIntParser final : public Parser {
+public:
+    SvIntParser();
+    WalkResult walk(StreamReader& sr) override;
+    ValuePtr   value() const override;
+    SaveResult unparse(const Value& value) const override;
+private:
+    std::string accum_;
+};
+
 // Note: SystemVerilog strings and comments are handled by the `std`
 // group's existing parsers:
 //
