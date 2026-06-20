@@ -70,9 +70,12 @@ def test_module_with_ansi_ports(sv_grammar):
     assert ports[0]["name"] == "clk"
     assert ports[2]["direction"] == "output"
     assert ports[2]["type_spec"] == "reg"
-    # Range [7:0] captured
+    # Packed dimensions captured — `?<PACKED_DIMENSIONS>` produces a
+    # list of ranges so `[7:0][3:0]` etc. all use the same shape.
     assert "range" in ports[2]
-    rng = ports[2]["range"]
+    dims = ports[2]["range"]
+    assert len(dims) == 1
+    rng = dims[0]
     assert unwrap(rng["msb"])["type"] == "integer"
     assert unwrap(rng["lsb"])["type"] == "integer"
 
@@ -283,7 +286,9 @@ def test_module_with_comments(sv_grammar):
 def test_macro_use_in_expression(sv_grammar):
     """Bare `MACRO at expression position emits a macro_use AST
     node — distinguished from numeric/identifier literals by the
-    `type: macro_use` discriminator."""
+    `type: macro_use` discriminator. MACRO_HIER_REF wraps it as
+    `{type: macro_ref, macro: {type: macro_use, ...}}` so the
+    path/selector chain can extend after the macro name."""
     src = "module m (output y); assign y = `WIDTH; endmodule\n"
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
@@ -294,8 +299,9 @@ def test_macro_use_in_expression(sv_grammar):
         if rhs.get("tail"):
             break
         rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "macro_use"
-    assert rhs["name"] == "WIDTH"
+    assert rhs["type"] == "macro_ref"
+    assert rhs["macro"]["type"] == "macro_use"
+    assert rhs["macro"]["name"] == "WIDTH"
 
 
 def test_macro_use_in_number_size(sv_grammar):
@@ -332,11 +338,13 @@ def test_macro_call_with_args(sv_grammar):
         if rhs.get("tail"):
             break
         rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "macro_use"
-    assert rhs["name"] == "MAX"
-    # Args preserve their text exactly as-is — leading space included.
-    # The host trims if it cares; we don't lose information.
-    assert rhs["args"] == ["a", " b"]
+    assert rhs["type"] == "macro_ref"
+    assert rhs["macro"]["type"] == "macro_use"
+    assert rhs["macro"]["name"] == "MAX"
+    # MACRO_ARGS uses `ignore linespace`, so the leading space inside
+    # each arg is eaten by the outer policy before the per-arg scope
+    # starts. Args appear as their trimmed text.
+    assert rhs["macro"]["args"] == ["a", "b"]
 
 
 def test_macro_call_with_nested_parens(sv_grammar):
@@ -352,7 +360,8 @@ def test_macro_call_with_nested_parens(sv_grammar):
         if rhs.get("tail"):
             break
         rhs = rhs.get("lhs", rhs)
-    assert rhs["args"] == ["g(a, b)", " c"]
+    assert rhs["type"] == "macro_ref"
+    assert rhs["macro"]["args"] == ["g(a, b)", "c"]
 
 
 def test_macro_use_as_module_name(sv_grammar):
