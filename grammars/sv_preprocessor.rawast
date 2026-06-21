@@ -28,7 +28,7 @@ use: std, sv
 
 start: <PP_FILE>
 
-PP_FILE ignore linespace: sequence array {
+PP_FILE ignore linespace line_comment block_comment: sequence array {
   repeat <PP_ITEM>
 }
 
