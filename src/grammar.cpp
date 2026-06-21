@@ -743,27 +743,22 @@ ValuePtr compact_opchain(const ValuePtr& v) {
         ? as_array(tail_it->second) : nullptr;
     bool has_tail = tail_arr && !tail_arr->data().empty();
 
-    // Count non-{lhs,tail} fields — those need to carry through.
+    // Any non-`lhs`/`tail` field signals a non-opchain shape (e.g.
+    // ASSIGNMENT_PAIR's `{lhs, rhs}`) — leave it alone. Unwrapping
+    // those would silently merge `lhs`'s inner fields with the
+    // sibling and lose structure.
     bool has_other = false;
     for (const auto& [k, _] : recursed->data()) {
         if (k != "lhs" && k != "tail") { has_other = true; break; }
     }
+    if (has_other) {
+        return recursed;
+    }
 
     if (!has_tail) {
-        // No chain; unwrap to lhs (or merge other fields onto lhs if
-        // there were any — rare but supported).
-        if (!has_other) return lhs;
-        // Other fields exist: build a fresh dict combining lhs's fields
-        // (if lhs is itself a dict) with the wrapper's extras.
-        auto out = std::make_shared<DictValue>();
-        if (auto ld = as_dict(lhs)) {
-            for (const auto& [k, v2] : ld->data()) out->data().emplace(k, v2);
-        }
-        for (const auto& [k, v2] : recursed->data()) {
-            if (k == "lhs" || k == "tail") continue;
-            out->data().emplace(k, v2);
-        }
-        return out;
+        // Empty / absent `tail` → no operators ran, just pass the lhs
+        // through unchanged.
+        return lhs;
     }
 
     // Fold the tail left-to-right.

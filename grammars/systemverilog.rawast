@@ -1779,27 +1779,38 @@ WAIT_STMT: sequence dict {
 
 // Top of the EXPR ladder. Implication `->` / equivalence `<->`
 // (IEEE 1800-2017 §11.4.7) sit at the LOWEST precedence — below
-// ternary `?:`. Add IMPL_TAIL chain here so the chain compactor
-// folds `a -> b -> c` (right-associative) without each `->` having
-// to dedicate its own rule. TERNARY/BIN_EXPR underneath cover
-// everything else.
+// ternary `?:`. IMPL_CHAIN absorbs `->` tails; underneath it,
+// COND_EXPR picks between the ternary form and the plain binary
+// cascade.
+//
+// The two alternatives at the EXPR level (IMPL_CHAIN and COND_EXPR)
+// SHARE COND_EXPR as the leading sub-rule. When IMPL_CHAIN's lhs
+// matches a COND_EXPR but no `->` tail follows, the sequence-success
+// cache holds the COND_EXPR entry. EXPR's second alt then re-pushes
+// COND_EXPR at the same offset and hits the cache directly —
+// avoiding a full BIN_EXPR cascade re-run.
+//
+// Earlier the second/third alts were TERNARY and BIN_EXPR (different
+// NodeIds from IMPL_CHAIN's IMPL_OPND lhs) so the cache didn't help.
+// Adding parens around a function call (`(s.len())`) blew up because
+// each nested EXPR doubled the work. The new structure runs the
+// cascade once per offset.
 EXPR ignore whitespace line_comment block_comment: choice {
   <IMPL_CHAIN>,
-  <TERNARY>,
-  <BIN_EXPR>
+  <COND_EXPR>
 }
 
 IMPL_CHAIN: sequence dict {
-  <IMPL_OPND>:lhs=@,
+  <COND_EXPR>:lhs=@,
   repeat+ <IMPL_TAIL>:tail[]=@
 }
 
 IMPL_TAIL: sequence dict {
   choice { "<->":op="<->", "->":op="->" },
-  <IMPL_OPND>:rhs=@
+  <COND_EXPR>:rhs=@
 }
 
-IMPL_OPND: choice { <TERNARY>, <BIN_EXPR> }
+COND_EXPR: choice { <TERNARY>, <BIN_EXPR> }
 
 TERNARY: sequence dict {
   <BIN_EXPR>:cond=@,
@@ -1813,46 +1824,50 @@ TERNARY: sequence dict {
 // compaction.
 BIN_EXPR: <LOR_EXPR>:#opchain
 
-LOR_EXPR:  choice { <LOR_CHAIN>,  <LAND_EXPR> }
-LOR_CHAIN: sequence dict {
+// Each cascade level is `sequence { NEXT:lhs=@, repeat <TAIL>:tail[]=@ }`
+// rather than the older `choice { CHAIN, NEXT }`. The flatter shape
+// avoids the catastrophic-backtracking blow-up the Choice pattern hit
+// when an inner EXPR couldn't match (e.g. inside empty `()`): the
+// Choice retries NEXT directly after CHAIN's NEXT failed, so every
+// level doubled work on the failure path (10 levels → 2^10 = 1024×).
+// The flat shape calls NEXT exactly once per level; the `repeat`
+// (zero-or-more) absorbs operator runs but never re-invokes NEXT
+// when there are none. `#opchain` compaction unwraps a no-tail
+// wrapper back to its lhs, so the output AST shape is unchanged.
+LOR_EXPR: sequence dict {
   <LAND_EXPR>:lhs=@,
-  repeat+ <LOR_TAIL>:tail[]=@
+  repeat <LOR_TAIL>:tail[]=@
 }
 LOR_TAIL:  sequence dict { "||":op="||", <LAND_EXPR>:rhs=@ }
 
-LAND_EXPR:  choice { <LAND_CHAIN>, <BOR_EXPR> }
-LAND_CHAIN: sequence dict {
+LAND_EXPR: sequence dict {
   <BOR_EXPR>:lhs=@,
-  repeat+ <LAND_TAIL>:tail[]=@
+  repeat <LAND_TAIL>:tail[]=@
 }
 LAND_TAIL:  sequence dict { "&&":op="&&", <BOR_EXPR>:rhs=@ }
 
-BOR_EXPR:  choice { <BOR_CHAIN>, <BXOR_EXPR> }
-BOR_CHAIN: sequence dict {
+BOR_EXPR: sequence dict {
   <BXOR_EXPR>:lhs=@,
-  repeat+ <BOR_TAIL>:tail[]=@
+  repeat <BOR_TAIL>:tail[]=@
 }
 BOR_TAIL:  sequence dict { "|":op="|", <BXOR_EXPR>:rhs=@ }
 
-BXOR_EXPR:  choice { <BXOR_CHAIN>, <BAND_EXPR> }
-BXOR_CHAIN: sequence dict {
+BXOR_EXPR: sequence dict {
   <BAND_EXPR>:lhs=@,
-  repeat+ <BXOR_TAIL>:tail[]=@
+  repeat <BXOR_TAIL>:tail[]=@
 }
 BXOR_TAIL:  sequence dict { <BXOR_OP>:op=@, <BAND_EXPR>:rhs=@ }
 BXOR_OP:    choice { "^~":@, "~^":@, "^":@ }
 
-BAND_EXPR:  choice { <BAND_CHAIN>, <EQUALITY_EXPR> }
-BAND_CHAIN: sequence dict {
+BAND_EXPR: sequence dict {
   <EQUALITY_EXPR>:lhs=@,
-  repeat+ <BAND_TAIL>:tail[]=@
+  repeat <BAND_TAIL>:tail[]=@
 }
 BAND_TAIL:  sequence dict { "&":op="&", <EQUALITY_EXPR>:rhs=@ }
 
-EQUALITY_EXPR:  choice { <EQUALITY_CHAIN>, <RELATIONAL_EXPR> }
-EQUALITY_CHAIN: sequence dict {
+EQUALITY_EXPR: sequence dict {
   <RELATIONAL_EXPR>:lhs=@,
-  repeat+ <EQUALITY_TAIL>:tail[]=@
+  repeat <EQUALITY_TAIL>:tail[]=@
 }
 EQUALITY_TAIL:  sequence dict { <EQUALITY_OP>:op=@, <RELATIONAL_EXPR>:rhs=@ }
 
@@ -1861,10 +1876,9 @@ EQUALITY_OP: choice {
   "===":@, "!==":@, "==?":@, "!=?":@, "==":@, "!=":@
 }
 
-RELATIONAL_EXPR:  choice { <RELATIONAL_CHAIN>, <SHIFT_EXPR> }
-RELATIONAL_CHAIN: sequence dict {
+RELATIONAL_EXPR: sequence dict {
   <SHIFT_EXPR>:lhs=@,
-  repeat+ <RELATIONAL_OR_INSIDE_TAIL>:tail[]=@
+  repeat <RELATIONAL_OR_INSIDE_TAIL>:tail[]=@
 }
 
 RELATIONAL_OR_INSIDE_TAIL: choice {
@@ -1886,10 +1900,9 @@ RELATIONAL_OP: choice {
   "<=":@, ">=":@, "<":@, ">":@
 }
 
-SHIFT_EXPR:  choice { <SHIFT_CHAIN>, <ADD_EXPR> }
-SHIFT_CHAIN: sequence dict {
+SHIFT_EXPR: sequence dict {
   <ADD_EXPR>:lhs=@,
-  repeat+ <SHIFT_TAIL>:tail[]=@
+  repeat <SHIFT_TAIL>:tail[]=@
 }
 SHIFT_TAIL:  sequence dict { <SHIFT_OP>:op=@, <ADD_EXPR>:rhs=@ }
 
@@ -1898,18 +1911,16 @@ SHIFT_OP: choice {
   "<<<":@, ">>>":@, "<<":@, ">>":@
 }
 
-ADD_EXPR:  choice { <ADD_CHAIN>, <MUL_EXPR> }
-ADD_CHAIN: sequence dict {
+ADD_EXPR: sequence dict {
   <MUL_EXPR>:lhs=@,
-  repeat+ <ADD_TAIL>:tail[]=@
+  repeat <ADD_TAIL>:tail[]=@
 }
 ADD_TAIL:  sequence dict { <ADD_OP>:op=@, <MUL_EXPR>:rhs=@ }
 ADD_OP:    choice { "+":@, "-":@ }
 
-MUL_EXPR:  choice { <MUL_CHAIN>, <POWER_EXPR> }
-MUL_CHAIN: sequence dict {
+MUL_EXPR: sequence dict {
   <POWER_EXPR>:lhs=@,
-  repeat+ <MUL_TAIL>:tail[]=@
+  repeat <MUL_TAIL>:tail[]=@
 }
 MUL_TAIL:  sequence dict { <MUL_OP>:op=@, <POWER_EXPR>:rhs=@ }
 MUL_OP:    choice { "*":@, "/":@, "%":@ }
@@ -2173,15 +2184,26 @@ STREAM_DIR: choice { "<<":@, ">>":@ }
 // INNER keeps embedded `"...(...)..."` literals atomic so a `)` inside
 // a string can't close the scope.
 // Captured as a scope so the body re-parses through EXPR as its own
-// sub-tree — the inner `#opchain` runs at its own frame exit, instead
-// of being threaded through the surrounding chain's compaction.
-// Mirrors PP_EXPR's PAREN_EXPR pattern. Self-Ref INNER lets nested
-// parens be transparent (`(a (b) c)` → body is `a (b) c`); `std.string`
-// INNER keeps embedded `"...(...)..."` literals atomic so a `)` inside
-// a string can't close the scope.
+// sub-tree. INNER `<PAREN_BALANCED>` recursively swallows nested
+// `(…)` runs as atomic chunks so paren depth balances correctly
+// even when the inner content (e.g. an empty `()` call-arg list)
+// isn't a complete EXPR; `std.string` keeps embedded
+// `"…(…)…"` literals atomic so a `)` inside a string can't close
+// the scope.
 PAREN_EXPR: sequence dict {
   "(":type="paren",
-  scope { <PAREN_EXPR>, std.string }:value=@:#subparse="EXPR",
+  scope { <PAREN_BALANCED>, std.string }:value=@:#subparse="EXPR",
+  ")"
+}
+
+// Recursive balanced-paren atomic capture for the PAREN_EXPR scope's
+// INNER set. Just `(…)` with the same INNER recursion — no subparse.
+// Without this rule the INNER would be PAREN_EXPR itself, which
+// triggers a subparse on the inner body; an empty body (`()` of a
+// function call) fails EXPR and breaks the outer balance count.
+PAREN_BALANCED: sequence {
+  "(",
+  scope { <PAREN_BALANCED>, std.string },
   ")"
 }
 

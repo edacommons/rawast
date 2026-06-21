@@ -1813,6 +1813,28 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     return {};
 }
 
+// Does the start rule's Sequence body bind a child to the `lhs`
+// dict-key? Name markers are stored as Value-kind nodes with
+// `is_name = true` and the string "lhs" as their constant. Used to
+// decide whether `wrap_atom_as_chain` should fire: only cascade
+// rules need the wrap (their body schema expects an `lhs` field);
+// non-cascade Sequences (e.g. SOURCE_TEXT binding `descriptions`)
+// already have the right shape, and wrapping turns a valid input
+// into `{lhs:<orig>, tail:[]}` which fails fixed-schema dispatch.
+bool start_binds_lhs_helper(const Grammar& g, NodeId rule_id) {
+    if (rule_id.value() >= g.node_count()) return false;
+    const Node& n = g.node(rule_id);
+    if (n.kind != NodeKind::Sequence) return false;
+    for (NodeId c : n.children) {
+        if (c.value() >= g.node_count()) continue;
+        const Node& cn = g.node(c);
+        if (cn.kind != NodeKind::Value || !cn.is_name) continue;
+        auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
+        if (sv && sv->data() == "lhs") return true;
+    }
+    return false;
+}
+
 // Inverse of `compact_opchain` (defined in grammar.cpp). When the
 // save engine is about to dispatch a value through an opchain-marked
 // rule, the input AST is in `{op, args[]}` form; the rule's grammar
@@ -2029,16 +2051,17 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
         auto op_compat = build_op_compat_map(*this);
         value = expand_opchain(value, op_compat);
         // Wrap atoms only when the start chain resolves to a
-        // Sequence-Dict (plain always-wrap pattern, like
-        // test_opchain's flat ADD grammar). For the
-        // `choice { CHAIN, NEXT }` ladder pattern used by sv_pp_expr,
-        // atoms naturally fall through the catch-all NEXT and the
-        // wrap would break dispatch (the dict would have
-        // `lhs`+`tail:[]` instead of the leaf's `type` field, so
-        // PRIMARY's type-discriminated leaves wouldn't match).
+        // Sequence-Dict whose schema actually expects an `lhs`-binding
+        // item — i.e. the cascade-atom shape used by test_opchain's
+        // flat ADD grammar. Some grammars (SV) mark `#opchain` on a
+        // top-level wrapper that itself binds different fields (e.g.
+        // `descriptions`); wrapping an already-shaped dict there
+        // turns a valid input into `{lhs:{descriptions:…}, tail:[]}`
+        // and the fixed-schema check on the start rule then fails.
         NodeId resolved_start = resolve_ref(start);
         if (resolved_start.value() < node_count()
-            && node(resolved_start).kind == NodeKind::Sequence) {
+            && node(resolved_start).kind == NodeKind::Sequence
+            && start_binds_lhs_helper(*this, resolved_start)) {
             value = wrap_atom_as_chain(value);
         }
     }
