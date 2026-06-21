@@ -2342,7 +2342,7 @@ STRING_PRIMARY: sequence dict {
 // Function call: `name(arg, ...)`. Distinguished from a plain
 // hierarchical reference by the presence of `(` immediately after.
 FUNC_CALL: sequence dict {
-  sv_identifier:name=@:type="func_call",
+  sv_qualified_type:name=@:type="func_call",
   "(",
   repeat <TASK_ARG>:args[]=@ separator ",",
   ")"
