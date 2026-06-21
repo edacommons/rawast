@@ -1319,10 +1319,27 @@ TASK_PORT_LIST: sequence dict {
 // "expected literal ','" error in the cluster analysis.
 //
 // Reference: Verilator verilog.y `tf_port_item` / `taskRef` rules.
+// BUILTIN is tried first so a port like `int unsigned num_cycles`
+// commits to TYPE_SPEC=`int` + SIGNING=`unsigned` + name=`num_cycles`.
+// Otherwise USERTYPED's `sv_qualified_type:type_spec, sv_identifier:name`
+// would greedily eat `int` as the type and `unsigned` as the name,
+// leaving `num_cycles` as stray content. Made TYPE_SPEC required
+// here so the rule fails on user types and USERTYPED catches them.
 TASK_PORT: choice {
-  <TASK_PORT_USERTYPED>,
-  <TASK_PORT_BUILTIN>
+  <TASK_PORT_BUILTIN>,
+  <TASK_PORT_USERTYPED>
 }
+
+TASK_PORT_BUILTIN: sequence dict {
+  ?<PORT_DIRECTION>:direction=@,
+  <TYPE_SPEC>:type_spec=@,
+  ?<SIGNING_KW>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<TASK_PORT_INIT>:init=@
+}
+
+TASK_PORT_INIT: sequence dict { "=", <EXPR>:value=@ }
 
 TASK_PORT_USERTYPED: sequence dict {
   ?<PORT_DIRECTION>:direction=@,
@@ -1332,16 +1349,6 @@ TASK_PORT_USERTYPED: sequence dict {
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
-}
-
-TASK_PORT_INIT: sequence dict { "=", <EXPR>:value=@ }
-
-TASK_PORT_BUILTIN: sequence dict {
-  ?<PORT_DIRECTION>:direction=@,
-  ?<TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@
 }
 
 // Inside function/task bodies — same as BLOCK_ITEM but adds
@@ -1388,6 +1395,7 @@ STATEMENT: choice {
   <LOCAL_VAR_DECL>,
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
+  <PARAM_STATIC_CALL_STMT>,
   <SYSTEM_TASK_CALL>,
   <VOID_CAST_STMT>,
   <METHOD_CALL_STMT>,
@@ -2005,6 +2013,23 @@ PARAMETERIZED_TYPE_REF: sequence dict {
   sv_identifier:name=@:type="param_type_ref",
   "#", "(",
   repeat+ <PARAM_BINDING>:params[]=@ separator ",",
+  ")",
+  ?<PARAM_STATIC_CALL_TAIL>:static_call=@
+}
+
+// `::method(args)` chained after a `Class#(params)` parameterised
+// type reference — UVM `uvm_config_db#(virtual ifc)::set(...)` idiom
+// (IEEE 1800-2017 §23.7 static class method call via `::`). The
+// optional tail lets PARAMETERIZED_TYPE_REF absorb the call without
+// branching the alt list. Inner param-binding values may carry the
+// `virtual` keyword on a type binding — captured by `sv_balanced_arg`
+// at the parameter level via PARAM_BINDING's EXPR slot (which
+// already includes the wildcard fallback for non-EXPR forms).
+PARAM_STATIC_CALL_TAIL: sequence dict {
+  "::",
+  sv_identifier:method=@,
+  "(",
+  repeat <TASK_ARG>:args[]=@ separator ",",
   ")"
 }
 
@@ -3380,6 +3405,25 @@ METHOD_CALL_STMT: sequence dict {
   repeat <EXPR>:args[]=@ separator ",",
   ")",
   ?<WITH_CLAUSE>:with=@,
+  ";"
+}
+
+// `Class#(params)::static_method(args);` — UVM idiom
+// `uvm_config_db#(virtual ifc)::set(...)`. IEEE 1800-2017 §23.7
+// permits a static method call qualified by a parameterised class
+// expression. Tried as a statement-level alt; the matching PRIMARY
+// form (when the call's return value is consumed) is handled by
+// PARAMETERIZED_TYPE_REF's optional `?<PARAM_STATIC_CALL_TAIL>`.
+PARAM_STATIC_CALL_STMT: sequence dict {
+  sv_identifier:class=@:type="param_static_call_stmt",
+  "#", "(",
+  repeat sv_balanced_arg:type_params[]=@ separator ",",
+  ")",
+  "::",
+  sv_identifier:method=@,
+  "(",
+  repeat <TASK_ARG>:args[]=@ separator ",",
+  ")",
   ";"
 }
 
