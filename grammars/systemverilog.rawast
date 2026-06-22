@@ -901,6 +901,7 @@ STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 // (`type=endfunction, name=<name>;`). The guard lets the surrounding
 // `endfunction` keyword claim the token instead.
 USER_TYPED_DECL: sequence dict {
+  ?<LIFETIME>:lifetime=@,
   !<SV_RESERVED>,
   ?'const':is_const=true,
   ?'var':is_var=true,
@@ -1568,10 +1569,12 @@ BLOCK_STMT: sequence dict {
 BLOCK_LABEL: sequence { ":", sv_identifier:label=@ }
 
 BLOCK_ITEM: choice {
+  <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
   <REG_DECL>,
   <INTEGER_DECL>,
+  <USER_TYPED_DECL>,
   <STATEMENT>
 }
 
@@ -2248,7 +2251,7 @@ METHOD_CALL: sequence dict {
   sv_identifier:name=@:type="method_call",
   repeat+ <HIER_PART>:path[]=@,
   "(",
-  repeat <EXPR>:args[]=@ separator ",",
+  repeat <TASK_ARG>:args[]=@ separator ",",
   ")",
   ?<WITH_CLAUSE>:with=@
 }

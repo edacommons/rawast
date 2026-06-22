@@ -657,7 +657,35 @@ std::string render_segment(const ValuePtr& seg);   // forward decl
 std::shared_ptr<ArrayValue> substitute_segments(
         const ArrayValue& body_segs,
         const std::vector<MacroParam>& params,
-        const std::vector<ValuePtr>& args) {
+        const std::vector<ValuePtr>& args_in) {
+    // Trim leading/trailing whitespace from each call-site arg before
+    // substituting. The MACRO_ARGS grammar scope captures bytes
+    // verbatim, which preserves the call site's line breaks and
+    // indentation — and when an arg lands at a `\`\`` token-paste
+    // boundary the preserved whitespace prevents fusion.
+    //
+    // Example: `\`DV_CHECK_EQ(status, UVM_IS_OK,\n    error, ...)`
+    // The SEV_ arg captured literally is "\n    error". Pasting
+    // `dv_` + "\n    error" yields "`dv_\n    error" — a broken
+    // identifier with a newline mid-name. Standard SV preprocessor
+    // convention (LRM §22.5.1) treats macro args as token sequences,
+    // not whitespace-preserving text, so trim here.
+    auto trim_ws = [](const std::string& s) -> std::string {
+        std::size_t b = 0, e = s.size();
+        while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+        while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+        return s.substr(b, e - b);
+    };
+    std::vector<ValuePtr> args;
+    args.reserve(args_in.size());
+    for (const auto& a : args_in) {
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
+            args.push_back(make_string(trim_ws(sv->data())));
+        } else {
+            args.push_back(a);
+        }
+    }
+
     std::unordered_map<std::string, std::size_t> param_idx;
     bool has_params = (params.size() == args.size()) && !params.empty();
     if (has_params) {
