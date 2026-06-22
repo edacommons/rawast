@@ -1959,7 +1959,7 @@ DEF_VIAS_BLOCK: sequence dict {
   "END" space, "VIAS" newline
 }
 
-DEF_VIAS_LIST: sequence array { repeat <DEF_VIA_ENTRY> }
+DEF_VIAS_LIST: sequence array { repeat <DEF_VIA_ENTRY> indent tab }
 
 // One VIA entry: `- viaName + clause + clause … ;`. Per-alt
 // `:clauses[]=@` list-append binding routes every clause type
@@ -2082,7 +2082,7 @@ DEF_NDRS_BLOCK: sequence dict {
   "END" space, "NONDEFAULTRULES" newline
 }
 
-DEF_NDRS_LIST: sequence array { repeat <DEF_NDR_ENTRY> }
+DEF_NDRS_LIST: sequence array { repeat <DEF_NDR_ENTRY> indent tab }
 
 DEF_NDR_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -2158,7 +2158,7 @@ DEF_REGIONS_BLOCK: sequence dict {
   "END" space, "REGIONS" newline
 }
 
-DEF_REGIONS_LIST: sequence array { repeat <DEF_REGION_ENTRY> }
+DEF_REGIONS_LIST: sequence array { repeat <DEF_REGION_ENTRY> indent tab }
 
 DEF_REGION_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -2220,7 +2220,7 @@ DEF_COMPONENTS_BLOCK: sequence dict {
   "END" space, "COMPONENTS" newline
 }
 
-DEF_COMPONENTS_LIST: sequence array { repeat <DEF_COMPONENT_ENTRY> }
+DEF_COMPONENTS_LIST: sequence array { repeat <DEF_COMPONENT_ENTRY> indent tab }
 
 // `- compName modelName [+ clause]... ;` — entry starts with the
 // instance + master name pair, then `+`-prefixed clauses for
@@ -2364,7 +2364,7 @@ DEF_PINS_BLOCK: sequence dict {
   "END" space, "PINS" newline
 }
 
-DEF_PINS_LIST: sequence array { repeat <DEF_PIN_ENTRY> }
+DEF_PINS_LIST: sequence array { repeat <DEF_PIN_ENTRY> indent tab }
 
 // `- pinName [+ clause]... ;` — the pin name is bare, then
 // `+`-prefixed clauses. NET is the only spec-required clause
@@ -2600,7 +2600,7 @@ DEF_PINPROPERTIES_BLOCK: sequence dict {
   "END" space, "PINPROPERTIES" newline
 }
 
-DEF_PINPROPERTIES_LIST: sequence array { repeat <DEF_PINPROPERTY_ENTRY> }
+DEF_PINPROPERTIES_LIST: sequence array { repeat <DEF_PINPROPERTY_ENTRY> indent tab }
 
 // Two entry forms: `COMPONENT compName pinName` or `PIN pinName`.
 // Distinct `type` discriminator per form for save dispatch.
@@ -2658,7 +2658,7 @@ DEF_BLOCKAGES_BLOCK: sequence dict {
   "END" space, "BLOCKAGES" newline
 }
 
-DEF_BLOCKAGES_LIST: sequence array { repeat <DEF_BLOCKAGE_ENTRY> }
+DEF_BLOCKAGES_LIST: sequence array { repeat <DEF_BLOCKAGE_ENTRY> indent tab }
 
 DEF_BLOCKAGE_ENTRY: choice {
   <DEF_BLOCKAGE_LAYER_ENTRY>,
@@ -2769,7 +2769,7 @@ DEF_SLOTS_BLOCK: sequence dict {
   "END" space, "SLOTS" newline
 }
 
-DEF_SLOTS_LIST: sequence array { repeat <DEF_SLOT_ENTRY> }
+DEF_SLOTS_LIST: sequence array { repeat <DEF_SLOT_ENTRY> indent tab }
 
 DEF_SLOT_ENTRY: sequence dict {
   "-" space, "LAYER":type="Slot" space, identifier:layer=@ space,
@@ -2809,7 +2809,7 @@ DEF_FILLS_BLOCK: sequence dict {
   "END" space, "FILLS" newline
 }
 
-DEF_FILLS_LIST: sequence array { repeat <DEF_FILL_ENTRY> }
+DEF_FILLS_LIST: sequence array { repeat <DEF_FILL_ENTRY> indent tab }
 
 DEF_FILL_ENTRY: choice {
   <DEF_FILL_LAYER_ENTRY>,
@@ -3059,7 +3059,7 @@ DEF_SPECIALNETS_BLOCK: sequence dict {
   "END" space, "SPECIALNETS" newline
 }
 
-DEF_SPECIALNETS_LIST: sequence array { repeat <DEF_SPECIALNET_ENTRY> }
+DEF_SPECIALNETS_LIST: sequence array { repeat <DEF_SPECIALNET_ENTRY> indent tab }
 
 // `- netName connection+ clause+ ;` — entry shape. The
 // connection list is one or more `( ... )` pairs, captured as
@@ -3266,7 +3266,7 @@ DEF_NETS_BLOCK: sequence dict {
   "END" space, "NETS" newline
 }
 
-DEF_NETS_LIST: sequence array { repeat <DEF_NET_ENTRY> }
+DEF_NETS_LIST: sequence array { repeat <DEF_NET_ENTRY> indent tab }
 
 DEF_NET_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -3395,7 +3395,7 @@ DEF_SCANCHAINS_BLOCK: sequence dict {
   "END" space, "SCANCHAINS" newline
 }
 
-DEF_SCANCHAINS_LIST: sequence array { repeat <DEF_SCANCHAIN_ENTRY> }
+DEF_SCANCHAINS_LIST: sequence array { repeat <DEF_SCANCHAIN_ENTRY> indent tab }
 
 DEF_SCANCHAIN_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -3494,7 +3494,7 @@ DEF_GROUPS_BLOCK: sequence dict {
   "END" space, "GROUPS" newline
 }
 
-DEF_GROUPS_LIST: sequence array { repeat <DEF_GROUP_ENTRY> }
+DEF_GROUPS_LIST: sequence array { repeat <DEF_GROUP_ENTRY> indent tab }
 
 DEF_GROUP_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -3555,7 +3555,7 @@ DEF_STYLES_BLOCK: sequence dict {
   <DEF_STYLES_LIST>:styles=@,
   "END" space, "STYLES" newline
 }
-DEF_STYLES_LIST: sequence array { repeat <DEF_STYLE_ENTRY> }
+DEF_STYLES_LIST: sequence array { repeat <DEF_STYLE_ENTRY> indent tab }
 DEF_STYLE_ENTRY: sequence dict {
   "-" space, "STYLE":type="Style" space,
   int:style_num=@ space,
