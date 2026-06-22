@@ -284,11 +284,11 @@ PARAM_DECL_UNTYPED: sequence {
 // match, collapsing what previously needed two parallel grammar
 // rules.
 PARAM_DECL_USERTYPE: sequence dict {
-  'parameter':@:type="param_usertype",
-  sv_qualified_type:type_spec=@,
-  ?<PARAM_OVERRIDE>:type_params=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  'parameter':@:type="param_usertype" space,
+  sv_qualified_type:type_spec=@ space,
+  ?<PARAM_OVERRIDE>:type_params=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
@@ -902,15 +902,15 @@ STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
 // (`type=endfunction, name=<name>;`). The guard lets the surrounding
 // `endfunction` keyword claim the token instead.
 USER_TYPED_DECL: sequence dict {
-  ?<LIFETIME>:lifetime=@,
+  ?<LIFETIME>:lifetime=@ space,
   !<SV_RESERVED>,
-  ?'const':is_const=true,
-  ?'var':is_var=true,
-  sv_qualified_type:type_spec=@:type="user_typed_decl",
-  ?<PARAM_OVERRIDE>:params=@,
-  ?<NET_SIGNING>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  repeat+ <NET_NAME>:names[]=@ separator ",",
+  ?'const':is_const=true space,
+  ?'var':is_var=true space,
+  sv_qualified_type:type_spec=@:type="user_typed_decl" space,
+  ?<PARAM_OVERRIDE>:params=@ space,
+  ?<NET_SIGNING>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ <NET_NAME>:names[]=@ separator "," space,
   ";"
 }
 
@@ -1120,7 +1120,14 @@ EVENT_IFF: sequence dict { 'iff':@, <EXPR>:cond=@ }
 
 EDGE: choice { 'posedge':@, 'negedge':@, 'edge':@ }
 
-EVENT_SEP: choice { ",":@, 'or':@ }
+EVENT_SEP: choice {
+  ",":@ space,
+  <EVENT_SEP_OR>
+}
+
+// `or` event separator wants a space on BOTH sides (`clk_i or rst_n`);
+// the leading space comes from the `"" space` empty-key prefix.
+EVENT_SEP_OR: sequence { "" space, 'or':@ space }
 
 // ─── Module instantiation ───────────────────────────────────────────────
 
@@ -1232,7 +1239,7 @@ GEN_IF: sequence dict {
 
 // Non-container sub-rule; its `else` binding flows up to the caller's
 // dict (the GEN_IF rule).
-GEN_ELSE: sequence { 'else', <GEN_BLOCK>:else=@ }
+GEN_ELSE: sequence { 'else' space, <GEN_BLOCK>:else=@ }
 
 GEN_CASE: sequence dict {
   'case':@:type="gen_case",
