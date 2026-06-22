@@ -743,27 +743,22 @@ ValuePtr compact_opchain(const ValuePtr& v) {
         ? as_array(tail_it->second) : nullptr;
     bool has_tail = tail_arr && !tail_arr->data().empty();
 
-    // Count non-{lhs,tail} fields — those need to carry through.
+    // Any non-`lhs`/`tail` field signals a non-opchain shape (e.g.
+    // ASSIGNMENT_PAIR's `{lhs, rhs}`) — leave it alone. Unwrapping
+    // those would silently merge `lhs`'s inner fields with the
+    // sibling and lose structure.
     bool has_other = false;
     for (const auto& [k, _] : recursed->data()) {
         if (k != "lhs" && k != "tail") { has_other = true; break; }
     }
+    if (has_other) {
+        return recursed;
+    }
 
     if (!has_tail) {
-        // No chain; unwrap to lhs (or merge other fields onto lhs if
-        // there were any — rare but supported).
-        if (!has_other) return lhs;
-        // Other fields exist: build a fresh dict combining lhs's fields
-        // (if lhs is itself a dict) with the wrapper's extras.
-        auto out = std::make_shared<DictValue>();
-        if (auto ld = as_dict(lhs)) {
-            for (const auto& [k, v2] : ld->data()) out->data().emplace(k, v2);
-        }
-        for (const auto& [k, v2] : recursed->data()) {
-            if (k == "lhs" || k == "tail") continue;
-            out->data().emplace(k, v2);
-        }
-        return out;
+        // Empty / absent `tail` → no operators ran, just pass the lhs
+        // through unchanged.
+        return lhs;
     }
 
     // Fold the tail left-to-right.
@@ -2283,10 +2278,26 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (require_full_consume) {
             run_ignore(sr, current_ignore());
             if (!sr.eof()) {
-                return tl::unexpected(ParseError{
-                    sr.position(),
-                    "unexpected content after start rule completed"
-                });
+                // Surface the deepest position the engine reached
+                // INSIDE failed sub-parses if it's beyond where the
+                // start rule stopped. This catches the common shape
+                // where a repeat-zero-or-more wraps a Choice that
+                // genuinely tried (and failed deep) to parse a
+                // construct — the top-level "stopped here" position
+                // is misleading; the real gap is further in.
+                std::string msg = "unexpected content after start "
+                                  "rule completed";
+                if (max_progress.position.bytes > sr.position().bytes) {
+                    msg += " — deepest failed sub-parse reached byte "
+                         + std::to_string(max_progress.position.bytes)
+                         + " (line "
+                         + std::to_string(max_progress.position.line)
+                         + ", column "
+                         + std::to_string(max_progress.position.column)
+                         + "): "
+                         + max_progress.message;
+                }
+                return tl::unexpected(ParseError{sr.position(), std::move(msg)});
             }
         }
         // `#opchain` post-process: when the start rule body (or any

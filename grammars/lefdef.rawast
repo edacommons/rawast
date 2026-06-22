@@ -189,7 +189,7 @@ SPACING_BLOCK: sequence dict {
   "END" space, 'SPACING' newline
 }
 
-SAMENET_RULES: sequence array { repeat <SAMENET_RULE> }
+SAMENET_RULES: sequence array { repeat <SAMENET_RULE> indent tab }
 
 SAMENET_RULE: sequence dict {
   "SAMENET" space,
@@ -216,7 +216,7 @@ PROPERTYDEFINITIONS_BLOCK: sequence dict {
   "END" space, "PROPERTYDEFINITIONS" newline
 }
 
-PROPDEFS: sequence array { repeat <PROPDEF> }
+PROPDEFS: sequence array { repeat <PROPDEF> indent tab }
 
 // Discriminate the object kind via a Choice so that "END" — also a
 // valid lefdef identifier — fails the PROPDEF match immediately
@@ -398,7 +398,7 @@ UNITS_COMPACT_CMD: sequence dict {
 
 UNITS_BLOCK: sequence dict {
   "UNITS":type="Units" newline,
-  repeat <UNITS_SUB>,
+  repeat <UNITS_SUB> indent tab,
   "END" space, "UNITS" newline
 }
 
@@ -453,7 +453,7 @@ FREQUENCY_CMD:   sequence { "FREQUENCY"   space, "MEGAHERTZ"   space, <NUMBER>:f
 SITE_BLOCK: sequence dict {
   "SITE":type="Site" space,
   identifier:name=@ newline,
-  repeat <SITE_PROPERTY>,
+  repeat <SITE_PROPERTY> indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -559,16 +559,16 @@ SITE_ORIENT: choice {
 MACRO_BLOCK: sequence dict {
   "MACRO":type="Macro" space,
   identifier:name=@ newline,
-  repeat <MACRO_PROPERTY>,
+  repeat <MACRO_PROPERTY> indent tab,
   <MACRO_PINS>:pins=@,
   <MACRO_OBSES>:obses=@,
-  ?<MACRO_DENSITY>:density=@,
+  ?<MACRO_DENSITY>:density=@ indent tab,
   // Trailing PROPERTY clauses (after PIN/OBS/DENSITY) per LEF/DEF
   // 5.8 §"Macro". LEF58 form tried first so it routes to `lef58`
   // alongside any LEF58 clauses caught by the leading inline
   // `repeat <MACRO_PROPERTY>`; non-LEF58 PROPERTY clauses fall
   // through to the generic KV form and land in `properties`.
-  repeat <MACRO_TRAILING_PROPERTY>,
+  repeat <MACRO_TRAILING_PROPERTY> indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -582,7 +582,7 @@ MACRO_TRAILING_PROPERTY: choice {
 // emit multi-OBS in fill cells and IO pads where different metal
 // layers carry different obstruction shapes that the designer
 // wants kept structurally separate.
-MACRO_OBSES: sequence array { repeat <MACRO_OBS> }
+MACRO_OBSES: sequence array { repeat <MACRO_OBS> indent tab }
 
 // MACRO sub-statements in any order — same pattern as HDR_CMD.
 // Pending NSEQ (M2), this is the pragmatic way to accept real LEFs
@@ -750,7 +750,7 @@ MACRO_SITE_REF: sequence dict {
 
 // === PIN inside MACRO ====================================================
 
-MACRO_PINS: sequence array { repeat <PIN_BLOCK> }
+MACRO_PINS: sequence array { repeat <PIN_BLOCK> indent tab }
 
 // PIN block — per LEF/DEF 5.8 spec carries DIRECTION / USE plus
 // zero-or-more ANTENNA* clauses (model-specific antenna properties
@@ -759,9 +759,9 @@ MACRO_PINS: sequence array { repeat <PIN_BLOCK> }
 PIN_BLOCK: sequence dict {
   "PIN":type="Pin" space,
   identifier:name=@ newline,
-  repeat <PIN_PROPERTY>,
+  repeat <PIN_PROPERTY> indent tab,
   <PIN_PORTS>:ports=@,
-  "END" space, identifier:end_name=@ newline
+  "END" tab space, identifier:end_name=@ newline
 }
 
 // LEF58_-prefixed PROPERTY clauses inside a PIN get the typed
@@ -913,7 +913,7 @@ PIN_ANTENNA_LAYER: sequence {
   "LAYER" space, identifier:layer=@ space
 }
 
-PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
+PIN_PORTS: sequence array { repeat <PORT_BLOCK> indent tab }
 
 // PORT is a sequence of layer groups: each group is a LAYER statement
 // followed by one-or-more shapes on that layer.
@@ -922,16 +922,16 @@ PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
 // LEF/DEF 5.8 spec: `PORT [CLASS {NONE | CORE | BUMP} ;] {LAYER ...} ... END`.
 PORT_BLOCK: sequence dict {
   "PORT":type="Port" newline,
-  ?<PORT_CLASS>,
+  ?<PORT_CLASS> indent tab,
   <LAYER_GROUPS>:layer_groups=@,
-  "END" newline
+  "END" tab newline
 }
 
 PORT_CLASS: sequence {
   "CLASS" space, identifier:port_class=@ space, ";" newline
 }
 
-LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> }
+LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> indent tab }
 
 // LAYER declaration inside a PORT or OBS block. Can carry optional
 // EXCEPTPGNET / SPACING / DESIGNRULEWIDTH / MASK modifiers per LEF/DEF
@@ -941,7 +941,7 @@ LAYER_GROUP: sequence dict {
   "LAYER" space, identifier:layer=@ space,
   repeat <LAYER_GROUP_MOD>,
   ";" newline,
-  ?<LAYER_WIDTH_CMD>,
+  ?<LAYER_WIDTH_CMD> indent tab,
   <SHAPES>:shapes=@
 }
 
@@ -965,7 +965,7 @@ LAYER_WIDTH_CMD: sequence {
   'WIDTH' space, <NUMBER>:width=@ space, ";" newline
 }
 
-SHAPES: sequence array { repeat <SHAPE> }
+SHAPES: sequence array { repeat <SHAPE> indent tab }
 SHAPE: choice {
   <RECT_SHAPE>,
   <POLYGON_SHAPE>,
@@ -1058,7 +1058,7 @@ VIA_PLACEMENT: sequence dict {
 MACRO_OBS: sequence dict {
   "OBS":type="Obs" newline,
   <LAYER_GROUPS>:layer_groups=@,
-  "END" newline
+  "END" tab newline
 }
 
 // === LAYER block (tech LEF) ==============================================
@@ -1092,7 +1092,7 @@ MACRO_OBS: sequence dict {
 LAYER_BLOCK: sequence dict {
   "LAYER":type="Layer" space,
   identifier:name=@ newline,
-  repeat <LAYER_BODY_ITEM>,
+  repeat <LAYER_BODY_ITEM> indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -1355,15 +1355,15 @@ VIA_GEOMETRY_BODY: sequence {
 }
 
 VIA_VIARULE_BODY: sequence {
-  "VIARULE" space, identifier:via_rule=@ space, ";" newline,
-  <VIA_CUTSIZE>:cut_size=@,
-  <VIA_LAYERS>:layers=@,
-  <VIA_CUTSPACING>:cut_spacing=@,
-  <VIA_ENCLOSURE>:enclosure=@,
-  ?<VIA_ROWCOL>:rowcol=@,
-  ?<ORIGIN_CMD>:origin=@,
-  ?<VIA_OFFSET>:offset=@,
-  ?<VIA_PATTERN_CMD>
+  "VIARULE" indent tab space, identifier:via_rule=@ space, ";" newline,
+  <VIA_CUTSIZE>:cut_size=@ indent tab,
+  <VIA_LAYERS>:layers=@ indent tab,
+  <VIA_CUTSPACING>:cut_spacing=@ indent tab,
+  <VIA_ENCLOSURE>:enclosure=@ indent tab,
+  ?<VIA_ROWCOL>:rowcol=@ indent tab,
+  ?<ORIGIN_CMD>:origin=@ indent tab,
+  ?<VIA_OFFSET>:offset=@ indent tab,
+  ?<VIA_PATTERN_CMD> indent tab
 }
 
 // Each VIA-VIARULE sub-clause is its own dict-container; the body
@@ -1399,7 +1399,7 @@ VIA_OFFSET: sequence dict {
 // directly on the VIA dict (no `{pattern: {pattern: ...}}` redundancy).
 VIA_PATTERN_CMD: sequence { "PATTERN" space, identifier:pattern=@ space, ";" newline }
 
-VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> }
+VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> indent tab }
 
 // LEF keyword spec-uppercase ("VIA") but some real tools emit
 // mixed-case ("Via"). Accept both.
@@ -1452,7 +1452,7 @@ VIA_LAYER_GROUP: sequence dict {
   <VIA_SHAPES>:shapes=@
 }
 
-VIA_SHAPES: sequence array { repeat+ <VIA_SHAPE> }
+VIA_SHAPES: sequence array { repeat+ <VIA_SHAPE> indent tab }
 // VIA layer-group shapes reuse the same RECT_SHAPE / POLYGON_SHAPE
 // rules used by PORT/OBS layerGeometries. The optional MASK /
 // ITERATE / STEP_PATTERN modifiers don't fire on bare VIA shapes;
@@ -1486,7 +1486,7 @@ VIARULE_BLOCK: sequence dict {
   ?<VIARULE_GENERATE_KW>,
   ?<VIA_DEFAULT_KW>,
   <VIARULE_LAYER_SECTIONS>:layers=@,
-  repeat <VIARULE_VIA_REF>:vias[]=@,
+  repeat <VIARULE_VIA_REF>:vias[]=@ indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -1496,7 +1496,7 @@ VIARULE_VIA_REF: sequence dict {
   "VIA":type="Via" space, identifier:name=@ space, ";" newline
 }
 
-VIARULE_LAYER_SECTIONS: sequence array { repeat <VIARULE_LAYER_SECTION> }
+VIARULE_LAYER_SECTIONS: sequence array { repeat <VIARULE_LAYER_SECTION> indent tab }
 
 // LEF keyword spec-uppercase ("VIARULE") but some real tools emit
 // mixed-case ("ViaRULE"). Accept both.
@@ -1505,7 +1505,7 @@ VIARULE_KW: choice {
   "ViaRULE":@
 }
 
-VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }
+VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true newline }
 
 // VIARULE body: one or more LAYER sections, each grouping the LAYER
 // name with its specific sub-clauses (ENCLOSURE / RECT / SPACING /
@@ -1520,7 +1520,7 @@ VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }
 // they share the same LAYER + sub-clause shape.
 VIARULE_LAYER_SECTION: sequence dict {
   "LAYER" space, identifier:name=@ space, ";" newline,
-  repeat <VIARULE_LAYER_SUB>
+  repeat <VIARULE_LAYER_SUB> indent tab
 }
 
 VIARULE_LAYER_SUB: choice {
@@ -1589,7 +1589,7 @@ NONDEFAULTRULE_BLOCK: sequence dict {
   "END" space, identifier:end_name=@ newline
 }
 
-NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> }
+NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> indent tab }
 
 // Choice ordering: USEVIARULE before USEVIA (no prefix overlap
 // but kept consistent), VIARULE before VIA, MINCUTS before any
@@ -1959,7 +1959,7 @@ DEF_VIAS_BLOCK: sequence dict {
   "END" space, "VIAS" newline
 }
 
-DEF_VIAS_LIST: sequence array { repeat <DEF_VIA_ENTRY> }
+DEF_VIAS_LIST: sequence array { repeat <DEF_VIA_ENTRY> indent tab }
 
 // One VIA entry: `- viaName + clause + clause … ;`. Per-alt
 // `:clauses[]=@` list-append binding routes every clause type
@@ -2082,7 +2082,7 @@ DEF_NDRS_BLOCK: sequence dict {
   "END" space, "NONDEFAULTRULES" newline
 }
 
-DEF_NDRS_LIST: sequence array { repeat <DEF_NDR_ENTRY> }
+DEF_NDRS_LIST: sequence array { repeat <DEF_NDR_ENTRY> indent tab }
 
 DEF_NDR_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -2158,7 +2158,7 @@ DEF_REGIONS_BLOCK: sequence dict {
   "END" space, "REGIONS" newline
 }
 
-DEF_REGIONS_LIST: sequence array { repeat <DEF_REGION_ENTRY> }
+DEF_REGIONS_LIST: sequence array { repeat <DEF_REGION_ENTRY> indent tab }
 
 DEF_REGION_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -2220,7 +2220,7 @@ DEF_COMPONENTS_BLOCK: sequence dict {
   "END" space, "COMPONENTS" newline
 }
 
-DEF_COMPONENTS_LIST: sequence array { repeat <DEF_COMPONENT_ENTRY> }
+DEF_COMPONENTS_LIST: sequence array { repeat <DEF_COMPONENT_ENTRY> indent tab }
 
 // `- compName modelName [+ clause]... ;` — entry starts with the
 // instance + master name pair, then `+`-prefixed clauses for
@@ -2364,7 +2364,7 @@ DEF_PINS_BLOCK: sequence dict {
   "END" space, "PINS" newline
 }
 
-DEF_PINS_LIST: sequence array { repeat <DEF_PIN_ENTRY> }
+DEF_PINS_LIST: sequence array { repeat <DEF_PIN_ENTRY> indent tab }
 
 // `- pinName [+ clause]... ;` — the pin name is bare, then
 // `+`-prefixed clauses. NET is the only spec-required clause
@@ -2600,7 +2600,7 @@ DEF_PINPROPERTIES_BLOCK: sequence dict {
   "END" space, "PINPROPERTIES" newline
 }
 
-DEF_PINPROPERTIES_LIST: sequence array { repeat <DEF_PINPROPERTY_ENTRY> }
+DEF_PINPROPERTIES_LIST: sequence array { repeat <DEF_PINPROPERTY_ENTRY> indent tab }
 
 // Two entry forms: `COMPONENT compName pinName` or `PIN pinName`.
 // Distinct `type` discriminator per form for save dispatch.
@@ -2658,7 +2658,7 @@ DEF_BLOCKAGES_BLOCK: sequence dict {
   "END" space, "BLOCKAGES" newline
 }
 
-DEF_BLOCKAGES_LIST: sequence array { repeat <DEF_BLOCKAGE_ENTRY> }
+DEF_BLOCKAGES_LIST: sequence array { repeat <DEF_BLOCKAGE_ENTRY> indent tab }
 
 DEF_BLOCKAGE_ENTRY: choice {
   <DEF_BLOCKAGE_LAYER_ENTRY>,
@@ -2769,7 +2769,7 @@ DEF_SLOTS_BLOCK: sequence dict {
   "END" space, "SLOTS" newline
 }
 
-DEF_SLOTS_LIST: sequence array { repeat <DEF_SLOT_ENTRY> }
+DEF_SLOTS_LIST: sequence array { repeat <DEF_SLOT_ENTRY> indent tab }
 
 DEF_SLOT_ENTRY: sequence dict {
   "-" space, "LAYER":type="Slot" space, identifier:layer=@ space,
@@ -2809,7 +2809,7 @@ DEF_FILLS_BLOCK: sequence dict {
   "END" space, "FILLS" newline
 }
 
-DEF_FILLS_LIST: sequence array { repeat <DEF_FILL_ENTRY> }
+DEF_FILLS_LIST: sequence array { repeat <DEF_FILL_ENTRY> indent tab }
 
 DEF_FILL_ENTRY: choice {
   <DEF_FILL_LAYER_ENTRY>,
@@ -3059,7 +3059,7 @@ DEF_SPECIALNETS_BLOCK: sequence dict {
   "END" space, "SPECIALNETS" newline
 }
 
-DEF_SPECIALNETS_LIST: sequence array { repeat <DEF_SPECIALNET_ENTRY> }
+DEF_SPECIALNETS_LIST: sequence array { repeat <DEF_SPECIALNET_ENTRY> indent tab }
 
 // `- netName connection+ clause+ ;` — entry shape. The
 // connection list is one or more `( ... )` pairs, captured as
@@ -3266,7 +3266,7 @@ DEF_NETS_BLOCK: sequence dict {
   "END" space, "NETS" newline
 }
 
-DEF_NETS_LIST: sequence array { repeat <DEF_NET_ENTRY> }
+DEF_NETS_LIST: sequence array { repeat <DEF_NET_ENTRY> indent tab }
 
 DEF_NET_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -3395,7 +3395,7 @@ DEF_SCANCHAINS_BLOCK: sequence dict {
   "END" space, "SCANCHAINS" newline
 }
 
-DEF_SCANCHAINS_LIST: sequence array { repeat <DEF_SCANCHAIN_ENTRY> }
+DEF_SCANCHAINS_LIST: sequence array { repeat <DEF_SCANCHAIN_ENTRY> indent tab }
 
 DEF_SCANCHAIN_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -3494,7 +3494,7 @@ DEF_GROUPS_BLOCK: sequence dict {
   "END" space, "GROUPS" newline
 }
 
-DEF_GROUPS_LIST: sequence array { repeat <DEF_GROUP_ENTRY> }
+DEF_GROUPS_LIST: sequence array { repeat <DEF_GROUP_ENTRY> indent tab }
 
 DEF_GROUP_ENTRY: sequence dict {
   "-" space, identifier:name=@ space,
@@ -3555,7 +3555,7 @@ DEF_STYLES_BLOCK: sequence dict {
   <DEF_STYLES_LIST>:styles=@,
   "END" space, "STYLES" newline
 }
-DEF_STYLES_LIST: sequence array { repeat <DEF_STYLE_ENTRY> }
+DEF_STYLES_LIST: sequence array { repeat <DEF_STYLE_ENTRY> indent tab }
 DEF_STYLE_ENTRY: sequence dict {
   "-" space, "STYLE":type="Style" space,
   int:style_num=@ space,

@@ -113,5 +113,11 @@ def test_save_bare_item_emits_no_binding_suffix():
         "Y": {"type": "identifier"},
     }
     text = meta.save(data, pretty=False).decode("utf-8")
-    # Bare items don't emit `:name=` binding suffix
-    assert ":" not in text or "X:" in text or "Y:" in text  # only rule-def colons
+    # Bare items emit just the expr — no `:name=` binding suffix.
+    # The bare repeat item `<Y>` must render without a trailing
+    # `:...` binding. (Rule-def colons render `X : …` / `Y : …` with
+    # a space since the meta-grammar now spaces after the rule name
+    # so `NAME ignore …:` round-trips; that's unrelated to bindings.)
+    assert "<Y>" in text
+    assert "<Y>:" not in text       # no binding suffix on the bare item
+    assert "=" not in text          # no binding has a value

@@ -32,17 +32,25 @@
     ]
   },
 
+  // Pretty-print (save with pretty=true): `[`/`{` open with a newline,
+  // each element indents one level (`tab indent` on the repeat item),
+  // elements are comma+newline separated, an empty-key newline drops
+  // the closer onto its own line, and `]`/`}` re-tab at the outer
+  // depth. pretty=false skips tab/indent/newline and emits compact
+  // JSON. The attrs are save-only — parse ignores them (whitespace is
+  // already skipped via VALUE's rule_ignore).
   "LIST": {
     "type": "sequence",
     "container": "array",
     "items": [
-      {"expr": {"type": "key", "key": "["}},
+      {"expr": {"type": "key", "key": "["}, "newline": true},
       {"expr": {
         "type": "repeat",
-        "separator": {"expr": {"type": "key", "key": ","}},
-        "item":      {"expr": "VALUE"}
+        "separator": {"expr": {"type": "key", "key": ","}, "newline": true},
+        "item":      {"expr": "VALUE", "tab": true, "indent": true}
       }},
-      {"expr": {"type": "key", "key": "]"}}
+      {"expr": {"type": "key", "key": ""}, "newline": true},
+      {"expr": {"type": "key", "key": "]"}, "tab": true}
     ]
   },
 
@@ -59,13 +67,14 @@
     "type": "sequence",
     "container": "dict",
     "items": [
-      {"expr": {"type": "key", "key": "{"}},
+      {"expr": {"type": "key", "key": "{"}, "newline": true},
       {"expr": {
         "type": "repeat",
-        "separator": {"expr": {"type": "key", "key": ","}},
-        "item":      {"expr": "PAIR"}
+        "separator": {"expr": {"type": "key", "key": ","}, "newline": true},
+        "item":      {"expr": "PAIR", "tab": true, "indent": true}
       }},
-      {"expr": {"type": "key", "key": "}"}}
+      {"expr": {"type": "key", "key": ""}, "newline": true},
+      {"expr": {"type": "key", "key": "}"}, "tab": true}
     ]
   }
 }

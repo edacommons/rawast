@@ -24,11 +24,16 @@
 //                         parse as parameterised vs object-like.
 //   TEXT_LINE           — line content captured verbatim by scope.
 
-use: std
+use: std, sv
 
 start: <PP_FILE>
 
-PP_FILE ignore linespace: sequence array {
+// `linespace` + `line_comment` — horizontal whitespace AND
+// trailing `//` comments at every rule-frame boundary, so
+// `\`endif // INC_ASSERT` parses the same as a bare `\`endif`.
+// TEXT_LINE overrides with `ignore:` empty so a `// comment` on
+// its own line stays captured as line content.
+PP_FILE ignore linespace line_comment: sequence array {
   repeat <PP_ITEM>
 }
 
@@ -131,12 +136,65 @@ TEXT_LINE ignore: sequence dict {
 //
 //   `\`define FOO(x) bar`    → parameterised: params=["x"], body=[bar]
 //   `\`define FOO (x) bar`   → object-like:   no params,   body=[(x) bar]
+// `\`define NAME [(p1, …)] body` — per SV-1800 §22.5.1, `body` ends
+// at the next UNESCAPED newline. A backslash immediately before a
+// newline (`\<newline>`) is a line continuation: both bytes belong
+// to the body, and the body keeps going. Add `LINE_CONT` as an
+// explicit INNER so scope's byte-scanner consumes it instead of
+// treating the trailing `\n` as the body's terminator.
 DEFINE: sequence dict {
   "`define":type="define" space,
   <DECL>:decl=@ space,
-  scope array { <MACRO_USE>, <STRING>, <PARAM_REF> }:body=@,
+  <DEFINE_BODY>:body=@,
   "\n"
 }
+
+// Override PP_FILE's inherited `ignore linespace line_comment`,
+// keeping ONLY `linespace`. line_comment must NOT strip `// ...`
+// inside the macro body — if it did, the `//` would be consumed
+// but the trailing comment identifiers (`// init` → `init`) would
+// survive as PARAM_REF INNER matches, leaking the comment WORDS
+// into the body without their `//` marker. With line_comment
+// dropped from the ignore set here, the `//` and the rest of the
+// comment text are captured as raw bytes in a literal segment,
+// and handle_define strips them with full segment-aware skip
+// (find `//` in a literal segment, then drop subsequent typed
+// segments up to the next LINE_CONT boundary).
+//
+// `linespace` is kept so MACRO_USE inside a body still matches
+// `\`OTHER (x)` (LRM §22.5.1 allows whitespace between macro name
+// and the opening `(` at the use site).
+DEFINE_BODY ignore linespace: scope array {
+  <STRINGIFY>, <TOKEN_PASTE>, <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT>
+}
+
+// `\`\`` — token paste operator (IEEE 1800-2017 §22.5.1). Adjacent
+// to a parameter or identifier on either side; substituted text on
+// the two sides fuses because the operator is dropped at expansion
+// time. Tried BEFORE MACRO_USE so the second backtick of `\`\`X`
+// can't be misread as the start of a `\`X` macro use.
+TOKEN_PASTE: sequence dict {
+  "``":type="token_paste"
+}
+
+// `\`"..\`"` — stringification (IEEE 1800-2017 §22.5.1). Opens
+// and closes a string literal in the expanded text; parameters
+// referenced inside undergo substitution before the literal is
+// formed. Tried BEFORE STRING so the leading `\`"` doesn't get
+// half-parsed as text-`\`` plus a regular `"…"` string.
+STRINGIFY: sequence dict {
+  "`\"":type="stringify",
+  scope array { <MACRO_USE>, <PARAM_REF>, <TOKEN_PASTE> }:segments=@,
+  "`\""
+}
+
+// `\<newline>` — line continuation inside a macro body. Engine
+// consumes both bytes as one INNER match so the surrounding scope's
+// terminator check (looking for an UNESCAPED `\n`) doesn't fire.
+// The captured text still contains the literal `\` + `\n`;
+// Preprocessor::handle_define strips them at store time so the
+// expanded body is the joined form.
+LINE_CONT ignore: sequence { "\\", "\n" }
 
 // `ignore:` empty — the engine runs the OUTER PP_FILE's `ignore
 // linespace` at DECL's boundary (eats the space after `\`define`),
@@ -151,10 +209,25 @@ DECL ignore: sequence dict {
 // PARAMS overrides with its own `ignore linespace` so internal
 // whitespace works — DECL above has empty ignore which would
 // otherwise propagate into PARAMS via inheritance.
+//
+// Per IEEE 1800-2017 §22.5.1, each formal accepts an optional
+// `= default_text` clause. `default_text` is balanced text up to
+// the next top-level `,` or `)` — `sv_balanced_arg` is exactly
+// this scanner, so the default value captures cleanly even when
+// it itself contains balanced parens (`ARGS_ = ()`, `X = (a+b)`).
 PARAMS ignore linespace: sequence array {
   "(",
-  repeat identifier separator ",",
+  repeat <PARAM_FORMAL> separator ",",
   ")"
+}
+
+PARAM_FORMAL: sequence dict {
+  identifier:name=@,
+  ?<PARAM_FORMAL_DEFAULT>:default=@
+}
+
+PARAM_FORMAL_DEFAULT: sequence dict {
+  "=", sv_balanced_arg:value=@
 }
 
 // `\`NAME[(args)]` use site. No explicit ignore — inherit from
@@ -171,36 +244,25 @@ MACRO_USE: sequence dict {
 }
 
 // Args at the use site. LRM §22.5.1: each arg is a balanced-paren
-// token run terminating at the top-level `,` or `)`. The scope
-// captures each arg's raw bytes (StringValue), with nested PAREN /
-// BRACKET / BRACE / std.string as atomic INNERs so embedded commas
-// and closing parens inside nested structures don't end the arg.
+// token run terminating at the top-level `,` or `)`. `sv_balanced_arg`
+// is the depth-tracking scanner that captures exactly one such arg
+// as raw bytes — it follows `()`/`{}`/`[]` nesting and skips over
+// string literals, so embedded commas / closing parens inside nested
+// structures or strings don't end the arg. Same scanner used for
+// PARAM_FORMAL_DEFAULT, so macro-call args and define-default values
+// share one balanced-text implementation.
 //
-// Multi-stop on the scope (load-time resolver): stops at `,` (the
-// repeat separator) for non-final args and `)` (the post-repeat
-// sibling) for the final arg.
-//
-// Result shape: ArrayValue<StringValue>. Each StringValue holds the
-// raw bytes of one arg — the same flat-text shape the substitution
-// pipeline already consumes; the structural improvement is purely
-// in which call sites the grammar accepts.
+// Result shape: ArrayValue<StringValue> — each StringValue holds one
+// arg's raw bytes, the flat-text shape the substitution pipeline
+// consumes.
 //
 // `ignore linespace` applies between structural items (around `,`,
-// before `)`); whitespace INSIDE an arg span (e.g. `a + 1`) is part
-// of the captured bytes — scope's byte-scan bypasses the ignore set.
+// before `)`); whitespace INSIDE an arg is preserved by the scanner.
 MACRO_ARGS ignore linespace: sequence array {
   "(",
-  repeat scope { <PAREN>, <BRACKET>, <BRACE>, std.string } separator ",",
+  repeat sv_balanced_arg separator ",",
   ")"
 }
-
-// Balanced-paren INNER for MACRO_ARGS. Self-referential via INNERs
-// so arbitrary nesting like `((a, b), c)` captures atomically. The
-// scope's body bytes are folded into the surrounding arg span
-// verbatim — these rules exist for atomicity, not for AST shape.
-PAREN:   sequence { "(", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, ")" }
-BRACKET: sequence { "[", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, "]" }
-BRACE:   sequence { "{", scope { <PAREN>, <BRACKET>, <BRACE>, std.string }, "}" }
 
 STRING: sequence dict {
   std.string:type="string":value=@

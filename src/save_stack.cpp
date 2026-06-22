@@ -1786,6 +1786,42 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     const Node& n    = g.node(rid);
     const bool ref_diff = (rid.value() != node_id.value());
 
+    // Negative lookahead (`!X`) is a zero-width parse-time assertion:
+    // it consumes no input and binds no value. On the save side it must
+    // emit nothing and pull nothing from the value stream — otherwise
+    // the asserted token leaks into the output as spurious text. Covers
+    // both `!"literal"` (Key) and `!<RULE>` (Ref) forms; the `!` lives
+    // on the node as referenced, so check `orig`. Example: TEXT_LINE's
+    // leading `!"`endif" !"`else" !"`elsif"` guards were being emitted
+    // verbatim, prefixing every saved top-level text line.
+    if (orig.is_negative) return {};
+
+    // Skipped-optional guard, restricted to optional Sequence nodes.
+    // An absent optional Sequence emits no content — do_consume_body's
+    // Sequence paths (container=None and container=Dict/Array) return
+    // early via this same `(optional) && !can_consume` predicate. The
+    // surrounding formatting (tab / tail / space / newline, applied by
+    // emit_tab + emit_post below) must be suppressed too: otherwise a
+    // skipped `?<X> indent tab` leaks its leading indent — and any
+    // tail/space/newline — into the stream, stacking onto the next
+    // sibling's content (e.g. an absent `?<PORT_CLASS> indent tab`
+    // pushed the following LAYER line one indent level too deep).
+    //
+    // Scoped to `NodeKind::Sequence` deliberately: Parse/Raw optionals
+    // are skipped at the parent loop (`would_skip_optional` on the name
+    // marker) before do_consume is even called, and optional Choices
+    // (`?<PROPDEF_DEFAULT>` = choice of `string|NUMBER`) have their own
+    // alternative-selection skip — `can_consume` is not a faithful
+    // present/absent oracle for those, so a blanket check here would
+    // drop present values (regression: PROPERTYDEFINITIONS default_value
+    // vanished on save round-trip). The leak only affects Sequences.
+    if (n.kind == NodeKind::Sequence
+        && (n.is_optional || node_is_optional_chain(g, node_id))
+        && !can_consume(g, rid, s)) {
+        s.clear_pending();
+        return {};
+    }
+
     int body_depth = depth;
     if (pretty) {
         if (orig.depth_in) ++body_depth;
@@ -1811,6 +1847,28 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     if (ref_diff) emit_post(n);
     emit_post(orig);
     return {};
+}
+
+// Does the start rule's Sequence body bind a child to the `lhs`
+// dict-key? Name markers are stored as Value-kind nodes with
+// `is_name = true` and the string "lhs" as their constant. Used to
+// decide whether `wrap_atom_as_chain` should fire: only cascade
+// rules need the wrap (their body schema expects an `lhs` field);
+// non-cascade Sequences (e.g. SOURCE_TEXT binding `descriptions`)
+// already have the right shape, and wrapping turns a valid input
+// into `{lhs:<orig>, tail:[]}` which fails fixed-schema dispatch.
+bool start_binds_lhs_helper(const Grammar& g, NodeId rule_id) {
+    if (rule_id.value() >= g.node_count()) return false;
+    const Node& n = g.node(rule_id);
+    if (n.kind != NodeKind::Sequence) return false;
+    for (NodeId c : n.children) {
+        if (c.value() >= g.node_count()) continue;
+        const Node& cn = g.node(c);
+        if (cn.kind != NodeKind::Value || !cn.is_name) continue;
+        auto sv = std::dynamic_pointer_cast<StringValue>(cn.value);
+        if (sv && sv->data() == "lhs") return true;
+    }
+    return false;
 }
 
 // Inverse of `compact_opchain` (defined in grammar.cpp). When the
@@ -2029,16 +2087,17 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
         auto op_compat = build_op_compat_map(*this);
         value = expand_opchain(value, op_compat);
         // Wrap atoms only when the start chain resolves to a
-        // Sequence-Dict (plain always-wrap pattern, like
-        // test_opchain's flat ADD grammar). For the
-        // `choice { CHAIN, NEXT }` ladder pattern used by sv_pp_expr,
-        // atoms naturally fall through the catch-all NEXT and the
-        // wrap would break dispatch (the dict would have
-        // `lhs`+`tail:[]` instead of the leaf's `type` field, so
-        // PRIMARY's type-discriminated leaves wouldn't match).
+        // Sequence-Dict whose schema actually expects an `lhs`-binding
+        // item — i.e. the cascade-atom shape used by test_opchain's
+        // flat ADD grammar. Some grammars (SV) mark `#opchain` on a
+        // top-level wrapper that itself binds different fields (e.g.
+        // `descriptions`); wrapping an already-shaped dict there
+        // turns a valid input into `{lhs:{descriptions:…}, tail:[]}`
+        // and the fixed-schema check on the start rule then fails.
         NodeId resolved_start = resolve_ref(start);
         if (resolved_start.value() < node_count()
-            && node(resolved_start).kind == NodeKind::Sequence) {
+            && node(resolved_start).kind == NodeKind::Sequence
+            && start_binds_lhs_helper(*this, resolved_start)) {
             value = wrap_atom_as_chain(value);
         }
     }
