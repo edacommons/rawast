@@ -1419,6 +1419,8 @@ TASK_PORT_USERTYPED: sequence dict {
 // (assignments, if/case/while) come last so a leading identifier
 // has every chance to match a declaration first.
 TASK_ITEM: choice {
+  <LOCALPARAM_DECL_USERTYPE_STMT>,
+  <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
   <REG_DECL>,
   <INTEGER_DECL>,
@@ -1624,11 +1626,23 @@ CASE_LABEL: choice {
 FOR_STMT: sequence dict {
   'for':@:type="for",
   "(",
-  <FOR_INIT>:init=@, ";",
+  <FOR_INIT_LIST>:init=@, ";",
   <EXPR>:cond=@, ";",
-  <FOR_STEP>:step=@,
+  <FOR_STEP_LIST>:step=@,
   ")",
   <STATEMENT>:body=@
+}
+
+// IEEE 1800-2017 §12.7.1 — multiple comma-separated initializers
+// (`for (int i = 0, int j = 1; ...; ...)`) and step assignments
+// (`for (...; ...; i += 1, j *= 2)`). Common in FSM iteration over
+// enum types: `for (int i = 0, StateEnumT t = t.first(); ...; ...)`.
+FOR_INIT_LIST: sequence array {
+  repeat+ <FOR_INIT> separator ","
+}
+
+FOR_STEP_LIST: sequence array {
+  repeat+ <FOR_STEP> separator ","
 }
 
 // For-loop init can be an assignment OR a declaration with init
@@ -1638,7 +1652,19 @@ FOR_STMT: sequence dict {
 FOR_INIT: choice {
   <FOR_INIT_GENVAR>,
   <FOR_INIT_DECL>,
+  <FOR_INIT_USERTYPE>,
   <ASSIGNMENT_PAIR>
+}
+
+// Second-and-later init clauses with user-type names — the inner
+// `t` of `StateEnumT t = t.first()` is the variable, but the
+// leading `StateEnumT` is a user-defined enum type. Distinguished
+// from ASSIGNMENT_PAIR by requiring two identifiers + `=`.
+FOR_INIT_USERTYPE: sequence dict {
+  !<TYPE_SPEC>,
+  sv_qualified_type:type_spec=@:type="for_init_usertype",
+  sv_identifier:name=@,
+  "=", <EXPR>:value=@
 }
 
 FOR_INIT_GENVAR: sequence dict {
@@ -2554,11 +2580,26 @@ MACRO_HIER_REF: sequence dict {
 // element captures one step.
 HIER_PART: choice {
   <HIER_DOT>,
+  <HIER_PART_RANGE>,
   <HIER_SELECT>
 }
 
 HIER_DOT: sequence dict { ".", sv_identifier:field=@ }
 HIER_SELECT: sequence dict { "[", <EXPR>:index=@, "]" }
+
+// `[msb:lsb]` part-select / range-slice on hierarchical refs. The
+// `:` form covers both regular range select (`vec[7:0]`) and
+// queue/array slice (`q[1:$]` — `$` is the end-of-queue index from
+// IEEE 1800-2017 §10.10). Tried before HIER_SELECT (which matches
+// bare `[expr]`) so the longer two-expr form wins.
+HIER_PART_RANGE: sequence dict {
+  "[", <RANGE_BOUND>:msb=@, ":", <RANGE_BOUND>:lsb=@, "]"
+}
+
+RANGE_BOUND: choice {
+  "$":@,
+  <EXPR>
+}
 
 // ─── Preprocessor — recognition only, no expansion ──────────────────────
 //
