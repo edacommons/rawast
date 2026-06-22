@@ -5,171 +5,140 @@
   "use": [
     "std"
   ],
-  "GRAMMAR": {
-    "type": "sequence",
+  "BINDING": {
     "container": "dict",
-    "rule_ignore": ["whitespace", "line_comment", "block_comment"],
+    "type": "sequence",
     "value": [
       {
+        "key": ":",
+        "type": "key"
+      },
+      {
+        "type": "BIND_EXPR"
+      }
+    ]
+  },
+  "BINDINGS": {
+    "container": "array",
+    "type": "sequence",
+    "value": [
+      {
+        "min": 1,
         "type": "repeat",
         "value": {
-          "type": "GRAMMAR_ENTRY",
-          "newline": true
+          "type": "BINDING"
         }
       }
     ]
   },
-  "GRAMMAR_ENTRY": {
+  "BIND_EXPR": {
     "type": "choice",
     "value": [
       {
-        "type": "USE_DECL"
+        "type": "NAME_BIND"
       },
       {
-        "type": "START_DECL"
+        "type": "RESERVED_VALUE_BIND"
       },
       {
-        "type": "RULE_DEF"
+        "type": "VALUE_BIND"
       }
     ]
   },
-  "USE_DECL": {
-    "type": "sequence",
+  "BIND_VAL": {
+    "type": "choice",
     "value": [
       {
-        "type": "key",
-        "key": "use"
+        "emit": true,
+        "key": "@",
+        "type": "key"
       },
       {
-        "type": "key",
-        "key": ":"
-      },
-      {
-        "type": "IDENT_LIST",
-        "bindings": [
-          {
-            "name": "use",
-            "value": "@"
-          }
-        ]
+        "type": "CONSTANT"
       }
     ]
   },
-  "IDENT_LIST": {
-    "type": "sequence",
-    "container": "array",
-    "value": [
-      {
-        "type": "repeat",
-        "separator": {
-          "type": "key",
-          "key": ","
-        },
-        "value": {
-          "type": "qualified_identifier"
-        }
-      }
-    ]
-  },
-  "RULE_DEF": {
+  "CHOICE_EXPR": {
     "type": "sequence",
     "value": [
       {
-        "type": "identifier",
         "bindings": [
           {
-            "var": true,
-            "value": "@"
+            "name": "type",
+            "value": "choice"
           }
-        ]
+        ],
+        "key": "choice",
+        "space": true,
+        "type": "key"
       },
       {
-        "type": "RULE_BODY"
-      }
-    ]
-  },
-  "RULE_BODY": {
-    "type": "sequence",
-    "container": "dict",
-    "value": [
-      {
-        "type": "RULE_IGNORE_ATTR",
-        "optional": true
+        "key": "{",
+        "newline": true,
+        "type": "key"
       },
       {
-        "type": "key",
-        "key": ":"
-      },
-      {
-        "type": "key",
-        "key": "?",
-        "optional": true,
         "bindings": [
           {
-            "name": "optional",
-            "value": true
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "!",
-        "optional": true,
-        "bindings": [
-          {
-            "name": "negative",
-            "value": true
-          }
-        ]
-      },
-      {
-        "type": "EXPR"
-      },
-      {
-        "type": "BINDINGS",
-        "bindings": [
-          {
-            "name": "bindings",
+            "name": "value",
             "value": "@"
           }
         ],
-        "optional": true
+        "type": "ITEMS"
       },
       {
-        "type": "repeat",
-        "value": {
-          "type": "POSTFIX_ATTR"
-        }
+        "key": "",
+        "newline": true,
+        "type": "key"
+      },
+      {
+        "key": "}",
+        "tab": true,
+        "type": "key"
       }
     ]
   },
-  "RULE_IGNORE_ATTR": {
-    "type": "sequence",
+  "CONSTANT": {
+    "type": "choice",
     "value": [
       {
+        "type": "string"
+      },
+      {
+        "type": "float"
+      },
+      {
+        "type": "int"
+      },
+      {
+        "key": "null",
         "type": "key",
-        "key": "ignore"
+        "value": null
       },
       {
-        "type": "IGNORE_LIST",
-        "bindings": [
-          {
-            "name": "rule_ignore",
-            "value": "@"
-          }
-        ]
+        "key": "true",
+        "type": "key",
+        "value": true
+      },
+      {
+        "key": "false",
+        "type": "key",
+        "value": false
       }
     ]
   },
-  "IGNORE_LIST": {
-    "type": "sequence",
-    "container": "array",
+  "CONTAINER_KIND": {
+    "type": "choice",
     "value": [
       {
-        "type": "repeat",
-        "value": {
-          "type": "qualified_identifier"
-        }
+        "emit": true,
+        "key": "array",
+        "type": "key"
+      },
+      {
+        "emit": true,
+        "key": "dict",
+        "type": "key"
       }
     ]
   },
@@ -205,330 +174,106 @@
       }
     ]
   },
-  "RAW_EXPR": {
+  "GRAMMAR": {
+    "container": "dict",
+    "rule_ignore": [
+      "whitespace",
+      "line_comment",
+      "block_comment"
+    ],
     "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "*",
-        "bindings": [
-          {"name": "type", "value": "raw"}
-        ]
-      }
-    ]
-  },
-  "REF": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "<"
-      },
-      {
-        "type": "identifier",
-        "bindings": [
-          {
-            "name": "type",
-            "value": "@"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": ">"
-      }
-    ]
-  },
-  "SEQUENCE_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "sequence",
-        "bindings": [
-          {
-            "name": "type",
-            "value": "sequence"
-          }
-        ]
-      },
-      {
-        "type": "CONTAINER_KIND",
-        "optional": true,
-        "bindings": [
-          {
-            "name": "container",
-            "value": "@"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "{"
-      },
-      {
-        "type": "ITEMS",
-        "bindings": [
-          {
-            "name": "value",
-            "value": "@"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "}"
-      }
-    ]
-  },
-  "CONTAINER_KIND": {
-    "type": "choice",
-    "value": [
-      {
-        "type": "key",
-        "key": "array",
-        "emit": true
-      },
-      {
-        "type": "key",
-        "key": "dict",
-        "emit": true
-      }
-    ]
-  },
-  "CHOICE_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "choice",
-        "bindings": [
-          {
-            "name": "type",
-            "value": "choice"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "{"
-      },
-      {
-        "type": "ITEMS",
-        "bindings": [
-          {
-            "name": "value",
-            "value": "@"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "}"
-      }
-    ]
-  },
-  "SCOPE_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "scope",
-        "bindings": [
-          { "name": "type", "value": "scope" }
-        ]
-      },
-      {
-        "type": "CONTAINER_KIND",
-        "optional": true,
-        "bindings": [
-          { "name": "container", "value": "@" }
-        ]
-      },
-      { "type": "key", "key": "{" },
-      {
-        "type": "ITEMS",
-        "bindings": [
-          { "name": "value", "value": "@" }
-        ]
-      },
-      { "type": "key", "key": "}" }
-    ]
-  },
-  "REPEAT_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "repeat",
-        "bindings": [
-          { "name": "type", "value": "repeat" }
-        ]
-      },
-      { "type": "REPEAT_PLUS_FORM", "optional": true },
-      {
-        "type": "ITEM",
-        "bindings": [
-          { "name": "value", "value": "@" }
-        ]
-      },
-      { "type": "SEPARATOR", "optional": true }
-    ]
-  },
-  "REPEAT_PLUS_FORM": {
-    "type": "choice",
-    "value": [
-      { "type": "REPEAT_PLUS_N" },
-      { "type": "REPEAT_PLUS_ONE" }
-    ]
-  },
-  "REPEAT_PLUS_N": {
-    "type": "sequence",
-    "value": [
-      { "type": "key", "key": "+" },
-      {
-        "type": "int",
-        "bindings": [
-          { "name": "min", "value": "@" }
-        ]
-      }
-    ]
-  },
-  "REPEAT_PLUS_ONE": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "+",
-        "bindings": [
-          { "name": "min", "value": 1 }
-        ]
-      }
-    ]
-  },
-  "KEY_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "string",
-        "bindings": [
-          { "name": "key",  "value": "@" },
-          { "name": "type", "value": "key" }
-        ]
-      },
-      { "type": "KEY_VALUE", "optional": true }
-    ]
-  },
-  "KEY_STRICT_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "single_quote_string",
-        "bindings": [
-          { "name": "key",  "value": "@" },
-          { "name": "type", "value": "strict_key" }
-        ]
-      },
-      { "type": "KEY_VALUE", "optional": true }
-    ]
-  },
-  "CONSTANT": {
-    "type": "choice",
-    "value": [
-      {
-        "type": "string"
-      },
-      {
-        "type": "float"
-      },
-      {
-        "type": "int"
-      },
-      {
-        "type": "key",
-        "key": "null",
-        "value": null
-      },
-      {
-        "type": "key",
-        "key": "true",
-        "value": true
-      },
-      {
-        "type": "key",
-        "key": "false",
-        "value": false
-      }
-    ]
-  },
-  "PARSE_EXPR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "qualified_identifier",
-        "bindings": [
-          {
-            "name": "type",
-            "value": "@"
-          }
-        ]
-      }
-    ]
-  },
-  "ITEMS": {
-    "type": "sequence",
-    "container": "array",
     "value": [
       {
         "type": "repeat",
-        "separator": {
-          "type": "key",
-          "key": ","
-        },
         "value": {
-          "type": "ITEM"
+          "newline": true,
+          "type": "GRAMMAR_ENTRY"
+        }
+      }
+    ]
+  },
+  "GRAMMAR_ENTRY": {
+    "type": "choice",
+    "value": [
+      {
+        "type": "USE_DECL"
+      },
+      {
+        "type": "START_DECL"
+      },
+      {
+        "type": "RULE_DEF"
+      }
+    ]
+  },
+  "IDENT_LIST": {
+    "container": "array",
+    "type": "sequence",
+    "value": [
+      {
+        "separator": {
+          "key": ",",
+          "space": true,
+          "type": "key"
+        },
+        "type": "repeat",
+        "value": {
+          "type": "qualified_identifier"
+        }
+      }
+    ]
+  },
+  "IGNORE_LIST": {
+    "container": "array",
+    "type": "sequence",
+    "value": [
+      {
+        "type": "repeat",
+        "value": {
+          "space": true,
+          "type": "qualified_identifier"
         }
       }
     ]
   },
   "ITEM": {
-    "type": "sequence",
     "container": "dict",
+    "type": "sequence",
     "value": [
       {
-        "type": "key",
-        "key": "?",
-        "optional": true,
         "bindings": [
           {
             "name": "optional",
             "value": true
           }
-        ]
+        ],
+        "key": "?",
+        "optional": true,
+        "type": "key"
       },
       {
-        "type": "key",
-        "key": "!",
-        "optional": true,
         "bindings": [
           {
             "name": "negative",
             "value": true
           }
-        ]
+        ],
+        "key": "!",
+        "optional": true,
+        "type": "key"
       },
       {
         "type": "EXPR"
       },
       {
-        "type": "BINDINGS",
         "bindings": [
           {
             "name": "bindings",
             "value": "@"
           }
         ],
-        "optional": true
+        "optional": true,
+        "type": "BINDINGS"
       },
       {
         "type": "repeat",
@@ -538,155 +283,97 @@
       }
     ]
   },
-  "POSTFIX_ATTR": {
-    "type": "choice",
-    "value": [
-      {
-        "type": "key",
-        "key": "indent",
-        "bindings": [
-          {
-            "name": "indent",
-            "value": true
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "tab",
-        "bindings": [
-          {
-            "name": "tab",
-            "value": true
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "space",
-        "bindings": [
-          {
-            "name": "space",
-            "value": true
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "newline",
-        "bindings": [
-          {
-            "name": "newline",
-            "value": true
-          }
-        ]
-      },
-      {
-        "type": "TAIL_ATTR"
-      }
-    ]
-  },
-  "TAIL_ATTR": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": "tail"
-      },
-      {
-        "type": "key",
-        "key": "="
-      },
-      {
-        "type": "string",
-        "bindings": [
-          {
-            "name": "tail",
-            "value": "@"
-          }
-        ]
-      }
-    ]
-  },
-  "BINDINGS": {
-    "type": "sequence",
+  "ITEMS": {
     "container": "array",
+    "type": "sequence",
     "value": [
       {
+        "separator": {
+          "key": ",",
+          "newline": true,
+          "type": "key"
+        },
         "type": "repeat",
-        "min": 1,
         "value": {
-          "type": "BINDING"
+          "indent": true,
+          "tab": true,
+          "type": "ITEM"
         }
       }
     ]
   },
-  "BINDING": {
-    "type": "sequence",
-    "container": "dict",
-    "value": [
-      {
-        "type": "key",
-        "key": ":"
-      },
-      {
-        "type": "BIND_EXPR"
-      }
-    ]
-  },
-  "BIND_EXPR": {
-    "type": "choice",
-    "value": [
-      {
-        "type": "NAME_BIND"
-      },
-      {
-        "type": "RESERVED_VALUE_BIND"
-      },
-      {
-        "type": "VALUE_BIND"
-      }
-    ]
-  },
-  "RESERVED_VALUE_BIND": {
+  "KEY_EXPR": {
     "type": "sequence",
     "value": [
       {
-        "type": "key",
-        "key": "#"
-      },
-      {
-        "type": "identifier",
         "bindings": [
           {
-            "name": "name",
+            "name": "key",
             "value": "@"
           },
           {
-            "name": "reserved",
-            "value": true
+            "name": "type",
+            "value": "key"
           }
-        ]
+        ],
+        "type": "string"
       },
       {
-        "type": "RESERVED_VALUE_TAIL",
-        "optional": true
+        "optional": true,
+        "type": "KEY_VALUE"
       }
     ]
   },
-  "RESERVED_VALUE_TAIL": {
+  "KEY_STRICT_EXPR": {
     "type": "sequence",
     "value": [
       {
-        "type": "key",
-        "key": "="
-      },
-      {
-        "type": "BIND_VAL",
         "bindings": [
           {
-            "name": "value",
+            "name": "key",
             "value": "@"
+          },
+          {
+            "name": "type",
+            "value": "strict_key"
+          }
+        ],
+        "type": "single_quote_string"
+      },
+      {
+        "optional": true,
+        "type": "KEY_VALUE"
+      }
+    ]
+  },
+  "KEY_VALUE": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": ":",
+        "type": "key"
+      },
+      {
+        "type": "choice",
+        "value": [
+          {
+            "bindings": [
+              {
+                "name": "emit",
+                "value": true
+              }
+            ],
+            "key": "@",
+            "type": "key"
+          },
+          {
+            "bindings": [
+              {
+                "name": "value",
+                "value": "@"
+              }
+            ],
+            "type": "CONSTANT"
           }
         ]
       }
@@ -696,138 +383,407 @@
     "type": "sequence",
     "value": [
       {
-        "type": "key",
-        "key": "=",
         "bindings": [
           {
             "name": "var",
             "value": true
           }
-        ]
+        ],
+        "key": "=",
+        "type": "key"
       },
       {
-        "type": "BIND_VAL",
         "bindings": [
           {
             "name": "value",
             "value": "@"
           }
-        ]
+        ],
+        "type": "BIND_VAL"
       }
     ]
   },
-  "VALUE_BIND": {
+  "PARSE_EXPR": {
     "type": "sequence",
     "value": [
       {
-        "type": "identifier",
+        "bindings": [
+          {
+            "name": "type",
+            "value": "@"
+          }
+        ],
+        "type": "qualified_identifier"
+      }
+    ]
+  },
+  "POSTFIX_ATTR": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "type": "POSTFIX_ATTR_KIND"
+      }
+    ]
+  },
+  "POSTFIX_ATTR_KIND": {
+    "type": "choice",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "indent",
+            "value": true
+          }
+        ],
+        "key": "indent",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "tab",
+            "value": true
+          }
+        ],
+        "key": "tab",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "space",
+            "value": true
+          }
+        ],
+        "key": "space",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "newline",
+            "value": true
+          }
+        ],
+        "key": "newline",
+        "type": "key"
+      },
+      {
+        "type": "TAIL_ATTR"
+      }
+    ]
+  },
+  "RAW_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "type",
+            "value": "raw"
+          }
+        ],
+        "key": "*",
+        "type": "key"
+      }
+    ]
+  },
+  "REF": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "<",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "type",
+            "value": "@"
+          }
+        ],
+        "type": "identifier"
+      },
+      {
+        "key": ">",
+        "type": "key"
+      }
+    ]
+  },
+  "REPEAT_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "type",
+            "value": "repeat"
+          }
+        ],
+        "key": "repeat",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "optional": true,
+        "type": "REPEAT_PLUS_FORM"
+      },
+      {
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ],
+        "space": true,
+        "type": "ITEM"
+      },
+      {
+        "optional": true,
+        "type": "SEPARATOR"
+      }
+    ]
+  },
+  "REPEAT_PLUS_FORM": {
+    "type": "choice",
+    "value": [
+      {
+        "type": "REPEAT_PLUS_N"
+      },
+      {
+        "type": "REPEAT_PLUS_ONE"
+      }
+    ]
+  },
+  "REPEAT_PLUS_N": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "+",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "min",
+            "value": "@"
+          }
+        ],
+        "space": true,
+        "type": "int"
+      }
+    ]
+  },
+  "REPEAT_PLUS_ONE": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "min",
+            "value": 1
+          }
+        ],
+        "key": "+",
+        "space": true,
+        "type": "key"
+      }
+    ]
+  },
+  "RESERVED_VALUE_BIND": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "#",
+        "type": "key"
+      },
+      {
         "bindings": [
           {
             "name": "name",
             "value": "@"
-          }
-        ]
-      },
-      {
-        "type": "key",
-        "key": "[]",
-        "optional": true,
-        "bindings": [
+          },
           {
-            "name": "list_append",
+            "name": "reserved",
             "value": true
           }
-        ]
+        ],
+        "type": "identifier"
       },
       {
-        "type": "key",
-        "key": "="
+        "optional": true,
+        "type": "RESERVED_VALUE_TAIL"
+      }
+    ]
+  },
+  "RESERVED_VALUE_TAIL": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "=",
+        "type": "key"
       },
       {
-        "type": "BIND_VAL",
         "bindings": [
           {
             "name": "value",
             "value": "@"
           }
-        ]
+        ],
+        "type": "BIND_VAL"
       }
     ]
   },
-  "BIND_VAL": {
-    "type": "choice",
-    "value": [
-      {
-        "type": "key",
-        "key": "@",
-        "emit": true
-      },
-      {
-        "type": "CONSTANT"
-      }
-    ]
-  },
-  "START_DECL": {
+  "RULE_BODY": {
+    "container": "dict",
     "type": "sequence",
     "value": [
       {
-        "type": "key",
-        "key": "start"
+        "optional": true,
+        "type": "RULE_IGNORE_ATTR"
       },
       {
-        "type": "key",
-        "key": ":"
+        "key": ":",
+        "space": true,
+        "type": "key"
       },
       {
-        "type": "START_VAL",
         "bindings": [
           {
-            "name": "start",
-            "value": "@"
+            "name": "optional",
+            "value": true
           }
-        ]
-      }
-    ]
-  },
-  "START_VAL": {
-    "type": "sequence",
-    "container": "dict",
-    "value": [
-      {
-        "type": "REF"
-      }
-    ]
-  },
-  "KEY_VALUE": {
-    "type": "sequence",
-    "value": [
-      {
-        "type": "key",
-        "key": ":"
+        ],
+        "key": "?",
+        "optional": true,
+        "type": "key"
       },
       {
-        "type": "choice",
-        "value": [
+        "bindings": [
           {
-            "type": "key",
-            "key": "@",
-            "bindings": [
-              {
-                "name": "emit",
-                "value": true
-              }
-            ]
-          },
-          {
-            "type": "CONSTANT",
-            "bindings": [
-              {
-                "name": "value",
-                "value": "@"
-              }
-            ]
+            "name": "negative",
+            "value": true
           }
-        ]
+        ],
+        "key": "!",
+        "optional": true,
+        "type": "key"
+      },
+      {
+        "type": "EXPR"
+      },
+      {
+        "bindings": [
+          {
+            "name": "bindings",
+            "value": "@"
+          }
+        ],
+        "optional": true,
+        "type": "BINDINGS"
+      },
+      {
+        "type": "repeat",
+        "value": {
+          "type": "POSTFIX_ATTR"
+        }
+      }
+    ]
+  },
+  "RULE_DEF": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "value": "@",
+            "var": true
+          }
+        ],
+        "type": "identifier"
+      },
+      {
+        "type": "RULE_BODY"
+      }
+    ]
+  },
+  "RULE_IGNORE_ATTR": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "key": "ignore",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "rule_ignore",
+            "value": "@"
+          }
+        ],
+        "type": "IGNORE_LIST"
+      }
+    ]
+  },
+  "SCOPE_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "type",
+            "value": "scope"
+          }
+        ],
+        "key": "scope",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "container",
+            "value": "@"
+          }
+        ],
+        "optional": true,
+        "space": true,
+        "type": "CONTAINER_KIND"
+      },
+      {
+        "key": "{",
+        "newline": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ],
+        "type": "ITEMS"
+      },
+      {
+        "key": "",
+        "newline": true,
+        "type": "key"
+      },
+      {
+        "key": "}",
+        "tab": true,
+        "type": "key"
       }
     ]
   },
@@ -835,17 +791,184 @@
     "type": "sequence",
     "value": [
       {
-        "type": "key",
-        "key": "separator"
+        "key": "separator",
+        "space": true,
+        "type": "key"
       },
       {
-        "type": "ITEM",
         "bindings": [
           {
             "name": "separator",
             "value": "@"
           }
-        ]
+        ],
+        "type": "ITEM"
+      }
+    ]
+  },
+  "SEQUENCE_EXPR": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "type",
+            "value": "sequence"
+          }
+        ],
+        "key": "sequence",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "container",
+            "value": "@"
+          }
+        ],
+        "optional": true,
+        "space": true,
+        "type": "CONTAINER_KIND"
+      },
+      {
+        "key": "{",
+        "newline": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ],
+        "type": "ITEMS"
+      },
+      {
+        "key": "",
+        "newline": true,
+        "type": "key"
+      },
+      {
+        "key": "}",
+        "tab": true,
+        "type": "key"
+      }
+    ]
+  },
+  "START_DECL": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "start",
+        "type": "key"
+      },
+      {
+        "key": ":",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "start",
+            "value": "@"
+          }
+        ],
+        "type": "START_VAL"
+      }
+    ]
+  },
+  "START_VAL": {
+    "container": "dict",
+    "type": "sequence",
+    "value": [
+      {
+        "type": "REF"
+      }
+    ]
+  },
+  "TAIL_ATTR": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "tail",
+        "type": "key"
+      },
+      {
+        "key": "=",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "tail",
+            "value": "@"
+          }
+        ],
+        "type": "string"
+      }
+    ]
+  },
+  "USE_DECL": {
+    "type": "sequence",
+    "value": [
+      {
+        "key": "use",
+        "type": "key"
+      },
+      {
+        "key": ":",
+        "space": true,
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "use",
+            "value": "@"
+          }
+        ],
+        "type": "IDENT_LIST"
+      }
+    ]
+  },
+  "VALUE_BIND": {
+    "type": "sequence",
+    "value": [
+      {
+        "bindings": [
+          {
+            "name": "name",
+            "value": "@"
+          }
+        ],
+        "type": "identifier"
+      },
+      {
+        "bindings": [
+          {
+            "name": "list_append",
+            "value": true
+          }
+        ],
+        "key": "[]",
+        "optional": true,
+        "type": "key"
+      },
+      {
+        "key": "=",
+        "type": "key"
+      },
+      {
+        "bindings": [
+          {
+            "name": "value",
+            "value": "@"
+          }
+        ],
+        "type": "BIND_VAL"
       }
     ]
   }

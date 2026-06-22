@@ -29,10 +29,10 @@ GRAMMAR ignore whitespace line_comment block_comment: sequence dict {
 
 GRAMMAR_ENTRY: choice { <USE_DECL>, <START_DECL>, <RULE_DEF>}
 
-USE_DECL:   sequence { "use", ":", <IDENT_LIST>:use=@ }
-IDENT_LIST: sequence array { repeat qualified_identifier separator "," }
+USE_DECL:   sequence { "use", ":" space, <IDENT_LIST>:use=@ }
+IDENT_LIST: sequence array { repeat qualified_identifier separator "," space }
 
-START_DECL: sequence {"start", ":", <START_VAL>:start=@}
+START_DECL: sequence {"start", ":" space, <START_VAL>:start=@}
 
 START_VAL: sequence dict { <REF> }
 
@@ -50,7 +50,7 @@ RULE_DEF: sequence {
 // Same fields as ITEM, plus an optional leading rule_ignore attr.
 RULE_BODY: sequence dict {
   ?<RULE_IGNORE_ATTR>,
-  ":",
+  ":" space,
   ?"?":optional=true,
   ?"!":negative=true,
   <EXPR>,
@@ -62,10 +62,11 @@ RULE_BODY: sequence dict {
 // by the next `:` (since `:` isn't a valid identifier char, the
 // repeat naturally stops). Empty list means "ignore nothing".
 RULE_IGNORE_ATTR: sequence {
-  "ignore",
+  "" space,
+  "ignore" space,
   <IGNORE_LIST>:rule_ignore=@
 }
-IGNORE_LIST: sequence array { repeat qualified_identifier }
+IGNORE_LIST: sequence array { repeat qualified_identifier space }
 
 // ─── Items ──────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ ITEM: sequence dict {
   repeat <POSTFIX_ATTR>
 }
 
-ITEMS: sequence array { repeat <ITEM> separator "," }
+ITEMS: sequence array { repeat <ITEM> indent tab separator "," newline }
 
 // ─── Expressions ────────────────────────────────────────────────────────
 
@@ -105,16 +106,16 @@ RAW_EXPR: sequence { "*":type="raw" }
 REF: sequence {"<", identifier:type=@, ">" }
 
 SEQUENCE_EXPR: sequence {
-  "sequence":type="sequence",
-  ?<CONTAINER_KIND>:container=@,
-  "{", <ITEMS>:value=@, "}"
+  "sequence":type="sequence" space,
+  ?<CONTAINER_KIND>:container=@ space,
+  "{" newline, <ITEMS>:value=@, "" newline, "}" tab
 }
 
 CONTAINER_KIND: choice { "array":@, "dict":@ }
 
 CHOICE_EXPR: sequence {
-  "choice":type="choice",
-  "{", <ITEMS>:value=@, "}"
+  "choice":type="choice" space,
+  "{" newline, <ITEMS>:value=@, "" newline, "}" tab
 }
 
 // `scope { INNER... }` — string-aware byte scanner. Scope has no
@@ -132,9 +133,9 @@ CHOICE_EXPR: sequence {
 // Key's own strict flag — write `'begin'` instead of `"begin"` on
 // the surrounding sequence sibling, no scope-level attribute needed.
 SCOPE_EXPR: sequence {
-  "scope":type="scope",
-  ?<CONTAINER_KIND>:container=@,
-  "{", <ITEMS>:value=@, "}"
+  "scope":type="scope" space,
+  ?<CONTAINER_KIND>:container=@ space,
+  "{" newline, <ITEMS>:value=@, "" newline, "}" tab
 }
 
 // `repeat` quantifier syntax:
@@ -149,9 +150,9 @@ SCOPE_EXPR: sequence {
 // falls back to `REPEAT_PLUS_ONE` for bare `+` via Choice-frame
 // alt-failure recovery.
 REPEAT_EXPR: sequence {
-  "repeat":type="repeat",
+  "repeat":type="repeat" space,
   ?<REPEAT_PLUS_FORM>,
-  <ITEM>:value=@,
+  <ITEM>:value=@ space,
   ?<SEPARATOR>
 }
 
@@ -160,10 +161,10 @@ REPEAT_PLUS_FORM: choice {
   <REPEAT_PLUS_ONE>
 }
 
-REPEAT_PLUS_N: sequence { "+", int:min=@ }
-REPEAT_PLUS_ONE: sequence { "+":min=1 }
+REPEAT_PLUS_N: sequence { "+", int:min=@ space }
+REPEAT_PLUS_ONE: sequence { "+":min=1 space }
 
-SEPARATOR: sequence { "separator", <ITEM>:separator=@ }
+SEPARATOR: sequence { "separator" space, <ITEM>:separator=@ }
 
 // Key literal. Two surface forms with distinct `type` values so save
 // dispatch can route them cleanly through EXPR's Choice:
@@ -262,7 +263,17 @@ CONSTANT: choice {
 
 // ─── Postfix attrs ──────────────────────────────────────────────────────
 
-POSTFIX_ATTR: choice {
+// Each postfix attr renders with a leading space (the `"" space`
+// empty-key prefix) so attrs separate cleanly from the preceding
+// expr/binding and from each other on save — `<X>:n=@ indent tab`
+// rather than `<X>:n=@indenttab`. The empty key matches zero bytes
+// on parse, so it's a pure save-side spacer.
+POSTFIX_ATTR: sequence {
+  "" space,
+  <POSTFIX_ATTR_KIND>
+}
+
+POSTFIX_ATTR_KIND: choice {
   "indent" :indent=true,
   "tab"    :tab=true,
   "space"  :space=true,

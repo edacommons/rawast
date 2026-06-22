@@ -181,6 +181,38 @@ def test_meta_grammar_design_matches_runtime():
     assert parsed == canonical
 
 
+def test_meta_grammar_pretty_prints_indented_grammar():
+    """Saving a grammar through the meta-grammar with pretty=True emits
+    indented, space-separated .rawast: rule bodies open with a newline,
+    items indent one level, and tokens are space-separated. Round-trips
+    to the same dict for grammars without null/emit constant bindings
+    (those have a separate, pre-existing save-completeness gap)."""
+    meta = rawast.Grammar("rawast")
+    src = (
+        "use: std\n"
+        "start: <DOC>\n"
+        "DOC: sequence dict { \"[\", repeat <ITEM> separator \",\", \"]\" }\n"
+        "ITEM: choice { string, int, <DOC> }\n"
+    )
+    ast = meta.parse_string(src)
+    out = meta.save(ast, pretty=True).decode("utf-8")
+
+    # Rule body indents its items one level under the `{`.
+    assert "DOC: sequence dict {\n" in out
+    assert '\n  "["' in out          # item indented two spaces
+    assert "\n}" in out              # closer on its own line
+    # Tokens are space-separated, not glued.
+    assert "sequencedict" not in out
+    assert "repeat <ITEM>" in out
+
+    # Pretty output re-parses to the same grammar dict.
+    assert meta.parse_string(out) == ast
+
+    # Compact save stays single-line (no indentation newlines).
+    compact = meta.save(ast, pretty=False).decode("utf-8")
+    assert "\n  " not in compact
+
+
 def test_schema_generator_emits_markdown_for_every_bundled_grammar():
     """`rawast.schema.to_markdown` walks any loaded grammar dict and
     emits a value-tree-shape Markdown reference. Smoke-test against
