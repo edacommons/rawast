@@ -159,7 +159,8 @@ MODULE_DECL: sequence dict {
 // Captures the import declarations as raw text up to the next
 // non-import token (`#`, `(`, or `;`).
 MODULE_HEADER_IMPORT: sequence dict {
-  'import':@:type="module_header_import",
+  "" space,
+  'import':@:type="module_header_import" space,
   *:body=@,
   ";"
 }
@@ -362,10 +363,10 @@ PARAM_VALUE_DEFAULT: sequence dict { "=" space, <EXPR>:value=@ }
 // implied. Same fields as PARAM_DECL_VALUE but without the
 // `'parameter'` prefix.
 PARAM_DECL_IMPLICIT: sequence dict {
-  <TYPE_SPEC>:type_spec=@:type="param_implicit",
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  <TYPE_SPEC>:type_spec=@:type="param_implicit" space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
@@ -1074,12 +1075,12 @@ ALWAYS_KEYWORD: choice {
 }
 
 INITIAL_BLOCK: sequence dict {
-  'initial':@:type="initial",
+  'initial':@:type="initial" space,
   <STATEMENT>:body=@
 }
 
 FINAL_BLOCK: sequence dict {
-  'final':@:type="final",
+  'final':@:type="final" space,
   <STATEMENT>:body=@
 }
 
@@ -1133,9 +1134,9 @@ EVENT_SEP_OR: sequence { "" space, 'or':@ space }
 // ─── Module instantiation ───────────────────────────────────────────────
 
 MODULE_INSTANTIATION: sequence dict {
-  <IDENT_OR_MACRO>:module_name=@:type="instance",
-  ?<PARAM_OVERRIDE>:params=@,
-  repeat+ <INSTANCE>:instances[]=@ separator ",",
+  <IDENT_OR_MACRO>:module_name=@:type="instance" space,
+  ?<PARAM_OVERRIDE>:params=@ space,
+  repeat+ <INSTANCE>:instances[]=@ separator "," space,
   ";"
 }
 
@@ -2041,7 +2042,8 @@ RELATIONAL_TAIL: sequence dict { <RELATIONAL_OP>:op=@, <SHIFT_EXPR>:rhs=@ }
 
 // `inside { [1:10], 20, 30, ... }` — set membership. Body captured raw.
 INSIDE_TAIL: sequence dict {
-  'inside':op="inside",
+  "" space,
+  'inside':op="inside" space,
   "{",
   *:body=@,
   "}"
@@ -3311,7 +3313,7 @@ SPECIFY_BLOCK: sequence dict {
 // tolerated via the optional terminator.
 CONCURRENT_ASSERT: sequence dict {
   ?<ASSERTION_LABEL>:label=@,
-  <ASSERT_KIND>:kind=@:type="assert_concurrent",
+  <ASSERT_KIND>:kind=@:type="assert_concurrent" space,
   <ASSERT_KIND_KW>:kind_kw=@,
   "(",
   sv_balanced_arg:body=@,
@@ -3332,12 +3334,12 @@ ASSERT_ACTION: choice {
 
 ASSERT_ACTION_PASS_ELSE: sequence dict {
   <STATEMENT>:pass=@,
-  'else',
+  'else' space,
   <STATEMENT>:fail=@
 }
 
 ASSERT_ACTION_ELSE: sequence dict {
-  'else',
+  'else' space,
   <STATEMENT>:fail=@
 }
 
@@ -3348,7 +3350,7 @@ ASSERT_ACTION_PASS: sequence dict {
 // `label_name :` — optional name prefix on a concurrent assertion.
 // Common pattern: `a1: assert property (...)`. Captured as a
 // separate field so the host can use the label for tooling.
-ASSERTION_LABEL: sequence dict { sv_identifier:name=@, ":" }
+ASSERTION_LABEL: sequence dict { sv_identifier:name=@, ":" space }
 
 ASSERT_KIND: choice {
   'assert':@, 'cover':@, 'assume':@, 'restrict':@
