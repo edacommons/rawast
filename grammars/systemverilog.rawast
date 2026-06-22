@@ -2092,6 +2092,7 @@ UNARY_OP: choice {
 // rather than as a bare macro followed by orphan `'d42`. BASED_NUM
 // uses INT_OR_MACRO at its size slot, so macros-as-size work.
 PRIMARY: choice {
+  <TYPE_CAST_PAREN_EXPR>,
   <PAREN_EXPR>,
   <NULL_LIT>,
   <NEW_EXPR>,
@@ -2185,6 +2186,20 @@ TYPE_CAST: choice {
   <TYPE_CAST_IDENT>,
   <TYPE_CAST_NUM>,
   <TYPE_CAST_SIGNED>
+}
+
+// `(W+3)'(x)` — width-expression cast (IEEE 1800-2017 §6.24.1).
+// The cast width is a parenthesized expression rather than an
+// integer literal or type name. Common pattern when the target
+// width is computed from other parameters: `(DepthW + 3)'(1'b1)`.
+// Lives at PRIMARY level (not inside TYPE_CAST) so it can be tried
+// BEFORE PAREN_EXPR — otherwise `(DepthW + 3)` would match as a
+// regular parenthesized expression and the trailing `'(value)`
+// would never get a chance.
+TYPE_CAST_PAREN_EXPR: sequence dict {
+  "(", <EXPR>:width=@:type="type_cast_paren_expr", ")",
+  "'",
+  "(", <EXPR>:value=@, ")"
 }
 
 TYPE_CAST_IDENT: sequence dict {
@@ -2515,11 +2530,16 @@ STRING_PRIMARY: sequence dict {
 
 // Function call: `name(arg, ...)`. Distinguished from a plain
 // hierarchical reference by the presence of `(` immediately after.
+// Optional trailing `with {...}` constraint clause handles the
+// `std::randomize(args) with {expr}` form (IEEE 1800-2017 §18.7
+// inline randomize) and `array.method() with {expr}` array-method
+// constraints (§7.12.4).
 FUNC_CALL: sequence dict {
   sv_qualified_type:name=@:type="func_call",
   "(",
   repeat <TASK_ARG>:args[]=@ separator ",",
-  ")"
+  ")",
+  ?<WITH_CLAUSE>:with=@
 }
 
 // System function call: `$name(arg, ...)` — same shape as task call
