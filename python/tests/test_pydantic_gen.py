@@ -1015,6 +1015,81 @@ def test_lef_spec_coverage_save_round_trip(tmp_path):
     )
 
 
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def test_lef_pretty_print_indents_cell_body():
+    """Pretty-print indents the LEF MACRO cell-body hierarchy:
+    MACRO(0) -> body(1) -> PIN(1) -> PIN body / PORT(2) -> LAYER(3)
+    -> shapes(4), with closers dedenting. Guards the lefdef
+    `indent`/`tab` wiring against silent regression."""
+    sky = REPO_ROOT / "python" / "tests" / "data" / "sky130_fd_sc_hd_dlymetal6s2s_1.lef"
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
+    ast = g.parse_file(str(sky))
+    out = g.save(ast, pretty=True).decode("utf-8")
+    lines = out.split("\n")
+
+    # Locate the first MACRO and its first PIN / PORT / LAYER / shape.
+    macro_i = next(i for i, l in enumerate(lines) if l.startswith("MACRO "))
+    depths = {}
+    for l in lines[macro_i:]:
+        s = l.strip()
+        if s.startswith("MACRO ") and "MACRO" not in depths:
+            depths["MACRO"] = _indent(l)
+        elif s.startswith("CLASS ") and "CLASS" not in depths:
+            depths["CLASS"] = _indent(l)
+        elif s.startswith("PIN ") and "PIN" not in depths:
+            depths["PIN"] = _indent(l)
+        elif s.startswith("DIRECTION ") and "DIRECTION" not in depths:
+            depths["DIRECTION"] = _indent(l)
+        elif s.startswith("PORT") and "PORT" not in depths:
+            depths["PORT"] = _indent(l)
+        elif s.startswith("LAYER ") and "LAYER" not in depths:
+            depths["LAYER"] = _indent(l)
+        elif s.startswith("RECT ") and "RECT" not in depths:
+            depths["RECT"] = _indent(l)
+            break
+
+    assert depths["MACRO"] == 0
+    assert depths["CLASS"] == 2       # MACRO body, depth 1
+    assert depths["PIN"] == 2         # MACRO body, depth 1
+    assert depths["DIRECTION"] == 4   # PIN body, depth 2
+    assert depths["PORT"] == 4        # PIN body, depth 2
+    assert depths["LAYER"] == 6       # PORT body, depth 3
+    assert depths["RECT"] == 8        # LAYER shapes, depth 4
+
+    # Compact mode emits no indentation.
+    compact = g.save(ast, pretty=False).decode("utf-8")
+    assert "\n  " not in compact
+
+    # Pretty output still round-trips to the same AST.
+    assert g.parse_string(out) == ast
+
+
+def test_def_pretty_print_indents_section_entries():
+    """Every DEF section indents its entries one level under the
+    header. Guards the DEF entry-list `indent tab` wiring."""
+    spec = REPO_ROOT / "python" / "tests" / "data" / "def_spec_coverage.def"
+    g = rawast.Grammar.load(str(GRAMMARS / "lefdef.rawast"))
+    ast = g.parse_string(spec.read_text(), start="DEF")
+    out = g.save(ast, pretty=True, start="DEF").decode("utf-8")
+    lines = out.split("\n")
+
+    for section in ("COMPONENTS", "PINS", "NETS", "VIAS", "SPECIALNETS"):
+        hdr_i = next(
+            (i for i, l in enumerate(lines)
+             if l.startswith(section + " ") and _indent(l) == 0),
+            None,
+        )
+        assert hdr_i is not None, f"{section} header not found at column 0"
+        # The next entry line (starts with `-`) sits one level in.
+        entry = next(l for l in lines[hdr_i + 1:] if l.strip().startswith("-"))
+        assert _indent(entry) == 2, f"{section} entry not indented: {entry!r}"
+
+    assert g.parse_string(out, start="DEF") == ast
+
+
 def test_sky130_multi_antenna_cell_round_trips(tmp_path):
     """A real Sky130 standard cell (sky130_fd_sc_hd__dlymetal6s2s_1)
     whose PIN X carries TWO ANTENNA clauses of different kinds —
