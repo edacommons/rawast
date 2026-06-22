@@ -160,7 +160,7 @@ MODULE_DECL: sequence dict {
 // non-import token (`#`, `(`, or `;`).
 MODULE_HEADER_IMPORT: sequence dict {
   "" space,
-  'import':@:type="module_header_import" space,
+  'import':@:type="module_header_import",
   *:body=@,
   ";"
 }
@@ -1681,9 +1681,9 @@ FOR_INIT_USERTYPE: sequence dict {
 }
 
 FOR_INIT_GENVAR: sequence dict {
-  'genvar':@:type="for_init_genvar",
-  sv_identifier:name=@,
-  "=", <EXPR>:value=@
+  'genvar':@:type="for_init_genvar" space,
+  sv_identifier:name=@ space,
+  "=" space, <EXPR>:value=@
 }
 
 FOR_INIT_DECL: sequence dict {
