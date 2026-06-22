@@ -1152,3 +1152,30 @@ def test_define_then_module_use(sv_grammar):
     range_msb_str = str(port["range"])
     assert "macro_use" in range_msb_str
     assert "WIDTH" in range_msb_str
+
+
+# ─── Save pretty-print: word-token spacing round-trip ───────────────────
+#
+# The SV grammar is parse-oriented (whitespace is skipped on parse and
+# not stored), so save must re-insert spaces between adjacent word
+# tokens or the output merges (`modulem`, `inputclk`, `endendmodule`)
+# and no longer re-parses. These guard the `space` attrs added to the
+# core declaration / statement rules: parse -> save -> re-parse must
+# yield the same AST for the common synthesizable constructs.
+
+@pytest.mark.parametrize("src", [
+    "module m;\nendmodule\n",
+    "module m (input clk, output reg [7:0] q);\nendmodule\n",
+    "module m;\n  logic [7:0] x;\n  wire y;\n  assign y = x[0];\nendmodule\n",
+    "module m;\n  always_ff @(posedge clk) begin\n    q <= d;\n  end\nendmodule\n",
+])
+def test_sv_save_word_spacing_round_trips(sv_grammar, src):
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a)
+    out = out.decode("utf-8") if isinstance(out, bytes) else out
+    # Tokens must not be glued together.
+    for merged in ("modulem", "inputclk", "outputreg", "wirey",
+                   "posedgeclk", "endendmodule", "always_ffbegin"):
+        assert merged not in out, f"token merge {merged!r} in: {out!r}"
+    # Re-parses to the identical AST.
+    assert sv_grammar.parse_string(out) == a

@@ -143,12 +143,12 @@ DPI_EXPORT: sequence dict {
 // ─── Module declaration ─────────────────────────────────────────────────
 
 MODULE_DECL: sequence dict {
-  <MODULE_KEYWORD>:keyword=@:type="module",
+  <MODULE_KEYWORD>:keyword=@:type="module" space,
   <IDENT_OR_MACRO>:name=@,
   repeat <MODULE_HEADER_IMPORT>:header_imports[]=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<PORT_LIST>:ports=@,
-  ";",
+  ";" newline,
   <MODULE_ITEMS>:items=@,
   'endmodule',
   ?<END_LABEL>:end_label=@
@@ -490,9 +490,9 @@ PORT_NAME_CONT: sequence dict {
 // and `pkg::TypeName` qualified forms in one step — collapsing the
 // previous PORT_DECL_ANSI_PKG_USERTYPE variant into this one.
 PORT_DECL_ANSI_USERTYPE: sequence dict {
-  <PORT_DIRECTION>:direction=@,
-  sv_qualified_type:type_spec=@:type="port_decl_usertype",
-  ?<PACKED_DIMENSIONS>:range=@,
+  <PORT_DIRECTION>:direction=@ space,
+  sv_qualified_type:type_spec=@:type="port_decl_usertype" space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
@@ -505,10 +505,10 @@ PORT_LIST_NONANSI: sequence dict {
 
 // ANSI-style port: direction + optional type + optional range + name.
 PORT_DECL_ANSI: sequence dict {
-  <PORT_DIRECTION>:direction=@,
-  ?<TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  <PORT_DIRECTION>:direction=@ space,
+  ?<TYPE_SPEC>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
@@ -681,10 +681,10 @@ PORT_DECL_STMT: sequence dict {
 }
 
 NET_DECL: sequence dict {
-  <NET_KIND>:kind=@:type="net_decl",
-  ?<NET_SIGNING>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  repeat+ <NET_NAME>:names[]=@ separator ",",
+  <NET_KIND>:kind=@:type="net_decl" space,
+  ?<NET_SIGNING>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ <NET_NAME>:names[]=@ separator "," space,
   ";"
 }
 
@@ -707,10 +707,10 @@ NET_NAME: sequence dict {
 NET_INIT: sequence { "=", <EXPR>:initial=@ }
 
 REG_DECL: sequence dict {
-  <REG_KIND>:kind=@:type="reg_decl",
-  ?<NET_SIGNING>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  repeat+ <REG_NAME>:names[]=@ separator ",",
+  <REG_KIND>:kind=@:type="reg_decl" space,
+  ?<NET_SIGNING>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ <REG_NAME>:names[]=@ separator "," space,
   ";"
 }
 
@@ -726,12 +726,12 @@ REG_NAME: sequence dict {
 }
 
 INTEGER_DECL: sequence dict {
-  ?'const':is_const=true,
-  ?'var':is_var=true,
-  <INTEGER_KIND>:kind=@:type="integer_decl",
-  ?<NET_SIGNING>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  repeat+ <REG_NAME>:names[]=@ separator ",",
+  ?'const':is_const=true space,
+  ?'var':is_var=true space,
+  <INTEGER_KIND>:kind=@:type="integer_decl" space,
+  ?<NET_SIGNING>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ <REG_NAME>:names[]=@ separator "," space,
   ";"
 }
 
@@ -959,10 +959,10 @@ LOCALPARAM_DECL_USERTYPE_STMT: sequence dict {
 // Body captured as raw text so the parser doesn't need to enumerate
 // the strength keyword set.
 CONT_ASSIGN: sequence dict {
-  'assign':@:type="cont_assign",
-  ?<DRIVE_STRENGTH>:strength=@,
-  ?<DELAY>:delay=@,
-  repeat+ <ASSIGNMENT_PAIR>:assignments[]=@ separator ",",
+  'assign':@:type="cont_assign" space,
+  ?<DRIVE_STRENGTH>:strength=@ space,
+  ?<DELAY>:delay=@ space,
+  repeat+ <ASSIGNMENT_PAIR>:assignments[]=@ separator "," space,
   ";"
 }
 
@@ -1059,8 +1059,8 @@ DELAY: sequence dict {
 // ─── Always / initial / final ───────────────────────────────────────────
 
 ALWAYS_BLOCK: sequence dict {
-  <ALWAYS_KEYWORD>:kind=@:type="always",
-  ?<EVENT_CONTROL>:sensitivity=@,
+  <ALWAYS_KEYWORD>:kind=@:type="always" space,
+  ?<EVENT_CONTROL>:sensitivity=@ space,
   <STATEMENT>:body=@
 }
 
@@ -1109,7 +1109,7 @@ EVENT_EXPR: sequence array {
 }
 
 EVENT_PRIMARY: sequence dict {
-  ?<EDGE>:edge=@,
+  ?<EDGE>:edge=@ space,
   <EXPR>:signal=@,
   ?<EVENT_IFF>:iff=@
 }
@@ -1559,10 +1559,10 @@ MACRO_STMT: sequence dict {
 NULL_STMT: sequence dict { ";":type="null_stmt" }
 
 BLOCK_STMT: sequence dict {
-  'begin':@:type="block",
+  'begin':@:type="block" space,
   ?<BLOCK_LABEL>,
   repeat <BLOCK_ITEM>:items[]=@,
-  'end':@,
+  'end':@ space,
   ?<END_LABEL>:end_label=@
 }
 
