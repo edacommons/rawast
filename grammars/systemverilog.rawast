@@ -186,6 +186,7 @@ PARAM_PORT_LIST: sequence dict {
 // `<TYPE_SPEC>` (not optional) so it doesn't gobble `parameter
 // MyType x` — that needs to fall through to USERTYPE.
 PARAM_DECL_OR_LOCAL: choice {
+  <PARAM_DECL_LOCALPARAM_USERTYPE>,
   <PARAM_DECL_LOCALPARAM>,
   <PARAM_DECL_TYPE>,
   <PARAM_DECL_TYPE_IMPLICIT>,
@@ -224,6 +225,27 @@ PARAM_DECL_LOCALPARAM: sequence {
   'localparam':@:type="localparam_port",
   ?<TYPE_SPEC>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@,
+  sv_identifier:name=@,
+  ?<PARAM_VALUE_DEFAULT>:default=@
+}
+
+// `localparam <usertype> NAME = expr` — same shape as PARAM_DECL_LOCALPARAM
+// but with a user-defined / package-qualified type instead of a
+// built-in keyword. Tried BEFORE the built-in form so a user type
+// like `sha_word64_t` isn't dropped (PARAM_DECL_LOCALPARAM's
+// `?<TYPE_SPEC>` is optional and would consume just `localparam`,
+// then claim `sha_word64_t` as the name, leaving `ZeroWord` dangling).
+//
+// `!<TYPE_SPEC>` head guard: backs off when the next token is a
+// built-in keyword (`int`, `bit`, …) so this rule doesn't shadow the
+// built-in PARAM_DECL_LOCALPARAM form on `localparam int x = 1`.
+// `sv_qualified_type` here is REQUIRED so the rule fails fast on
+// `localparam x = 1` (no type) and the parser falls through.
+PARAM_DECL_LOCALPARAM_USERTYPE: sequence {
+  'localparam':@:type="localparam_port_usertype",
+  !<TYPE_SPEC>,
+  sv_qualified_type:type_spec=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
@@ -1347,9 +1369,26 @@ TASK_PORT_LIST: sequence dict {
 // would greedily eat `int` as the type and `unsigned` as the name,
 // leaving `num_cycles` as stray content. Made TYPE_SPEC required
 // here so the rule fails on user types and USERTYPED catches them.
+// TASK_PORT_IMPLICIT — function/task port with explicit direction
+// but no type. IEEE 1800-2017 §13.4.2: when a port omits its type,
+// the type defaults to the previous port's type (or `logic` for
+// the first port). Pure parse: captured as `direction + name`; the
+// host can resolve the implicit type from preceding ports if needed.
+//
+// Direction REQUIRED so this rule can't claim plain `name = value`
+// declarations that would actually be TASK_PORT_USERTYPED with a
+// user-defined leading type identifier.
 TASK_PORT: choice {
   <TASK_PORT_BUILTIN>,
-  <TASK_PORT_USERTYPED>
+  <TASK_PORT_USERTYPED>,
+  <TASK_PORT_IMPLICIT>
+}
+
+TASK_PORT_IMPLICIT: sequence dict {
+  <PORT_DIRECTION>:direction=@,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<TASK_PORT_INIT>:init=@
 }
 
 TASK_PORT_BUILTIN: sequence dict {
@@ -1419,6 +1458,8 @@ STATEMENT: choice {
   <INC_DEC_STMT>,
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
+  <FORCE_STMT>,
+  <RELEASE_STMT>,
   <PARAM_STATIC_CALL_STMT>,
   <SYSTEM_TASK_CALL>,
   <VOID_CAST_STMT>,
@@ -1720,6 +1761,20 @@ ASSIGN_OP: choice {
 
 PROC_CONT_ASSIGN: sequence dict {
   'assign':@, <LVALUE>:lhs=@, "=", <EXPR>:rhs=@, ";":type="proc_assign"
+}
+
+// `force lhs = rhs;` / `release lhs;` — procedural continuous
+// assignment overrides (IEEE 1800-2017 §10.6.2). force takes an
+// LVALUE on the left and an expression on the right; release just
+// names the signal whose forced value is being relinquished.
+FORCE_STMT: sequence dict {
+  'force':@:type="force",
+  <LVALUE>:lhs=@, "=", <EXPR>:rhs=@, ";"
+}
+
+RELEASE_STMT: sequence dict {
+  'release':@:type="release",
+  <LVALUE>:lhs=@, ";"
 }
 
 DELAY_OR_EVENT: choice { <DELAY>, <EVENT_CONTROL> }
@@ -2335,11 +2390,29 @@ REPLICATION: sequence dict {
 // outer wrapper needed. A plain `42` emits `{type:"integer",value:42}`
 // directly instead of `{type:"number",number:{kind:"integer",value:42}}`
 // — same information without the redundant nesting.
+// `'0` / `'1` / `'x` / `'z` — unbased unsized literal (IEEE 1800-2017
+// §5.7.1). Expands to a vector with all bits at the indicated value
+// to the target's full width. Tried BEFORE BASED_NUM so the base
+// char `0`/`1`/`x`/`z` matches here first; BASED_NUM's b/o/d/h base
+// chars aren't ambiguous with these because none overlap.
+//
+// `ignore:` (empty list) — no whitespace allowed between `'` and
+// the value char.
 NUMBER: choice {
+  <UNSIZED_LIT>,
   <BASED_NUM>,
   <TIME_LIT>,
   <REAL_NUM>,
   <INTEGER_NUM>
+}
+
+UNSIZED_LIT ignore: sequence dict {
+  "'":type="unsized_lit",
+  <UNSIZED_LIT_VAL>:value=@
+}
+
+UNSIZED_LIT_VAL: choice {
+  "0":@, "1":@, "x":@, "X":@, "z":@, "Z":@
 }
 
 // `ignore:` (empty list) disables whitespace skipping for this rule's
@@ -3491,7 +3564,7 @@ METHOD_CALL_STMT: sequence dict {
   sv_identifier:name=@:type="method_call_stmt",
   repeat+ <HIER_PART>:path[]=@,
   "(",
-  repeat <EXPR>:args[]=@ separator ",",
+  repeat <TASK_ARG>:args[]=@ separator ",",
   ")",
   ?<WITH_CLAUSE>:with=@,
   ";"
