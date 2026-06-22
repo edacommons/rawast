@@ -1216,3 +1216,18 @@ def test_sv_param_decl_shapes_save_dispatch(sv_grammar):
     assert len(params) == 2
     assert params[0]["name"] == "W" and params[1]["name"] == "D"
     assert sv_grammar.parse_string(sv_grammar.save(b).decode("utf-8")) == b
+
+
+def test_sv_named_call_arg_value_round_trips(sv_grammar):
+    """Named function-call args `.name(expr)` keep their value through
+    save. TASK_ARG_NAMED_VALUE used to be a `sequence dict` bound via
+    `:value=@`, double-nesting as `value:{value:expr}`; on save the
+    inner value was dropped (`.rlist(rlist)` -> `.rlist()`). Flattening
+    it to a non-container pass-through fixed the round-trip."""
+    for arg in (".rlist(rlist)", ".clk(clk)", ".n(a + b)"):
+        a = sv_grammar.parse_string(
+            f"module m;\n  assign y = foo({arg});\nendmodule\n")
+        out = sv_grammar.save(a)
+        out = out.decode("utf-8") if isinstance(out, bytes) else out
+        assert "()" not in out, f"value dropped for {arg}: {out!r}"
+        assert sv_grammar.parse_string(out) == a
