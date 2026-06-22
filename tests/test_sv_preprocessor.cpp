@@ -437,6 +437,23 @@ TEST_CASE("sv_pp define: body MACRO_USE multi arg round-trips") {
     CHECK(save(g, ast) == "`define A `OTHER(x,y,z)\n");
 }
 
+// TEXT_LINE's leading `!"`endif" !"`else" !"`elsif"` negative-lookahead
+// guards are zero-width parse-time assertions — they must emit NOTHING
+// on save. Regression guard: a top-level macro-use line previously
+// round-tripped with a spurious "`endif`else`elsif" prefix because the
+// save engine emitted negative-lookahead Key literals verbatim.
+TEST_CASE("sv_pp TEXT_LINE: top-level macro-use line round-trips clean") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`OTHER(x,y,z)\n");
+    CHECK(save(g, ast) == "`OTHER(x,y,z)\n");
+}
+
+TEST_CASE("sv_pp TEXT_LINE: plain text line round-trips clean") {
+    auto g = load_grammar();
+    auto ast = parse(g, "some plain text\n");
+    CHECK(save(g, ast) == "some plain text\n");
+}
+
 // ─── Richer MACRO_ARGS — LRM §22.5.1 balanced-token args ───────────────
 //
 // MACRO_ARGS captures each arg as a balanced-paren token run terminating

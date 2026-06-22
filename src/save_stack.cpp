@@ -1786,6 +1786,16 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     const Node& n    = g.node(rid);
     const bool ref_diff = (rid.value() != node_id.value());
 
+    // Negative lookahead (`!X`) is a zero-width parse-time assertion:
+    // it consumes no input and binds no value. On the save side it must
+    // emit nothing and pull nothing from the value stream — otherwise
+    // the asserted token leaks into the output as spurious text. Covers
+    // both `!"literal"` (Key) and `!<RULE>` (Ref) forms; the `!` lives
+    // on the node as referenced, so check `orig`. Example: TEXT_LINE's
+    // leading `!"`endif" !"`else" !"`elsif"` guards were being emitted
+    // verbatim, prefixing every saved top-level text line.
+    if (orig.is_negative) return {};
+
     int body_depth = depth;
     if (pretty) {
         if (orig.depth_in) ++body_depth;
