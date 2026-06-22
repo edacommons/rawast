@@ -1338,6 +1338,7 @@ TASK_PORT_BUILTIN: sequence dict {
   ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
   sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
 }
 
@@ -3240,10 +3241,10 @@ CHECKER_DECL: sequence dict {
 }
 
 // `fork <stmts> join` / `join_any` / `join_none` — concurrent block.
-// Split into three rules because `*` raw-consume requires a literal
-// Key terminator (not a Choice/Ref). Tried in order: most-specific
-// suffix first so `join_none` and `join_any` aren't claimed as
-// plain `join` followed by garbage.
+// Body is `repeat <BLOCK_ITEM>` (not a `*:body=@` raw-scan) so a nested
+// `fork ... join_any` inside the outer `fork ... join` doesn't trick
+// the wildcard's first-match scan into claiming the inner `join_any`
+// as the outer terminator. Tried most-specific suffix first.
 FORK_JOIN: choice {
   <FORK_JOIN_NONE>,
   <FORK_JOIN_ANY>,
@@ -3252,20 +3253,26 @@ FORK_JOIN: choice {
 
 FORK_JOIN_NONE: sequence dict {
   'fork':@:type="fork_join_none",
-  *:body=@,
-  'join_none'
+  ?<BLOCK_LABEL>,
+  repeat <BLOCK_ITEM>:items[]=@,
+  'join_none',
+  ?<END_LABEL>:end_label=@
 }
 
 FORK_JOIN_ANY: sequence dict {
   'fork':@:type="fork_join_any",
-  *:body=@,
-  'join_any'
+  ?<BLOCK_LABEL>,
+  repeat <BLOCK_ITEM>:items[]=@,
+  'join_any',
+  ?<END_LABEL>:end_label=@
 }
 
 FORK_JOIN_PLAIN: sequence dict {
   'fork':@:type="fork_join",
-  *:body=@,
-  'join'
+  ?<BLOCK_LABEL>,
+  repeat <BLOCK_ITEM>:items[]=@,
+  'join',
+  ?<END_LABEL>:end_label=@
 }
 
 // Immediate assertion inside procedural code:
