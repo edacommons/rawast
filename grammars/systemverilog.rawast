@@ -350,6 +350,7 @@ SV_RESERVED: choice {
   'endmodule':@,  'endpackage':@, 'endprimitive':@, 'endprogram':@,
   'endproperty':@, 'endsequence':@, 'endspecify':@, 'endtask':@,
   'endchecker':@,
+  'join_none':@, 'join_any':@, 'join':@,
   'end':@,    'else':@,    'begin':@
 }
 
