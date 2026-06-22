@@ -221,7 +221,7 @@ PARAM_DECL_USERTYPE_BARE: sequence dict {
 }
 
 // `localparam [type] NAME = expr` — non-overridable derived parameter.
-PARAM_DECL_LOCALPARAM: sequence {
+PARAM_DECL_LOCALPARAM: sequence dict {
   'localparam':@:type="localparam_port" space,
   ?<TYPE_SPEC>:type_spec=@ space,
   ?<SIGNING_KW>:signing=@ space,
@@ -242,7 +242,7 @@ PARAM_DECL_LOCALPARAM: sequence {
 // built-in PARAM_DECL_LOCALPARAM form on `localparam int x = 1`.
 // `sv_qualified_type` here is REQUIRED so the rule fails fast on
 // `localparam x = 1` (no type) and the parser falls through.
-PARAM_DECL_LOCALPARAM_USERTYPE: sequence {
+PARAM_DECL_LOCALPARAM_USERTYPE: sequence dict {
   'localparam':@:type="localparam_port_usertype",
   !<TYPE_SPEC>,
   sv_qualified_type:type_spec=@,
@@ -272,10 +272,10 @@ PARAM_DECL: choice {
 // `sv_qualified_type:type_spec=@` would happily eat NAME and then
 // fail when the trailing `=` isn't followed by another identifier
 // for the actual parameter name. Requires `=` to commit the match.
-PARAM_DECL_UNTYPED: sequence {
-  'parameter':@:type="param_untyped",
-  sv_identifier:name=@,
-  "=", <EXPR>:value=@
+PARAM_DECL_UNTYPED: sequence dict {
+  'parameter':@:type="param_untyped" space,
+  sv_identifier:name=@ space,
+  "=" space, <EXPR>:value=@
 }
 
 // `parameter [<pkg>::]<type_name> <NAME> [= <expr>]` — user-typed
@@ -314,7 +314,7 @@ PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 // when the parameter type is a built-in keyword. `parameter MyType x`
 // falls through to PARAM_DECL_USERTYPE which reads the type via
 // sv_qualified_type.
-PARAM_DECL_VALUE: sequence {
+PARAM_DECL_VALUE: sequence dict {
   'parameter':@:type="param" space,
   <TYPE_SPEC>:type_spec=@ space,
   ?<SIGNING_KW>:signing=@ space,
@@ -915,7 +915,7 @@ USER_TYPED_DECL: sequence dict {
   ";"
 }
 
-PARAM_DECL_STMT: sequence dict {
+PARAM_DECL_STMT: sequence {
   <PARAM_DECL>,
   ";"
 }

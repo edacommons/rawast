@@ -1192,3 +1192,27 @@ def test_sv_save_word_spacing_round_trips(sv_grammar, src):
         assert merged not in out, f"token merge {merged!r} in: {out!r}"
     # Re-parses to the identical AST.
     assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_param_decl_shapes_save_dispatch(sv_grammar):
+    """Every PARAM_DECL alternative is a dict-container and PARAM_DECL_STMT
+    is a non-container pass-through, so module-item params parse to proper
+    distinct dicts (not an empty {} or a collapsed list) and save-dispatch.
+    Regression for the user-typed param losing all fields to {} and the
+    `#(parameter, localparam)` 2->1 collapse."""
+    # User-typed module-item parameter: keeps name/type_spec/default.
+    a = sv_grammar.parse_string(
+        "package p;\n  parameter lfsr_perm_t X = 5;\nendpackage\n")
+    item = a["descriptions"][0]["items"][0]
+    assert item["type"] == "param_usertype"
+    assert item["name"] == "X"
+    assert item["type_spec"] == "lfsr_perm_t"
+    assert sv_grammar.parse_string(sv_grammar.save(a).decode("utf-8")) == a
+
+    # Multi-param `#(...)`: two distinct param dicts, no collapse.
+    b = sv_grammar.parse_string(
+        "module m #(parameter int W = 8, localparam D = 4) ();\nendmodule\n")
+    params = b["descriptions"][0]["param_ports"]["params"]
+    assert len(params) == 2
+    assert params[0]["name"] == "W" and params[1]["name"] == "D"
+    assert sv_grammar.parse_string(sv_grammar.save(b).decode("utf-8")) == b
