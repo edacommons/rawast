@@ -26,9 +26,9 @@ ValuePtr parse_with(const Grammar& g, std::string input) {
     return *r;
 }
 
-std::string save_with(const Grammar& g, ValuePtr value) {
+std::string save_with(const Grammar& g, ValuePtr value, bool pretty = true) {
     std::ostringstream out;
-    auto r = g.save(out, std::move(value));
+    auto r = g.save(out, std::move(value), pretty);
     REQUIRE(r);
     return out.str();
 }
@@ -140,13 +140,17 @@ TEST_CASE("Loaded JSON grammar parses nested input identically to native") {
     CHECK(save_with(g_loaded, v_loaded) == save_with(g_loaded, v_native));
 }
 
-TEST_CASE("Loaded JSON grammar round-trips to canonical text via its own save") {
+TEST_CASE("Loaded JSON grammar round-trips to canonical compact text via its own save") {
     auto g = make_json_target();
     REQUIRE(load_json_grammar_from_file(g, "grammars/json.json"));
 
+    // Compact save (pretty=false) reproduces the input byte-for-byte.
+    // The default pretty=true save indents (json.json carries
+    // newline/tab/indent attrs); that form is exercised in test_pretty
+    // and the Python suite.
     const std::string input = R"({"a":1,"b":[true,false,null]})";
     auto v = parse_with(g, input);
-    CHECK(save_with(g, v) == input);
+    CHECK(save_with(g, v, /*pretty=*/false) == input);
 }
 
 TEST_CASE("Loader: file not found yields a useful error") {
