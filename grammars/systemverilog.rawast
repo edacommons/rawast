@@ -490,8 +490,18 @@ PORT_DECL_ANSI: sequence dict {
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
 
+// `const ref` (IEEE 1800-2017 §13.5.2) is the read-only-pass-by-reference
+// direction for function/task ports — taken atomically so the leading
+// `const` doesn't get claimed as a type modifier elsewhere. Tried before
+// bare `ref` so the longer match wins.
 PORT_DIRECTION: choice {
+  <CONST_REF_DIR>,
   'input':@, 'output':@, 'inout':@, 'ref':@
+}
+
+CONST_REF_DIR: sequence dict {
+  'const':@:type="const_ref",
+  'ref'
 }
 
 // `[7:0]` — packed dimension (in bit position).
@@ -803,7 +813,12 @@ UNION_TYPE: sequence dict {
 }
 
 // Struct/union field: `<TYPE> [range] <NAME> [unpacked-dim] [= init];`.
+// Optional `rand` / `randc` qualifier — used when the struct is a
+// class property whose enclosing class invokes `randomize()`, the
+// per-field constrained-random qualifier comes through (IEEE
+// 1800-2017 §18.4) before the type. Pure parse: captured as text.
 STRUCT_FIELD: sequence dict {
+  ?<RAND_QUALIFIER>:rand=@,
   <STRUCT_FIELD_TYPE>:type_spec=@,
   ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
@@ -811,6 +826,11 @@ STRUCT_FIELD: sequence dict {
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<STRUCT_FIELD_INIT>:init=@,
   ";"
+}
+
+RAND_QUALIFIER: choice {
+  'randc':@,
+  'rand':@
 }
 
 STRUCT_FIELD_TYPE: choice {
@@ -1396,6 +1416,7 @@ STATEMENT: choice {
   <BREAK_STMT>,
   <CONTINUE_STMT>,
   <LOCAL_VAR_DECL>,
+  <INC_DEC_STMT>,
   <ASSIGN_STMT>,
   <PROC_CONT_ASSIGN>,
   <PARAM_STATIC_CALL_STMT>,
@@ -1623,6 +1644,27 @@ FOR_STEP_PRE_INCDEC: sequence dict {
 }
 
 INC_DEC_OP: choice { "++":@, "--":@ }
+
+// `x++;` / `++x;` / `x--;` / `--x;` — increment/decrement as a
+// statement (IEEE 1800-2017 §11.4.2). Post-form (lhs then op) tried
+// before pre-form so `x++` doesn't fall through to `++x` after the
+// LVALUE failed to match a leading `++`. Both forms require `;`.
+INC_DEC_STMT: choice {
+  <INC_DEC_STMT_POST>,
+  <INC_DEC_STMT_PRE>
+}
+
+INC_DEC_STMT_POST: sequence dict {
+  <LVALUE>:lhs=@:type="inc_dec_stmt_post",
+  <INC_DEC_OP>:op=@,
+  ";"
+}
+
+INC_DEC_STMT_PRE: sequence dict {
+  <INC_DEC_OP>:op=@:type="inc_dec_stmt_pre",
+  <LVALUE>:lhs=@,
+  ";"
+}
 
 WHILE_STMT: sequence dict {
   'while':@:type="while",

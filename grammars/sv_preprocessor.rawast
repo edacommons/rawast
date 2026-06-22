@@ -145,8 +145,27 @@ TEXT_LINE ignore: sequence dict {
 DEFINE: sequence dict {
   "`define":type="define" space,
   <DECL>:decl=@ space,
-  scope array { <STRINGIFY>, <TOKEN_PASTE>, <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT> }:body=@,
+  <DEFINE_BODY>:body=@,
   "\n"
+}
+
+// Override PP_FILE's inherited `ignore linespace line_comment`,
+// keeping ONLY `linespace`. line_comment must NOT strip `// ...`
+// inside the macro body — if it did, the `//` would be consumed
+// but the trailing comment identifiers (`// init` → `init`) would
+// survive as PARAM_REF INNER matches, leaking the comment WORDS
+// into the body without their `//` marker. With line_comment
+// dropped from the ignore set here, the `//` and the rest of the
+// comment text are captured as raw bytes in a literal segment,
+// and handle_define strips them with full segment-aware skip
+// (find `//` in a literal segment, then drop subsequent typed
+// segments up to the next LINE_CONT boundary).
+//
+// `linespace` is kept so MACRO_USE inside a body still matches
+// `\`OTHER (x)` (LRM §22.5.1 allows whitespace between macro name
+// and the opening `(` at the use site).
+DEFINE_BODY ignore linespace: scope array {
+  <STRINGIFY>, <TOKEN_PASTE>, <MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT>
 }
 
 // `\`\`` — token paste operator (IEEE 1800-2017 §22.5.1). Adjacent

@@ -1023,6 +1023,41 @@ std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
             out += render_segment(seg);
         }
     }
+
+    // Strip `//` line comments from the rendered body. Line comments
+    // in multi-line macro bodies survive the define-time strip when
+    // they straddle segment boundaries (the `\<newline>` LINE_CONT
+    // consumes the newline, splitting `// comment text` across two
+    // StringValue segments with no `\n` to anchor the strip). After
+    // the body is fully rendered into one string, a single pass
+    // catches them. Block comments and string-quoted `//` are
+    // respected. Per common SV preprocessor convention (VCS,
+    // Verilator, Icarus).
+    {
+        std::string stripped;
+        stripped.reserve(out.size());
+        bool in_string = false;
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            char c = out[i];
+            if (in_string) {
+                stripped.push_back(c);
+                if (c == '\\' && i + 1 < out.size()) {
+                    stripped.push_back(out[++i]);
+                    continue;
+                }
+                if (c == '"') in_string = false;
+                continue;
+            }
+            if (c == '"') { in_string = true; stripped.push_back(c); continue; }
+            if (c == '/' && i + 1 < out.size() && out[i + 1] == '/') {
+                while (i < out.size() && out[i] != '\n') ++i;
+                if (i < out.size()) stripped.push_back(' ');
+                continue;
+            }
+            stripped.push_back(c);
+        }
+        out = std::move(stripped);
+    }
     return out;
 }
 
@@ -1210,13 +1245,13 @@ void Preprocessor::handle_define(const DictValue& d) {
                     m.is_function_like = true;
                 }
             }
-            // Strip `\<newline>` line continuations from "literal"
+            // Strip `\<newline>` line continuations from literal body
             // segments. The grammar captures them as part of the
-            // source text but the macro's logical body should be the
-            // joined form. Without this, multi-line `\`define` bodies
-            // expand with stray `\` chars that the SV grammar then
-            // rejects. Same transform as the legacy-string path
-            // below — applied here on a per-segment basis.
+            // source text but the macro's logical body is the joined
+            // form. Line comments are handled separately below
+            // (segment-aware skip until next LINE_CONT boundary) so
+            // we don't strip `//` here — doing so would hide it from
+            // the `find("//")` check used to trigger comment-mode.
             auto strip_continuations = [](std::string in) {
                 std::string out;
                 out.reserve(in.size());
@@ -1234,8 +1269,45 @@ void Preprocessor::handle_define(const DictValue& d) {
                 }
                 return out;
             };
+            // The sv_preprocessor body scope emits literal text as
+            // bare StringValue segments interleaved with typed dicts
+            // (macro_use / ref / string / stringify / token_paste) and
+            // null entries (LINE_CONT matches at source-line ends).
+            //
+            // Apply two transforms here:
+            //   1. strip_continuations to bare StringValues (and the
+            //      legacy `{type:"literal", value:"…"}` shape) — the
+            //      body's logical content is the joined form.
+            //   2. drop every segment from the FIRST `//` in a bare
+            //      StringValue up to (but not including) the next
+            //      null entry, which marks the next LINE_CONT boundary
+            //      (i.e. the source-line break). The `//` token would
+            //      otherwise survive into the expanded body and, once
+            //      LINE_CONTs are joined, swallow everything until the
+            //      next host-stream `\n` — including subsequent body
+            //      content and trailing host code.
             auto rewritten = std::make_shared<ArrayValue>();
+            bool skip_until_line_end = false;
             for (const auto& seg : body_arr->data()) {
+                // null = LINE_CONT match (no save fields) marking a
+                // source-line break. Always emit it to preserve the
+                // segment-array shape, and reset comment-skip state.
+                if (!seg) {
+                    rewritten->data().push_back(seg);
+                    skip_until_line_end = false;
+                    continue;
+                }
+                if (skip_until_line_end) continue;
+                if (auto vs = as_string(seg)) {
+                    auto joined = strip_continuations(vs->data());
+                    auto slash = joined.find("//");
+                    if (slash != std::string::npos) {
+                        joined.resize(slash);
+                        skip_until_line_end = true;
+                    }
+                    rewritten->data().push_back(make_string(std::move(joined)));
+                    continue;
+                }
                 auto sd = as_dict(seg);
                 if (!sd) { rewritten->data().push_back(seg); continue; }
                 auto type_it = sd->data().find("type");
@@ -1282,11 +1354,39 @@ void Preprocessor::handle_define(const DictValue& d) {
     // bodies expand as one logical sequence. Without this, the `\`
     // chars leak into the output as stray line-continuation markers
     // and the SV grammar rejects them.
+    //
+    // Line comments (`// ...`) inside multi-line macro bodies are
+    // stripped here too: once `\<newline>` continuations are joined,
+    // any `//` in the body would run to the next *output*-stream `\n`
+    // (which comes from the macro INVOCATION's surrounding context),
+    // swallowing both the rest of the macro body and trailing host
+    // code. SV preprocessor convention (matching VCS, Verilator,
+    // Icarus) is to strip `//` comments from the body at define-time
+    // so the expanded text contains the actual macro content rather
+    // than collapsing into one big comment.
+    //
+    // Block comments `/* ... */` are not stripped: they don't have
+    // the line-terminated swallow problem.
+    //
+    // String literals are respected so `"//"` inside a string doesn't
+    // trigger comment stripping.
     {
         std::string joined;
         joined.reserve(raw_body.size());
+        bool in_string = false;
         for (std::size_t i = 0; i < raw_body.size(); ++i) {
-            if (raw_body[i] == '\\' && i + 1 < raw_body.size()) {
+            char c = raw_body[i];
+            if (in_string) {
+                joined.push_back(c);
+                if (c == '\\' && i + 1 < raw_body.size()) {
+                    joined.push_back(raw_body[++i]);
+                    continue;
+                }
+                if (c == '"') in_string = false;
+                continue;
+            }
+            if (c == '"') { in_string = true; joined.push_back(c); continue; }
+            if (c == '\\' && i + 1 < raw_body.size()) {
                 if (raw_body[i + 1] == '\n') { joined.push_back(' '); ++i; continue; }
                 if (raw_body[i + 1] == '\r') {
                     joined.push_back(' ');
@@ -1295,7 +1395,24 @@ void Preprocessor::handle_define(const DictValue& d) {
                     continue;
                 }
             }
-            joined.push_back(raw_body[i]);
+            if (c == '/' && i + 1 < raw_body.size() && raw_body[i + 1] == '/') {
+                // Skip until the next unescaped newline. A `\<newline>`
+                // inside the comment is part of the source-line
+                // continuation, not the comment terminator — but since
+                // we're dropping the comment anyway it doesn't matter:
+                // we stop at the first `\n` regardless and let the
+                // outer body terminator (the bare `\n` at end-of-define)
+                // handle the rest.
+                while (i < raw_body.size() && raw_body[i] != '\n') ++i;
+                if (i < raw_body.size()) {
+                    // Preserve any whitespace structure: drop the
+                    // comment text but keep the newline-equivalent as
+                    // a single space (matches the LINE_CONT join above).
+                    joined.push_back(' ');
+                }
+                continue;
+            }
+            joined.push_back(c);
         }
         raw_body = std::move(joined);
     }
