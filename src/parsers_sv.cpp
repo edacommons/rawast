@@ -207,6 +207,30 @@ WalkResult SvBalancedArgParser::walk(StreamReader& sr) {
     int brace = 0;
     int brack = 0;
     while (auto c = sr.peek()) {
+        // String literal — consume the whole `"…"` (honouring `\"`
+        // escapes) so a `,` or `)` inside it doesn't end the arg.
+        // Without this, `\`FOO("a, b")` would split at the inner
+        // comma, and a `\`define FOO(x = "a, b")` default would
+        // truncate. Brackets inside the string are also ignored.
+        if (*c == '"') {
+            out.push_back(*c);
+            sr.get();
+            while (auto sc = sr.peek()) {
+                out.push_back(*sc);
+                sr.get();
+                if (*sc == '\\') {
+                    // Escaped char (e.g. `\"`, `\\`) — take the next
+                    // byte verbatim, it can't close the string.
+                    if (auto esc = sr.peek()) {
+                        out.push_back(*esc);
+                        sr.get();
+                    }
+                    continue;
+                }
+                if (*sc == '"') break;  // closing quote
+            }
+            continue;
+        }
         // At outermost depth (zero of every bracket), a `,` or `)`
         // ends this argument. Inside nested `()`/`{}`/`[]` they're
         // regular content — so `x inside {1, 2}` and `arr[0, 1]`

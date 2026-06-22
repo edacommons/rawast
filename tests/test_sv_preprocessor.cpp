@@ -440,9 +440,10 @@ TEST_CASE("sv_pp define: body MACRO_USE multi arg round-trips") {
 // ─── Richer MACRO_ARGS — LRM §22.5.1 balanced-token args ───────────────
 //
 // MACRO_ARGS captures each arg as a balanced-paren token run terminating
-// at the top-level `,` or `)`. The grammar uses nested PAREN / BRACKET /
-// BRACE / std.string INNERs so embedded commas and closing parens inside
-// nested structures don't end the arg. AST shape is preserved
+// at the top-level `,` or `)`. It uses the `sv_balanced_arg` scanner
+// (shared with PARAM_FORMAL_DEFAULT) which follows `()`/`{}`/`[]` nesting
+// and skips string literals, so embedded commas and closing parens inside
+// nested structures or strings don't end the arg. AST shape is preserved
 // (ArrayValue<StringValue>) — each StringValue holds the arg's raw bytes.
 
 // Helper: pull the args array out of a body whose first segment is a
@@ -478,8 +479,8 @@ TEST_CASE("sv_pp MACRO_ARGS: string literal arg") {
     auto args = macro_use_args(ast);
     REQUIRE(args->data().size() == 1);
     // The arg span captures the string literal verbatim; the embedded
-    // `,` inside the quotes does NOT split the args list (std.string
-    // INNER consumes the whole `"…"` atomically).
+    // `,` inside the quotes does NOT split the args list (sv_balanced_arg
+    // skips the whole `"…"` so the inner `,` isn't a top-level separator).
     CHECK(as_string(args->data()[0])->data() == "\"hello, world\"");
 }
 
@@ -508,6 +509,29 @@ TEST_CASE("sv_pp MACRO_ARGS: nested function call arg") {
     REQUIRE(args->data().size() == 2);
     CHECK(as_string(args->data()[0])->data() == "foo(1, 2)");
     CHECK(as_string(args->data()[1])->data() == "3");
+}
+
+// PARAM_FORMAL_DEFAULT shares the `sv_balanced_arg` scanner with
+// MACRO_ARGS, so a formal whose default value is a string literal
+// containing a top-level `,` captures the whole string rather than
+// truncating at the inner comma. Regression guard for the scanner's
+// string-literal skipping.
+TEST_CASE("sv_pp DECL: formal default is a string with a comma") {
+    auto g = load_grammar();
+    auto ast = parse(g, "`define FOO(x = \"a, b\") body\n");
+    auto def = std::dynamic_pointer_cast<DictValue>(ast);
+    REQUIRE(def);
+    auto decl = std::dynamic_pointer_cast<DictValue>(def->data()["decl"]);
+    REQUIRE(decl);
+    auto params = std::dynamic_pointer_cast<ArrayValue>(decl->data()["params"]);
+    REQUIRE(params);
+    REQUIRE(params->data().size() == 1);
+    auto p0 = std::dynamic_pointer_cast<DictValue>(params->data()[0]);
+    REQUIRE(p0);
+    CHECK(str_field(p0, "name") == "x");
+    auto dflt = std::dynamic_pointer_cast<DictValue>(p0->data()["default"]);
+    REQUIRE(dflt);
+    CHECK(as_string(dflt->data()["value"])->data() == "\"a, b\"");
 }
 
 // End-to-end: the canonical case from earlier debugging — `\`DOUBLE(5)`
