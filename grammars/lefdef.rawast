@@ -189,7 +189,7 @@ SPACING_BLOCK: sequence dict {
   "END" space, 'SPACING' newline
 }
 
-SAMENET_RULES: sequence array { repeat <SAMENET_RULE> }
+SAMENET_RULES: sequence array { repeat <SAMENET_RULE> indent tab }
 
 SAMENET_RULE: sequence dict {
   "SAMENET" space,
@@ -216,7 +216,7 @@ PROPERTYDEFINITIONS_BLOCK: sequence dict {
   "END" space, "PROPERTYDEFINITIONS" newline
 }
 
-PROPDEFS: sequence array { repeat <PROPDEF> }
+PROPDEFS: sequence array { repeat <PROPDEF> indent tab }
 
 // Discriminate the object kind via a Choice so that "END" — also a
 // valid lefdef identifier — fails the PROPDEF match immediately
@@ -398,7 +398,7 @@ UNITS_COMPACT_CMD: sequence dict {
 
 UNITS_BLOCK: sequence dict {
   "UNITS":type="Units" newline,
-  repeat <UNITS_SUB>,
+  repeat <UNITS_SUB> indent tab,
   "END" space, "UNITS" newline
 }
 
@@ -453,7 +453,7 @@ FREQUENCY_CMD:   sequence { "FREQUENCY"   space, "MEGAHERTZ"   space, <NUMBER>:f
 SITE_BLOCK: sequence dict {
   "SITE":type="Site" space,
   identifier:name=@ newline,
-  repeat <SITE_PROPERTY>,
+  repeat <SITE_PROPERTY> indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -1092,7 +1092,7 @@ MACRO_OBS: sequence dict {
 LAYER_BLOCK: sequence dict {
   "LAYER":type="Layer" space,
   identifier:name=@ newline,
-  repeat <LAYER_BODY_ITEM>,
+  repeat <LAYER_BODY_ITEM> indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -1355,15 +1355,15 @@ VIA_GEOMETRY_BODY: sequence {
 }
 
 VIA_VIARULE_BODY: sequence {
-  "VIARULE" space, identifier:via_rule=@ space, ";" newline,
-  <VIA_CUTSIZE>:cut_size=@,
-  <VIA_LAYERS>:layers=@,
-  <VIA_CUTSPACING>:cut_spacing=@,
-  <VIA_ENCLOSURE>:enclosure=@,
-  ?<VIA_ROWCOL>:rowcol=@,
-  ?<ORIGIN_CMD>:origin=@,
-  ?<VIA_OFFSET>:offset=@,
-  ?<VIA_PATTERN_CMD>
+  "VIARULE" indent tab space, identifier:via_rule=@ space, ";" newline,
+  <VIA_CUTSIZE>:cut_size=@ indent tab,
+  <VIA_LAYERS>:layers=@ indent tab,
+  <VIA_CUTSPACING>:cut_spacing=@ indent tab,
+  <VIA_ENCLOSURE>:enclosure=@ indent tab,
+  ?<VIA_ROWCOL>:rowcol=@ indent tab,
+  ?<ORIGIN_CMD>:origin=@ indent tab,
+  ?<VIA_OFFSET>:offset=@ indent tab,
+  ?<VIA_PATTERN_CMD> indent tab
 }
 
 // Each VIA-VIARULE sub-clause is its own dict-container; the body
@@ -1399,7 +1399,7 @@ VIA_OFFSET: sequence dict {
 // directly on the VIA dict (no `{pattern: {pattern: ...}}` redundancy).
 VIA_PATTERN_CMD: sequence { "PATTERN" space, identifier:pattern=@ space, ";" newline }
 
-VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> }
+VIA_PROPERTIES: sequence array { repeat <VIA_PROPERTY> indent tab }
 
 // LEF keyword spec-uppercase ("VIA") but some real tools emit
 // mixed-case ("Via"). Accept both.
@@ -1452,7 +1452,7 @@ VIA_LAYER_GROUP: sequence dict {
   <VIA_SHAPES>:shapes=@
 }
 
-VIA_SHAPES: sequence array { repeat+ <VIA_SHAPE> }
+VIA_SHAPES: sequence array { repeat+ <VIA_SHAPE> indent tab }
 // VIA layer-group shapes reuse the same RECT_SHAPE / POLYGON_SHAPE
 // rules used by PORT/OBS layerGeometries. The optional MASK /
 // ITERATE / STEP_PATTERN modifiers don't fire on bare VIA shapes;
@@ -1486,7 +1486,7 @@ VIARULE_BLOCK: sequence dict {
   ?<VIARULE_GENERATE_KW>,
   ?<VIA_DEFAULT_KW>,
   <VIARULE_LAYER_SECTIONS>:layers=@,
-  repeat <VIARULE_VIA_REF>:vias[]=@,
+  repeat <VIARULE_VIA_REF>:vias[]=@ indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -1496,7 +1496,7 @@ VIARULE_VIA_REF: sequence dict {
   "VIA":type="Via" space, identifier:name=@ space, ";" newline
 }
 
-VIARULE_LAYER_SECTIONS: sequence array { repeat <VIARULE_LAYER_SECTION> }
+VIARULE_LAYER_SECTIONS: sequence array { repeat <VIARULE_LAYER_SECTION> indent tab }
 
 // LEF keyword spec-uppercase ("VIARULE") but some real tools emit
 // mixed-case ("ViaRULE"). Accept both.
@@ -1505,7 +1505,7 @@ VIARULE_KW: choice {
   "ViaRULE":@
 }
 
-VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }
+VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true newline }
 
 // VIARULE body: one or more LAYER sections, each grouping the LAYER
 // name with its specific sub-clauses (ENCLOSURE / RECT / SPACING /
@@ -1520,7 +1520,7 @@ VIARULE_GENERATE_KW: sequence { "GENERATE":is_generate=true space }
 // they share the same LAYER + sub-clause shape.
 VIARULE_LAYER_SECTION: sequence dict {
   "LAYER" space, identifier:name=@ space, ";" newline,
-  repeat <VIARULE_LAYER_SUB>
+  repeat <VIARULE_LAYER_SUB> indent tab
 }
 
 VIARULE_LAYER_SUB: choice {
@@ -1589,7 +1589,7 @@ NONDEFAULTRULE_BLOCK: sequence dict {
   "END" space, identifier:end_name=@ newline
 }
 
-NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> }
+NDR_PROPERTIES: sequence array { repeat <NDR_PROPERTY> indent tab }
 
 // Choice ordering: USEVIARULE before USEVIA (no prefix overlap
 // but kept consistent), VIARULE before VIA, MINCUTS before any
