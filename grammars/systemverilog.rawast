@@ -222,11 +222,11 @@ PARAM_DECL_USERTYPE_BARE: sequence dict {
 
 // `localparam [type] NAME = expr` — non-overridable derived parameter.
 PARAM_DECL_LOCALPARAM: sequence {
-  'localparam':@:type="localparam_port",
-  ?<TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  'localparam':@:type="localparam_port" space,
+  ?<TYPE_SPEC>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
 
@@ -315,11 +315,11 @@ PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
 // falls through to PARAM_DECL_USERTYPE which reads the type via
 // sv_qualified_type.
 PARAM_DECL_VALUE: sequence {
-  'parameter':@:type="param",
-  <TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  'parameter':@:type="param" space,
+  <TYPE_SPEC>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
@@ -354,7 +354,7 @@ SV_RESERVED: choice {
   'end':@,    'else':@,    'begin':@
 }
 
-PARAM_VALUE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
+PARAM_VALUE_DEFAULT: sequence dict { "=" space, <EXPR>:value=@ }
 
 // Implicit-`parameter` form for class parameter port lists:
 // `class C #(int N = 8); ...endclass`. The `parameter` keyword is
@@ -761,9 +761,9 @@ TYPEDEF_FORWARD_CLASS: sequence dict {
 }
 
 TYPEDEF_REGULAR: sequence dict {
-  'typedef':@:type="typedef",
-  <TYPEDEF_BASE>:base=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  'typedef':@:type="typedef" space,
+  <TYPEDEF_BASE>:base=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ";"
@@ -804,7 +804,7 @@ ENUM_TYPE: sequence dict {
   'enum':@:type="enum_type",
   *:meta=@,
   "{",
-  repeat+ <ENUM_LABEL>:labels[]=@ separator ",",
+  repeat+ <ENUM_LABEL>:labels[]=@ separator "," space,
   "}"
 }
 
@@ -841,10 +841,10 @@ UNION_TYPE: sequence dict {
 // per-field constrained-random qualifier comes through (IEEE
 // 1800-2017 §18.4) before the type. Pure parse: captured as text.
 STRUCT_FIELD: sequence dict {
-  ?<RAND_QUALIFIER>:rand=@,
-  <STRUCT_FIELD_TYPE>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  ?<RAND_QUALIFIER>:rand=@ space,
+  <STRUCT_FIELD_TYPE>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<STRUCT_FIELD_INIT>:init=@,
@@ -925,13 +925,13 @@ PARAM_DECL_STMT: sequence dict {
 // `?<UNPACKED_DIMENSIONS>` slot the parser stopped at the `[`
 // and failed with "expected literal '='".
 LOCALPARAM_DECL_STMT: sequence dict {
-  'localparam':@:type="localparam",
-  ?<TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  'localparam':@:type="localparam" space,
+  ?<TYPE_SPEC>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
-  "=", <EXPR>:value=@,
+  "=" space, <EXPR>:value=@,
   ";"
 }
 
@@ -942,12 +942,12 @@ LOCALPARAM_DECL_STMT: sequence dict {
 // in the enclosing choice — the STMT form would otherwise consume
 // just `localparam` and then trip on `pkg::T`'s `::`.
 LOCALPARAM_DECL_USERTYPE_STMT: sequence dict {
-  'localparam':@:type="localparam_usertype",
-  sv_qualified_type:type_spec=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  'localparam':@:type="localparam_usertype" space,
+  sv_qualified_type:type_spec=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
-  "=", <EXPR>:value=@,
+  "=" space, <EXPR>:value=@,
   ";"
 }
 
@@ -1193,9 +1193,9 @@ PORT_BINDING_POSITIONAL: sequence dict {
 // ─── Generate ───────────────────────────────────────────────────────────
 
 GENERATE_BLOCK: sequence dict {
-  'generate':@:type="generate",
-  repeat <GENERATE_ITEM>:items[]=@,
-  'endgenerate'
+  'generate':@:type="generate" space,
+  repeat <GENERATE_ITEM>:items[]=@ space,
+  'endgenerate' space
 }
 
 GENERATE_ITEM: choice {
@@ -1208,8 +1208,8 @@ GENERATE_ITEM: choice {
 }
 
 GENVAR_DECL: sequence dict {
-  'genvar':@:type="genvar",
-  repeat+ sv_identifier:names[]=@ separator ",",
+  'genvar':@:type="genvar" space,
+  repeat+ sv_identifier:names[]=@ separator "," space,
   ";"
 }
 
@@ -1260,22 +1260,22 @@ GEN_BLOCK: choice {
 }
 
 GEN_NAMED_BLOCK: sequence dict {
-  'begin':@:type="gen_block", ?<BLOCK_LABEL>,
-  repeat <GENERATE_ITEM>:items[]=@,
-  'end':@,
+  'begin':@:type="gen_block" space, ?<BLOCK_LABEL> space,
+  repeat <GENERATE_ITEM>:items[]=@ space,
+  'end':@ space,
   ?<END_LABEL>:end_label=@
 }
 
 // ─── Tasks and functions ────────────────────────────────────────────────
 
 TASK_DECL: sequence dict {
-  'task':@:type="task",
-  ?<LIFETIME>:lifetime=@,
+  'task':@:type="task" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_qualified_type:name=@,
   ?<TASK_PORT_LIST>:ports=@,
-  ";",
-  repeat <TASK_ITEM>:items[]=@,
-  'endtask',
+  ";" newline,
+  repeat <TASK_ITEM>:items[]=@ space,
+  'endtask' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -1289,13 +1289,13 @@ TASK_DECL: sequence dict {
 // if FUNCTION_TYPED_HEAD fails (sv_qualified_type+name match leaves
 // no name remaining).
 FUNCTION_DECL: sequence dict {
-  'function':@:type="function",
-  ?<LIFETIME>:lifetime=@,
+  'function':@:type="function" space,
+  ?<LIFETIME>:lifetime=@ space,
   <FUNCTION_HEAD>,
   ?<TASK_PORT_LIST>:ports=@,
-  ";",
-  repeat <TASK_ITEM>:items[]=@,
-  'endfunction',
+  ";" newline,
+  repeat <TASK_ITEM>:items[]=@ space,
+  'endfunction' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -1309,7 +1309,7 @@ FUNCTION_HEAD: choice {
 // `Class::method` form. `sv_qualified_type` matches the bare name
 // too, so in-class / module-scope functions keep working.
 FUNCTION_TYPED_HEAD: sequence {
-  <FUNCTION_RETURN>:return_type=@,
+  <FUNCTION_RETURN>:return_type=@ space,
   sv_qualified_type:name=@
 }
 
@@ -1387,29 +1387,29 @@ TASK_PORT: choice {
 }
 
 TASK_PORT_IMPLICIT: sequence dict {
-  <PORT_DIRECTION>:direction=@,
+  <PORT_DIRECTION>:direction=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
 }
 
 TASK_PORT_BUILTIN: sequence dict {
-  ?<PORT_DIRECTION>:direction=@,
-  <TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  ?<PORT_DIRECTION>:direction=@ space,
+  <TYPE_SPEC>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
 }
 
-TASK_PORT_INIT: sequence dict { "=", <EXPR>:value=@ }
+TASK_PORT_INIT: sequence dict { "=" space, <EXPR>:value=@ }
 
 TASK_PORT_USERTYPED: sequence dict {
-  ?<PORT_DIRECTION>:direction=@,
-  sv_qualified_type:type_spec=@,
-  ?<PARAM_OVERRIDE>:type_params=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  ?<PORT_DIRECTION>:direction=@ space,
+  sv_qualified_type:type_spec=@ space,
+  ?<PARAM_OVERRIDE>:type_params=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
@@ -1560,14 +1560,14 @@ NULL_STMT: sequence dict { ";":type="null_stmt" }
 
 BLOCK_STMT: sequence dict {
   'begin':@:type="block" space,
-  ?<BLOCK_LABEL>,
+  ?<BLOCK_LABEL> space,
   repeat <BLOCK_ITEM>:items[]=@,
   'end':@ space,
   ?<END_LABEL>:end_label=@
 }
 
 // Non-container; the `label` binding flows up to the parent dict.
-BLOCK_LABEL: sequence { ":", sv_identifier:label=@ }
+BLOCK_LABEL: sequence { ":" space, sv_identifier:label=@ }
 
 BLOCK_ITEM: choice {
   <LOCALPARAM_DECL_USERTYPE_STMT>,
@@ -1594,15 +1594,15 @@ UNIQUENESS: choice { 'unique0':@, 'unique':@, 'priority':@ }
 
 // Non-container sub-rule; its `else` binding flows up to the caller's
 // dict (the IF_STMT rule).
-ELSE_CLAUSE: sequence { 'else', <STATEMENT>:else=@ }
+ELSE_CLAUSE: sequence { 'else' space, <STATEMENT>:else=@ }
 
 CASE_STMT: sequence dict {
-  ?<UNIQUENESS>:uniqueness=@,
-  <CASE_KIND>:kind=@:type="case",
-  "(", <EXPR>:selector=@, ")",
-  ?'inside':is_inside=true,
+  ?<UNIQUENESS>:uniqueness=@ space,
+  <CASE_KIND>:kind=@:type="case" space,
+  "(", <EXPR>:selector=@, ")" space,
+  ?'inside':is_inside=true space,
   repeat+ <CASE_ITEM>:items[]=@,
-  'endcase'
+  'endcase' space
 }
 
 CASE_KIND: choice {
@@ -1611,10 +1611,10 @@ CASE_KIND: choice {
 
 CASE_ITEM: sequence dict {
   choice {
-    sequence { 'default':default=true, ?":" },
+    sequence { 'default':default=true, ?":" space },
     sequence {
       repeat+ <CASE_LABEL>:labels[]=@ separator ",",
-      ":"
+      ":" space
     }
   },
   <STATEMENT>:body=@
@@ -1678,11 +1678,11 @@ FOR_INIT_GENVAR: sequence dict {
 }
 
 FOR_INIT_DECL: sequence dict {
-  <TYPE_SPEC>:type_spec=@:type="for_init_decl",
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
-  "=", <EXPR>:value=@
+  <TYPE_SPEC>:type_spec=@:type="for_init_decl" space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
+  "=" space, <EXPR>:value=@
 }
 
 // For-loop step per IEEE 1800-2017 genvar_iteration / for_variable_assignment:
@@ -2774,12 +2774,12 @@ IFNDEF: sequence dict {
 // user-typed decls, function/task decls) work in both module and
 // package position. Imports inside packages also use IMPORT_STMT.
 PACKAGE_DECL: sequence dict {
-  'package':@:type="package",
-  ?<LIFETIME>:lifetime=@,
+  'package':@:type="package" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
-  ";",
+  ";" newline,
   <MODULE_ITEMS>:items=@,
-  'endpackage',
+  'endpackage' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -2836,7 +2836,7 @@ INTERFACE_PARENT: sequence dict {
 // separated entries per statement; each entry is `<pkg>::<sym>` or
 // `<pkg>::*`.
 IMPORT_STMT: sequence dict {
-  'import':@:type="import",
+  'import':@:type="import" space,
   <IMPORT_ENTRIES>:entries=@,
   ";"
 }
@@ -3526,8 +3526,8 @@ PROGRAM_DECL: sequence dict {
 // form (not inside a `for` header). Multiple names per declaration
 // supported via the `:[]=@` list-append pattern.
 GENVAR_DECL: sequence dict {
-  'genvar':@:type="genvar",
-  repeat+ sv_identifier:names[]=@ separator ",",
+  'genvar':@:type="genvar" space,
+  repeat+ sv_identifier:names[]=@ separator "," space,
   ";"
 }
 
@@ -3575,7 +3575,7 @@ DISABLE_FORK_STMT: sequence dict {
 
 // `return [<expr>];` — function return.
 RETURN_STMT: sequence dict {
-  'return':@:type="return",
+  'return':@:type="return" space,
   ?<EXPR>:value=@,
   ";"
 }

@@ -1168,6 +1168,19 @@ def test_define_then_module_use(sv_grammar):
     "module m (input clk, output reg [7:0] q);\nendmodule\n",
     "module m;\n  logic [7:0] x;\n  wire y;\n  assign y = x[0];\nendmodule\n",
     "module m;\n  always_ff @(posedge clk) begin\n    q <= d;\n  end\nendmodule\n",
+    # Extended coverage: params, typedef/enum/struct, control flow,
+    # function/task, instantiation, generate, package/import.
+    "module m #(parameter int W = 8) (input clk);\nendmodule\n",
+    "package p;\n  typedef logic [7:0] byte_t;\n  typedef enum logic {A, B} st_t;\nendpackage\n",
+    "module m;\n  typedef struct packed {\n    logic [3:0] a;\n    logic b;\n  } s_t;\nendmodule\n",
+    "module m;\n  always_comb begin\n    if (a) y = 1;\n    else if (b) y = 2;\n    else y = 3;\n  end\nendmodule\n",
+    "module m;\n  always_comb begin\n    case (s)\n      2'b00: y = a;\n      default: y = b;\n    endcase\n  end\nendmodule\n",
+    "module m;\n  always_comb begin\n    for (int i = 0; i < 8; i++) y[i] = a[i];\n  end\nendmodule\n",
+    "module m;\n  function automatic int f(input int x);\n    return x + 1;\n  endfunction\nendmodule\n",
+    "module m;\n  task t(input int x);\n    y = x;\n  endtask\nendmodule\n",
+    "module m;\n  sub #(.W(8)) u_sub (.clk(clk), .q(q));\nendmodule\n",
+    "module m;\n  genvar i;\n  generate\n    for (i = 0; i < 4; i++) begin : g\n      assign y[i] = a[i];\n    end\n  endgenerate\nendmodule\n",
+    "module m;\n  localparam int N = 8;\n  logic [N-1:0] x;\nendmodule\n",
 ])
 def test_sv_save_word_spacing_round_trips(sv_grammar, src):
     a = sv_grammar.parse_string(src)
