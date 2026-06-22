@@ -670,6 +670,14 @@ std::shared_ptr<ArrayValue> substitute_segments(
     // identifier with a newline mid-name. Standard SV preprocessor
     // convention (LRM §22.5.1) treats macro args as token sequences,
     // not whitespace-preserving text, so trim here.
+    //
+    // After trim, any empty positional arg that corresponds to a
+    // formal with a default text falls back to the default. The LRM
+    // is ambiguous on intermediate empty args (`\`MAC(a, , c)`) but
+    // most simulators (VCS / Verilator) treat them as "not specified"
+    // and use the default. Without this, `\`DV_WAIT_TIMEOUT(, , msg)`
+    // would substitute TIMEOUT_NS_ to "" and emit `#( * 1ns)` — the
+    // empty arg leaks into the body's `#(TIMEOUT_NS_ * 1ns)` slot.
     auto trim_ws = [](const std::string& s) -> std::string {
         std::size_t b = 0, e = s.size();
         while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
@@ -678,9 +686,17 @@ std::shared_ptr<ArrayValue> substitute_segments(
     };
     std::vector<ValuePtr> args;
     args.reserve(args_in.size());
-    for (const auto& a : args_in) {
+    for (std::size_t i = 0; i < args_in.size(); ++i) {
+        const auto& a = args_in[i];
         if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
-            args.push_back(make_string(trim_ws(sv->data())));
+            std::string trimmed = trim_ws(sv->data());
+            if (trimmed.empty()
+                    && i < params.size()
+                    && !params[i].default_text.empty()) {
+                args.push_back(make_string(trim_ws(params[i].default_text)));
+            } else {
+                args.push_back(make_string(std::move(trimmed)));
+            }
         } else {
             args.push_back(a);
         }

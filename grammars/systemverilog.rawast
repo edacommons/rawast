@@ -3420,38 +3420,26 @@ CHECKER_DECL: sequence dict {
 }
 
 // `fork <stmts> join` / `join_any` / `join_none` — concurrent block.
-// Body is `repeat <BLOCK_ITEM>` (not a `*:body=@` raw-scan) so a nested
-// `fork ... join_any` inside the outer `fork ... join` doesn't trick
-// the wildcard's first-match scan into claiming the inner `join_any`
-// as the outer terminator. Tried most-specific suffix first.
-FORK_JOIN: choice {
-  <FORK_JOIN_NONE>,
-  <FORK_JOIN_ANY>,
-  <FORK_JOIN_PLAIN>
-}
-
-FORK_JOIN_NONE: sequence dict {
-  'fork':@:type="fork_join_none",
-  ?<BLOCK_LABEL>,
-  repeat <BLOCK_ITEM>:items[]=@,
-  'join_none',
-  ?<END_LABEL>:end_label=@
-}
-
-FORK_JOIN_ANY: sequence dict {
-  'fork':@:type="fork_join_any",
-  ?<BLOCK_LABEL>,
-  repeat <BLOCK_ITEM>:items[]=@,
-  'join_any',
-  ?<END_LABEL>:end_label=@
-}
-
-FORK_JOIN_PLAIN: sequence dict {
+// Body is `repeat <BLOCK_ITEM>` so nested `fork ... join_any` inside
+// an outer `fork ... join` parses with proper depth (no greedy
+// wildcard scan claiming the inner terminator). Unified into a
+// single rule with the trailing join keyword as a choice so the
+// engine doesn't re-parse the body three times (which scaled
+// exponentially with fork nesting).
+FORK_JOIN: sequence dict {
   'fork':@:type="fork_join",
   ?<BLOCK_LABEL>,
   repeat <BLOCK_ITEM>:items[]=@,
-  'join',
+  <FORK_JOIN_KIND>:kind=@,
   ?<END_LABEL>:end_label=@
+}
+
+// Tried most-specific suffix first so `join_none` and `join_any`
+// aren't claimed as plain `join` followed by garbage.
+FORK_JOIN_KIND: choice {
+  'join_none':@,
+  'join_any':@,
+  'join':@
 }
 
 // Immediate assertion inside procedural code:
