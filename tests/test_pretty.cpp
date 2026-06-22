@@ -304,6 +304,67 @@ TEST_CASE("Pretty: pretty=false skips tab/indent/newline; keeps space and tail")
     CHECK(compact_out_2.str() == compact_out.str());
 }
 
+TEST_CASE("Pretty: skipped optional Sequence with indent/tab emits nothing") {
+    // An absent optional Sequence carrying `indent tab` must emit no
+    // leading indent (and no tail/space/newline). Before the fix,
+    // do_consume ran emit_tab/emit_post around the body BEFORE the body
+    // decided to skip the absent optional — so the stray indent stacked
+    // onto the next sibling, pushing it one level too deep. Mirrors the
+    // LEF `?<PORT_CLASS> indent tab` / `?<LAYER_WIDTH_CMD> indent tab`
+    // case that over-indented the following LAYER lines.
+    const char* src = R"RAWAST(
+        start: <BLOCK>
+
+        BLOCK ignore whitespace: sequence dict {
+          "B" space, identifier:name=@ newline,
+          ?<CLS> indent tab,
+          <ITEMS>:items=@,
+          "END" newline
+        }
+
+        CLS: sequence { "CLASS" space, identifier:cls=@ space, ";" newline }
+
+        ITEMS: sequence array { repeat <ITEM> indent tab }
+
+        ITEM ignore whitespace: sequence dict { "I" space, identifier:v=@ space, ";" newline }
+    )RAWAST";
+
+    Grammar g;
+    g.register_parser(std::make_unique<IdentifierParser>());
+    g.register_parser(std::make_unique<WhitespaceParser>());
+    g.add_ignore("whitespace");
+    REQUIRE(load_rawast_grammar_from_string(g, src));
+
+    // CLASS absent: the optional must contribute zero indent, so every
+    // ITEM sits at exactly one level (two spaces), not stacked deeper.
+    {
+        auto stream = Stream::from_string("B b\nI x ;\nI y ;\nEND\n");
+        auto parsed = g.parse(stream);
+        REQUIRE(parsed);
+        std::ostringstream out;
+        REQUIRE(g.save(out, *parsed, /*pretty=*/true));
+        CHECK(out.str() ==
+            "B b\n"
+            "  I x ;\n"
+            "  I y ;\n"
+            "END\n");
+    }
+
+    // CLASS present: it indents to one level, items unaffected.
+    {
+        auto stream = Stream::from_string("B b\nCLASS core ;\nI x ;\nEND\n");
+        auto parsed = g.parse(stream);
+        REQUIRE(parsed);
+        std::ostringstream out;
+        REQUIRE(g.save(out, *parsed, /*pretty=*/true));
+        CHECK(out.str() ==
+            "B b\n"
+            "  CLASS core ;\n"
+            "  I x ;\n"
+            "END\n");
+    }
+}
+
 TEST_CASE("Save: fixed-schema dict round-trips in grammar order, not alphabetical") {
     // A small fixed-schema dict — two named-field parsers in source
     // order. std::map sorts keys alphabetically (age, name) but the

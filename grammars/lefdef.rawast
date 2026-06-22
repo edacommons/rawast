@@ -559,16 +559,16 @@ SITE_ORIENT: choice {
 MACRO_BLOCK: sequence dict {
   "MACRO":type="Macro" space,
   identifier:name=@ newline,
-  repeat <MACRO_PROPERTY>,
+  repeat <MACRO_PROPERTY> indent tab,
   <MACRO_PINS>:pins=@,
   <MACRO_OBSES>:obses=@,
-  ?<MACRO_DENSITY>:density=@,
+  ?<MACRO_DENSITY>:density=@ indent tab,
   // Trailing PROPERTY clauses (after PIN/OBS/DENSITY) per LEF/DEF
   // 5.8 §"Macro". LEF58 form tried first so it routes to `lef58`
   // alongside any LEF58 clauses caught by the leading inline
   // `repeat <MACRO_PROPERTY>`; non-LEF58 PROPERTY clauses fall
   // through to the generic KV form and land in `properties`.
-  repeat <MACRO_TRAILING_PROPERTY>,
+  repeat <MACRO_TRAILING_PROPERTY> indent tab,
   "END" space, identifier:end_name=@ newline
 }
 
@@ -582,7 +582,7 @@ MACRO_TRAILING_PROPERTY: choice {
 // emit multi-OBS in fill cells and IO pads where different metal
 // layers carry different obstruction shapes that the designer
 // wants kept structurally separate.
-MACRO_OBSES: sequence array { repeat <MACRO_OBS> }
+MACRO_OBSES: sequence array { repeat <MACRO_OBS> indent tab }
 
 // MACRO sub-statements in any order — same pattern as HDR_CMD.
 // Pending NSEQ (M2), this is the pragmatic way to accept real LEFs
@@ -750,7 +750,7 @@ MACRO_SITE_REF: sequence dict {
 
 // === PIN inside MACRO ====================================================
 
-MACRO_PINS: sequence array { repeat <PIN_BLOCK> }
+MACRO_PINS: sequence array { repeat <PIN_BLOCK> indent tab }
 
 // PIN block — per LEF/DEF 5.8 spec carries DIRECTION / USE plus
 // zero-or-more ANTENNA* clauses (model-specific antenna properties
@@ -759,9 +759,9 @@ MACRO_PINS: sequence array { repeat <PIN_BLOCK> }
 PIN_BLOCK: sequence dict {
   "PIN":type="Pin" space,
   identifier:name=@ newline,
-  repeat <PIN_PROPERTY>,
+  repeat <PIN_PROPERTY> indent tab,
   <PIN_PORTS>:ports=@,
-  "END" space, identifier:end_name=@ newline
+  "END" tab space, identifier:end_name=@ newline
 }
 
 // LEF58_-prefixed PROPERTY clauses inside a PIN get the typed
@@ -913,7 +913,7 @@ PIN_ANTENNA_LAYER: sequence {
   "LAYER" space, identifier:layer=@ space
 }
 
-PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
+PIN_PORTS: sequence array { repeat <PORT_BLOCK> indent tab }
 
 // PORT is a sequence of layer groups: each group is a LAYER statement
 // followed by one-or-more shapes on that layer.
@@ -922,16 +922,16 @@ PIN_PORTS: sequence array { repeat <PORT_BLOCK> }
 // LEF/DEF 5.8 spec: `PORT [CLASS {NONE | CORE | BUMP} ;] {LAYER ...} ... END`.
 PORT_BLOCK: sequence dict {
   "PORT":type="Port" newline,
-  ?<PORT_CLASS>,
+  ?<PORT_CLASS> indent tab,
   <LAYER_GROUPS>:layer_groups=@,
-  "END" newline
+  "END" tab newline
 }
 
 PORT_CLASS: sequence {
   "CLASS" space, identifier:port_class=@ space, ";" newline
 }
 
-LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> }
+LAYER_GROUPS: sequence array { repeat <LAYER_GROUP> indent tab }
 
 // LAYER declaration inside a PORT or OBS block. Can carry optional
 // EXCEPTPGNET / SPACING / DESIGNRULEWIDTH / MASK modifiers per LEF/DEF
@@ -941,7 +941,7 @@ LAYER_GROUP: sequence dict {
   "LAYER" space, identifier:layer=@ space,
   repeat <LAYER_GROUP_MOD>,
   ";" newline,
-  ?<LAYER_WIDTH_CMD>,
+  ?<LAYER_WIDTH_CMD> indent tab,
   <SHAPES>:shapes=@
 }
 
@@ -965,7 +965,7 @@ LAYER_WIDTH_CMD: sequence {
   'WIDTH' space, <NUMBER>:width=@ space, ";" newline
 }
 
-SHAPES: sequence array { repeat <SHAPE> }
+SHAPES: sequence array { repeat <SHAPE> indent tab }
 SHAPE: choice {
   <RECT_SHAPE>,
   <POLYGON_SHAPE>,
@@ -1058,7 +1058,7 @@ VIA_PLACEMENT: sequence dict {
 MACRO_OBS: sequence dict {
   "OBS":type="Obs" newline,
   <LAYER_GROUPS>:layer_groups=@,
-  "END" newline
+  "END" tab newline
 }
 
 // === LAYER block (tech LEF) ==============================================

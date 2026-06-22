@@ -1796,6 +1796,32 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     // verbatim, prefixing every saved top-level text line.
     if (orig.is_negative) return {};
 
+    // Skipped-optional guard, restricted to optional Sequence nodes.
+    // An absent optional Sequence emits no content — do_consume_body's
+    // Sequence paths (container=None and container=Dict/Array) return
+    // early via this same `(optional) && !can_consume` predicate. The
+    // surrounding formatting (tab / tail / space / newline, applied by
+    // emit_tab + emit_post below) must be suppressed too: otherwise a
+    // skipped `?<X> indent tab` leaks its leading indent — and any
+    // tail/space/newline — into the stream, stacking onto the next
+    // sibling's content (e.g. an absent `?<PORT_CLASS> indent tab`
+    // pushed the following LAYER line one indent level too deep).
+    //
+    // Scoped to `NodeKind::Sequence` deliberately: Parse/Raw optionals
+    // are skipped at the parent loop (`would_skip_optional` on the name
+    // marker) before do_consume is even called, and optional Choices
+    // (`?<PROPDEF_DEFAULT>` = choice of `string|NUMBER`) have their own
+    // alternative-selection skip — `can_consume` is not a faithful
+    // present/absent oracle for those, so a blanket check here would
+    // drop present values (regression: PROPERTYDEFINITIONS default_value
+    // vanished on save round-trip). The leak only affects Sequences.
+    if (n.kind == NodeKind::Sequence
+        && (n.is_optional || node_is_optional_chain(g, node_id))
+        && !can_consume(g, rid, s)) {
+        s.clear_pending();
+        return {};
+    }
+
     int body_depth = depth;
     if (pretty) {
         if (orig.depth_in) ++body_depth;
