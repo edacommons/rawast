@@ -736,7 +736,15 @@ std::shared_ptr<ArrayValue> substitute_segments(
             // Nested macro_use: substitute outer params into its arg
             // list before the inner call expands. LRM §22.5.1 / C99
             // §6.10.3.1: argument substitution is textual and reaches
-            // into the args of nested invocations.
+            // into the args of nested invocations. An inner arg may
+            // be either:
+            //   - a bare parameter name (`\`MAC(__sig)`) → splice the
+            //     outer arg ValuePtr directly so non-string types
+            //     survive
+            //   - any other text run (`\`MAC(!$isunknown(__sig))`) →
+            //     run `substitute_params` over the arg text so
+            //     parameter references inside the arg are replaced
+            //     and stringification/paste markers fire
             if (type == "macro_use" && has_params) {
                 auto inner_args = std::dynamic_pointer_cast<ArrayValue>(
                     dict_value_or_null(*d, "args"));
@@ -744,11 +752,17 @@ std::shared_ptr<ArrayValue> substitute_segments(
                     auto new_args = std::make_shared<ArrayValue>();
                     for (const auto& a : inner_args->data()) {
                         if (auto sv = std::dynamic_pointer_cast<StringValue>(a)) {
+                            // Whole-arg matches a param name → splice.
                             auto it = param_idx.find(sv->data());
                             if (it != param_idx.end()) {
                                 splice(new_args->data(), args[it->second]);
                                 continue;
                             }
+                            // Otherwise textual substitution inside.
+                            std::string sub = substitute_params(
+                                sv->data(), params, args_text);
+                            new_args->data().push_back(make_string(std::move(sub)));
+                            continue;
                         }
                         new_args->data().push_back(a);
                     }
@@ -911,7 +925,72 @@ std::string MacroDef::body_text() const {
 
 std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
     std::string out;
-    for (const auto& seg : segs.data()) {
+
+    // Nested conditional directives that may appear inside an
+    // expanded macro body — e.g. `\`ASSERT_ERROR` wraps its body in
+    // `\`ifdef UVM … \`else … \`endif`. The rendered text MUST
+    // resolve them against the current macro table rather than
+    // leaving raw `\`ifdef` tokens in the host stream; otherwise
+    // the SV grammar chokes on a stray `\`ifdef` mid-statement. Each
+    // stack entry is "taking" for the current branch; AND of the
+    // stack gates output. Per IEEE 1800-2017 §22.5.1.
+    std::vector<bool> cond_stack;
+    auto cond_taking = [&]() {
+        for (bool b : cond_stack) if (!b) return false;
+        return true;
+    };
+
+    const auto& data = segs.data();
+    for (std::size_t k = 0; k < data.size(); ++k) {
+        const auto& seg = data[k];
+
+        // Directive macro_use segments (`\`ifdef`/`\`ifndef`/
+        // `\`else`/`\`endif`) — handled BEFORE the generic macro_use
+        // path so they never reach render_macro_use_inline (which
+        // would render them verbatim as undefined-macro tokens).
+        // `\`ifdef X` parses as two segments: {macro_use, name:"ifdef"}
+        // followed by {ref, value:"X"} (the condition name).
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
+            auto type = dict_string_or_empty(*d, "type");
+            if (type == "macro_use") {
+                auto name = dict_string_or_empty(*d, "name");
+                if (name == "ifdef" || name == "ifndef") {
+                    std::string cond;
+                    if (k + 1 < data.size()) {
+                        if (auto dn = std::dynamic_pointer_cast<DictValue>(
+                                data[k + 1])) {
+                            auto nt = dict_string_or_empty(*dn, "type");
+                            if (nt == "ref") {
+                                cond = dict_string_or_empty(*dn, "value");
+                                ++k;
+                            }
+                        }
+                    }
+                    bool defined = !cond.empty()
+                        && state_.macros.find(cond) != state_.macros.end();
+                    bool take = (name == "ifdef") ? defined : !defined;
+                    cond_stack.push_back(cond_taking() && take);
+                    continue;
+                }
+                if (name == "else") {
+                    if (!cond_stack.empty()) {
+                        bool outer_taking = true;
+                        for (std::size_t j = 0; j + 1 < cond_stack.size(); ++j) {
+                            if (!cond_stack[j]) { outer_taking = false; break; }
+                        }
+                        cond_stack.back() = outer_taking && !cond_stack.back();
+                    }
+                    continue;
+                }
+                if (name == "endif") {
+                    if (!cond_stack.empty()) cond_stack.pop_back();
+                    continue;
+                }
+            }
+        }
+
+        if (!cond_taking()) continue;
+
         if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
             // Text may carry literal `\`NAME` patterns that
             // weren't AST-typed at parse time (legacy text-only

@@ -28,7 +28,12 @@ use: std, sv
 
 start: <PP_FILE>
 
-PP_FILE ignore linespace: sequence array {
+// `linespace` + `line_comment` — horizontal whitespace AND
+// trailing `//` comments at every rule-frame boundary, so
+// `\`endif // INC_ASSERT` parses the same as a bare `\`endif`.
+// TEXT_LINE overrides with `ignore:` empty so a `// comment` on
+// its own line stays captured as line content.
+PP_FILE ignore linespace line_comment: sequence array {
   repeat <PP_ITEM>
 }
 

@@ -108,6 +108,7 @@ DESCRIPTION: choice {
   <CONCURRENT_ASSERT>,
   <BIND_STMT>,
   <CHECKER_DECL>,
+  <SYSTEM_TASK_CALL>,
   <USER_TYPED_DECL>
 }
 
@@ -624,6 +625,7 @@ MODULE_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
+  <SYSTEM_TASK_CALL>,
   <USER_TYPED_DECL>,
   <MACRO_STMT>
 }
@@ -1701,6 +1703,11 @@ SYSTEM_TASK_CALL: sequence dict {
 // with no arguments may omit the parentheses entirely:
 //   foo;          equivalent to foo();
 TASK_CALL: sequence dict {
+  // `!<SV_RESERVED>` so a stray `end;` inside a `begin … end` block
+  // doesn't get matched as `task_call("end")` (which would consume
+  // the block's closing `end` and break BLOCK_STMT's terminator
+  // match). Same shape SV_RESERVED guard used in LOCAL_VAR_DECL_USER.
+  !<SV_RESERVED>,
   sv_qualified_type:name=@:type="task_call",
   ?<TASK_ARG_LIST>:args=@,
   ";"
@@ -3105,6 +3112,14 @@ SPECIFY_BLOCK: sequence dict {
 // Either `<kind> property (...)` or `cover sequence (...)`. The
 // `sequence` form is only valid for `cover` per SV-1800, but we
 // don't enforce that — pure parse, host validates.
+//
+// Per IEEE 1800-2017 §16.9 / §16.14, the action block IS the
+// assertion's terminator — there's no extra `;` after it. The
+// action_block is `statement_or_null | [statement] else
+// statement_or_null`, where each STATEMENT carries its own `;` (or
+// is a `begin … end` block that terminates with `end`). A
+// stylistic trailing `;` after `\`ASSERT(…);`-shaped macro uses is
+// tolerated via the optional terminator.
 CONCURRENT_ASSERT: sequence dict {
   ?<ASSERTION_LABEL>:label=@,
   <ASSERT_KIND>:kind=@:type="assert_concurrent",
@@ -3112,8 +3127,33 @@ CONCURRENT_ASSERT: sequence dict {
   "(",
   sv_balanced_arg:body=@,
   ")",
-  *:action=@,
-  ";"
+  <ASSERT_ACTION>:action=@,
+  ?";"
+}
+
+// `action_block`. The `pass else fail` alt is tried first to
+// capture the explicit pass-then-fail form; `else fail` matches
+// the common `assert (…) else $error(…);` shape; the bare-stmt
+// alt covers `assert (…);` (NULL_STMT) and `assert (…) stmt;`.
+ASSERT_ACTION: choice {
+  <ASSERT_ACTION_PASS_ELSE>,
+  <ASSERT_ACTION_ELSE>,
+  <ASSERT_ACTION_PASS>
+}
+
+ASSERT_ACTION_PASS_ELSE: sequence dict {
+  <STATEMENT>:pass=@,
+  'else',
+  <STATEMENT>:fail=@
+}
+
+ASSERT_ACTION_ELSE: sequence dict {
+  'else',
+  <STATEMENT>:fail=@
+}
+
+ASSERT_ACTION_PASS: sequence dict {
+  <STATEMENT>:pass=@
 }
 
 // `label_name :` — optional name prefix on a concurrent assertion.
@@ -3244,8 +3284,8 @@ IMMEDIATE_ASSERT: sequence dict {
   "(",
   sv_balanced_arg:body=@,
   ")",
-  *:action=@,
-  ";"
+  <ASSERT_ACTION>:action=@,
+  ?";"
 }
 
 // ─── Extern, UDP, config, program (parse-only) ─────────────────────────

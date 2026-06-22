@@ -203,13 +203,23 @@ SvBalancedArgParser::SvBalancedArgParser()
 WalkResult SvBalancedArgParser::walk(StreamReader& sr) {
     sr.mark();
     std::string out;
-    int depth = 0;
+    int paren = 0;
+    int brace = 0;
+    int brack = 0;
     while (auto c = sr.peek()) {
-        // At depth 0, `,` and `)` end this argument. Inside nested
-        // `()` (depth > 0), they're regular content.
-        if (depth == 0 && (*c == ',' || *c == ')')) break;
-        if (*c == '(')      ++depth;
-        else if (*c == ')') --depth;
+        // At outermost depth (zero of every bracket), a `,` or `)`
+        // ends this argument. Inside nested `()`/`{}`/`[]` they're
+        // regular content — so `x inside {1, 2}` and `arr[0, 1]`
+        // capture as one arg, and `assert (x inside {a, b}) else …`
+        // doesn't truncate at the inside-set comma.
+        if (paren == 0 && brace == 0 && brack == 0
+            && (*c == ',' || *c == ')')) break;
+        if      (*c == '(') ++paren;
+        else if (*c == ')') --paren;
+        else if (*c == '{') ++brace;
+        else if (*c == '}') --brace;
+        else if (*c == '[') ++brack;
+        else if (*c == ']') --brack;
         out.push_back(*c);
         sr.get();
     }
