@@ -351,6 +351,7 @@ SV_RESERVED: choice {
   'endproperty':@, 'endsequence':@, 'endspecify':@, 'endtask':@,
   'endchecker':@,
   'join_none':@, 'join_any':@, 'join':@,
+  'return':@,
   'end':@,    'else':@,    'begin':@
 }
 
@@ -2222,7 +2223,7 @@ TYPE_CAST_IDENT: sequence dict {
 }
 
 TYPE_CAST_NUM: sequence dict {
-  int:type=@:type="type_cast_num",
+  int:width=@:type="type_cast_num",
   "'",
   "(",
   <EXPR>:value=@,
