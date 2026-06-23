@@ -2912,29 +2912,29 @@ CLASS_DECL: choice {
 }
 
 CLASS_DECL_VIRTUAL: sequence dict {
-  'virtual':virtual=true,
-  'class':@:type="class",
-  ?<LIFETIME>:lifetime=@,
+  'virtual':virtual=true space,
+  'class':@:type="class" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<PARAM_PORT_LIST>:params=@,
   ?<CLASS_EXTENDS>:extends=@,
   ?<CLASS_IMPLEMENTS>:implements=@,
   ";",
   <CLASS_ITEMS>:items=@,
-  'endclass',
+  "" space, 'endclass',
   ?<END_LABEL>:end_label=@
 }
 
 CLASS_DECL_PLAIN: sequence dict {
-  'class':@:type="class",
-  ?<LIFETIME>:lifetime=@,
+  'class':@:type="class" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<PARAM_PORT_LIST>:params=@,
   ?<CLASS_EXTENDS>:extends=@,
   ?<CLASS_IMPLEMENTS>:implements=@,
   ";",
   <CLASS_ITEMS>:items=@,
-  'endclass',
+  "" space, 'endclass',
   ?<END_LABEL>:end_label=@
 }
 
@@ -2943,7 +2943,8 @@ CLASS_DECL_PLAIN: sequence dict {
 // order: pkg-qualified first (would otherwise leave `::Name`
 // unconsumed).
 CLASS_EXTENDS: sequence dict {
-  'extends':@,
+  "" space,
+  'extends':@ space,
   <CLASS_BASE>:base=@,
   ?<PARAM_OVERRIDE>:params=@
 }
