@@ -295,8 +295,8 @@ PARAM_DECL_USERTYPE: sequence dict {
 }
 
 PARAM_DECL_TYPE: sequence dict {
-  'parameter':@:type="param_type",
-  'type',
+  'parameter':@:type="param_type" space,
+  'type' space,
   sv_identifier:name=@,
   ?<PARAM_TYPE_DEFAULT>:default=@
 }
@@ -304,7 +304,7 @@ PARAM_DECL_TYPE: sequence dict {
 // Implicit-`parameter` form for class type parameters:
 // `class C #(type T = int);`. The `parameter` keyword is omitted.
 PARAM_DECL_TYPE_IMPLICIT: sequence dict {
-  'type':@:type="param_type_implicit",
+  'type':@:type="param_type_implicit" space,
   sv_identifier:name=@,
   ?<PARAM_TYPE_DEFAULT>:default=@
 }
@@ -756,8 +756,8 @@ TYPEDEF_DECL: choice {
 }
 
 TYPEDEF_FORWARD_CLASS: sequence dict {
-  'typedef':@:type="typedef_forward_class",
-  'class',
+  'typedef':@:type="typedef_forward_class" space,
+  'class' space,
   sv_identifier:name=@,
   ";"
 }
@@ -1759,7 +1759,7 @@ REPEAT_STMT: sequence dict {
 }
 
 FOREVER_STMT: sequence dict {
-  'forever':@:type="forever",
+  'forever':@:type="forever" space,
   <STATEMENT>:body=@
 }
 
@@ -2821,8 +2821,8 @@ INTERFACE_CLASS_DECL: sequence dict {
 // a more permissive item list. For now, share MODULE_ITEMS as the
 // body grammar; modport declarations can be added when needed.
 INTERFACE_DECL: sequence dict {
-  'interface':@:type="interface",
-  ?<LIFETIME>:lifetime=@,
+  'interface':@:type="interface" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   repeat <MODULE_HEADER_IMPORT>:header_imports[]=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
@@ -2830,7 +2830,7 @@ INTERFACE_DECL: sequence dict {
   ?<PORT_LIST>:ports=@,
   ";",
   <MODULE_ITEMS>:items=@,
-  'endinterface',
+  'endinterface' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -2881,7 +2881,7 @@ IMPORT_TARGET: choice {
 
 // `export pkg::*;` / `export *::*;` — semantics-equivalent surface form.
 EXPORT_STMT: sequence dict {
-  'export':@:type="export",
+  'export':@:type="export" space,
   <IMPORT_ENTRIES>:entries=@,
   ";"
 }
@@ -2921,7 +2921,7 @@ CLASS_DECL_VIRTUAL: sequence dict {
   ?<CLASS_IMPLEMENTS>:implements=@,
   ";",
   <CLASS_ITEMS>:items=@,
-  "" space, 'endclass',
+  "" space, 'endclass' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -2934,7 +2934,7 @@ CLASS_DECL_PLAIN: sequence dict {
   ?<CLASS_IMPLEMENTS>:implements=@,
   ";",
   <CLASS_ITEMS>:items=@,
-  "" space, 'endclass',
+  "" space, 'endclass' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3407,11 +3407,11 @@ COVERGROUP_DECL: sequence dict {
 // Used in testbenches to declare a clock domain with timing/skew
 // info for signals. Body captured raw.
 CLOCKING_BLOCK: sequence dict {
-  ?<DEFAULT_KW>:is_default=@,
-  'clocking':@:type="clocking",
+  ?<DEFAULT_KW>:is_default=@ space,
+  'clocking':@:type="clocking" space,
   ?<IDENT_OPT>:name=@,
   *:body=@,
-  'endclocking',
+  'endclocking' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3427,12 +3427,12 @@ IDENT_OPT: sequence { sv_identifier:name=@ }
 // `checker NAME(args); <items> endchecker [: NAME]`. SV-1800
 // construct for reusable verification IP. Body captured raw.
 CHECKER_DECL: sequence dict {
-  'checker':@:type="checker",
+  'checker':@:type="checker" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
   *:body=@,
-  'endchecker',
+  'endchecker' space,
   ?<END_LABEL>:end_label=@
 }
 
