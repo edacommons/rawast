@@ -3693,9 +3693,9 @@ PARAM_STATIC_CALL_STMT: sequence dict {
 // `class Inner` up to the `;` and the enclosing class-body repeat
 // would see only `endclass int x; endclass` as stray content.
 VIRTUAL_INTERFACE_DECL: sequence dict {
-  'virtual':@:type="virtual_interface",
+  'virtual':@:type="virtual_interface" space,
   !'class',
-  ?'interface',
+  ?'interface':is_interface=true space,
   *:body=@,
   ";"
 }
