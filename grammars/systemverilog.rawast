@@ -1818,8 +1818,27 @@ RELEASE_STMT: sequence dict {
 
 DELAY_OR_EVENT: choice { <DELAY>, <EVENT_CONTROL> }
 
-DELAY_OR_EVENT_STMT: sequence dict {
-  <DELAY_OR_EVENT>:control=@:type="delay_event_stmt",
+// `@(<event>) <stmt>` / `#<delay> <stmt>` — procedural timing control.
+// Split into two typed alternatives that each reference ONE leaf rule
+// directly (not the shared DELAY_OR_EVENT choice). Binding the choice to
+// a field made save ambiguous: DELAY and EVENT_CONTROL produce dicts with
+// disjoint via-Ref fields (value vs events/wildcard/event_id) and neither
+// carries a const discriminator, so the save dispatcher treated each as a
+// catch-all for the other and emitted the wrong branch. With a direct
+// leaf ref per alt, the control value is emitted by a single rule and the
+// outer choice dispatches cleanly on `type`.
+DELAY_OR_EVENT_STMT: choice {
+  <EVENT_STMT>,
+  <DELAY_STMT>
+}
+
+EVENT_STMT: sequence dict {
+  <EVENT_CONTROL>:control=@:type="event_stmt",
+  <STATEMENT>:body=@
+}
+
+DELAY_STMT: sequence dict {
+  <DELAY>:control=@:type="delay_stmt",
   <STATEMENT>:body=@
 }
 
