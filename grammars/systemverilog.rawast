@@ -3011,24 +3011,24 @@ CLASS_PROTO_FUNCTION: choice {
 }
 
 CLASS_PURE_VIRTUAL_FUNCTION: sequence dict {
-  ?<CLASS_VISIBILITY>:visibility=@,
-  'pure':@:type="pure_virtual_function",
-  'virtual',
-  'function',
-  ?<LIFETIME>:lifetime=@,
-  ?<TYPE_SPEC>:return_type=@,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  'pure':@:type="pure_virtual_function" space,
+  'virtual' space,
+  'function' space,
+  ?<LIFETIME>:lifetime=@ space,
+  ?<TYPE_SPEC>:return_type=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";"
 }
 
 CLASS_EXTERN_FUNCTION: sequence dict {
-  ?<CLASS_VISIBILITY>:visibility=@,
-  'extern':@:type="extern_function",
-  ?'virtual':is_virtual=true,
-  'function',
-  ?<LIFETIME>:lifetime=@,
-  ?<TYPE_SPEC>:return_type=@,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  'extern':@:type="extern_function" space,
+  ?'virtual':is_virtual=true space,
+  'function' space,
+  ?<LIFETIME>:lifetime=@ space,
+  ?<TYPE_SPEC>:return_type=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";"
@@ -3040,22 +3040,22 @@ CLASS_PROTO_TASK: choice {
 }
 
 CLASS_PURE_VIRTUAL_TASK: sequence dict {
-  ?<CLASS_VISIBILITY>:visibility=@,
-  'pure':@:type="pure_virtual_task",
-  'virtual',
-  'task',
-  ?<LIFETIME>:lifetime=@,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  'pure':@:type="pure_virtual_task" space,
+  'virtual' space,
+  'task' space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";"
 }
 
 CLASS_EXTERN_TASK: sequence dict {
-  ?<CLASS_VISIBILITY>:visibility=@,
-  'extern':@:type="extern_task",
-  ?'virtual':is_virtual=true,
-  'task',
-  ?<LIFETIME>:lifetime=@,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  'extern':@:type="extern_task" space,
+  ?'virtual':is_virtual=true space,
+  'task' space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";"
@@ -3065,9 +3065,9 @@ CLASS_EXTERN_TASK: sequence dict {
 // declaration (body lives outside the class). Captured by raw
 // body up to the `;`.
 CLASS_CONSTRAINT_EXTERN: sequence dict {
-  ?'pure':is_pure=true,
-  ?'extern':is_extern=true,
-  'constraint':@:type="constraint_extern",
+  ?'pure':is_pure=true space,
+  ?'extern':is_extern=true space,
+  'constraint':@:type="constraint_extern" space,
   sv_identifier:name=@,
   ";"
 }
@@ -3075,14 +3075,14 @@ CLASS_CONSTRAINT_EXTERN: sequence dict {
 // `[local|protected] [static|automatic] [const] [var] [rand|randc]
 // <TYPE> name [array_kind_suffix] [= expr];`
 CLASS_PROPERTY: sequence dict {
-  ?<CLASS_VISIBILITY>:visibility=@,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
   ?<LIFETIME>:lifetime=@,
-  ?'const':is_const=true,
-  ?'var':is_var=true,
-  ?<RAND_QUAL>:rand=@,
-  <TYPE_SPEC>:type_spec=@:type="class_property",
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  ?'const':is_const=true space,
+  ?'var':is_var=true space,
+  ?<RAND_QUAL>:rand=@ space,
+  <TYPE_SPEC>:type_spec=@:type="class_property" space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   repeat+ sv_identifier:names[]=@ separator ",",
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
@@ -3100,14 +3100,14 @@ CLASS_PROPERTY: sequence dict {
 // optional CLASS_PROPERTY_INIT applies to the last name in the
 // list, matching how most production code writes these decls.
 CLASS_USER_PROPERTY: sequence dict {
-  ?<CLASS_VISIBILITY>:visibility=@,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
   ?<LIFETIME>:lifetime=@,
-  ?'const':is_const=true,
-  ?'virtual':is_virtual=true,
-  ?<RAND_QUAL>:rand=@,
-  sv_qualified_type:type_spec=@:type="class_user_property",
-  ?<PARAM_OVERRIDE>:params=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  ?'const':is_const=true space,
+  ?'virtual':is_virtual=true space,
+  ?<RAND_QUAL>:rand=@ space,
+  sv_qualified_type:type_spec=@:type="class_user_property" space,
+  ?<PARAM_OVERRIDE>:params=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   repeat+ sv_identifier:names[]=@ separator ",",
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<CLASS_PROPERTY_INIT>:init=@,
@@ -3139,15 +3139,15 @@ CLASS_FUNCTION: choice {
 }
 
 CLASS_FUNCTION_TYPED: sequence dict {
-  ?'virtual':is_virtual=true,
-  ?<CLASS_VISIBILITY>:visibility=@,
-  ?'virtual':is_virtual=true,
-  ?'static':is_static=true,
-  'function':type="class_function_typed",
-  ?<LIFETIME>:lifetime=@,
-  sv_qualified_type:return_type=@,
-  ?<SIGNING_KW>:return_signing=@,
-  ?<RANGE>:return_range=@,
+  ?'virtual':is_virtual=true space,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  ?'virtual':is_virtual=true space,
+  ?'static':is_static=true space,
+  'function':type="class_function_typed" space,
+  ?<LIFETIME>:lifetime=@ space,
+  sv_qualified_type:return_type=@ space,
+  ?<SIGNING_KW>:return_signing=@ space,
+  ?<RANGE>:return_range=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
@@ -3157,12 +3157,12 @@ CLASS_FUNCTION_TYPED: sequence dict {
 }
 
 CLASS_FUNCTION_VOID: sequence dict {
-  ?'virtual':is_virtual=true,
-  ?<CLASS_VISIBILITY>:visibility=@,
-  ?'virtual':is_virtual=true,
-  ?'static':is_static=true,
-  'function':type="class_function",
-  ?<LIFETIME>:lifetime=@,
+  ?'virtual':is_virtual=true space,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  ?'virtual':is_virtual=true space,
+  ?'static':is_static=true space,
+  'function':type="class_function" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
@@ -3177,13 +3177,13 @@ CLASS_FUNCTION_VOID: sequence dict {
 // the duplicate `?'virtual'` binding harmlessly re-asserts the same
 // flag if the keyword shows up in either spot.
 CLASS_TASK: sequence dict {
-  ?'virtual':is_virtual=true,
-  ?<CLASS_VISIBILITY>:visibility=@,
-  ?'virtual':is_virtual=true,
-  ?'extern':is_extern=true,
-  ?'static':is_static=true,
-  'task':type="class_task",
-  ?<LIFETIME>:lifetime=@,
+  ?'virtual':is_virtual=true space,
+  ?<CLASS_VISIBILITY>:visibility=@ space,
+  ?'virtual':is_virtual=true space,
+  ?'extern':is_extern=true space,
+  ?'static':is_static=true space,
+  'task':type="class_task" space,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
@@ -3214,8 +3214,8 @@ METHOD_PORT_LIST: sequence dict {
 // the `{...}` nesting context needed for dist clauses and `if`
 // branches inside constraints.
 CONSTRAINT_DECL: sequence dict {
-  'constraint':@:type="constraint",
-  sv_identifier:name=@,
+  'constraint':@:type="constraint" space,
+  sv_identifier:name=@ space,
   "{",
   sv_balanced_braces:body=@,
   "}"
@@ -3395,9 +3395,9 @@ SEQUENCE_DECL: sequence dict {
 // the body which is captured raw. Host has a dedicated covergroup
 // pass to extract structure.
 COVERGROUP_DECL: sequence dict {
-  'covergroup':@:type="covergroup",
-  sv_identifier:name=@,
-  ?<METHOD_PORT_LIST>:args=@,
+  'covergroup':@:type="covergroup" space,
+  sv_identifier:name=@ space,
+  ?<METHOD_PORT_LIST>:args=@ space,
   *:body=@,
   'endgroup',
   ?<END_LABEL>:end_label=@
