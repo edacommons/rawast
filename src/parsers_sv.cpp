@@ -430,7 +430,7 @@ WalkResult SvPpTextLineParser::walk(StreamReader& sr) {
             sr.reject();
             return tl::unexpected(ParseError{
                 sr.position(),
-                "sv_pp_text_line: at \`" + kw + " terminator"});
+                "sv_pp_text_line: at `" + kw + " terminator"});
         }
     }
 
@@ -556,7 +556,7 @@ WalkResult SvPpMacroNameParser::walk(StreamReader& sr) {
         sr.reject();
         return tl::unexpected(ParseError{
             sr.position(),
-            "sv_pp_macro_name: \`" + name + " is a terminator, not a macro"});
+            "sv_pp_macro_name: `" + name + " is a terminator, not a macro"});
     }
     sr.accept();
     accum_ = std::move(name);
