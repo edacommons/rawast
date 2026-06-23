@@ -3463,10 +3463,10 @@ CHECKER_DECL: sequence dict {
 // engine doesn't re-parse the body three times (which scaled
 // exponentially with fork nesting).
 FORK_JOIN: sequence dict {
-  'fork':@:type="fork_join",
+  'fork':@:type="fork_join" space,
   ?<BLOCK_LABEL>,
   repeat <BLOCK_ITEM>:items[]=@,
-  <FORK_JOIN_KIND>:kind=@,
+  "" space, <FORK_JOIN_KIND>:kind=@ space,
   ?<END_LABEL>:end_label=@
 }
 
