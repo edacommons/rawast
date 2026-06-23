@@ -3152,7 +3152,7 @@ CLASS_FUNCTION_TYPED: sequence dict {
   ?<METHOD_PORT_LIST>:args=@,
   ";",
   *:body=@,
-  'endfunction',
+  'endfunction' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3167,7 +3167,7 @@ CLASS_FUNCTION_VOID: sequence dict {
   ?<METHOD_PORT_LIST>:args=@,
   ";",
   *:body=@,
-  'endfunction',
+  'endfunction' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3188,7 +3188,7 @@ CLASS_TASK: sequence dict {
   ?<METHOD_PORT_LIST>:args=@,
   ";",
   *:body=@,
-  'endtask',
+  'endtask' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3399,7 +3399,7 @@ COVERGROUP_DECL: sequence dict {
   sv_identifier:name=@ space,
   ?<METHOD_PORT_LIST>:args=@ space,
   *:body=@,
-  'endgroup',
+  'endgroup' space,
   ?<END_LABEL>:end_label=@
 }
 
