@@ -871,6 +871,25 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 return true;
             }
         }
+        // Foreign-const discriminator guard: if this Key carries a const
+        // (non-name) Value-child whose value is NOT the key's own literal
+        // — e.g. `"null":null` / `"true":true` in CONSTANT — it dispatches
+        // ONLY on that const. The match loop above already failed, so
+        // reject; do NOT fall through to the literal match below, which
+        // would otherwise let `"null":null` wrongly claim the *string*
+        // "null" (saving it as a bare `null` keyword that re-parses as the
+        // null constant). Emit keys (`"X":@`, whose Value-child holds the
+        // key's own literal) compare equal and are exempt.
+        if (peek_value) {
+            for (NodeId c : n.children) {
+                const Node& cn = g.node(g.resolve_ref(c));
+                if (cn.kind != NodeKind::Value || cn.is_name || !cn.value)
+                    continue;
+                if (!(n.value && values_equal_v2(cn.value, n.value.get()))) {
+                    return false;
+                }
+            }
+        }
         // Bare Key: key-based dispatch. Match if peek value is a
         // StringValue equal to this Key's literal token.
         if (n.value && peek_value) {

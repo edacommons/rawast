@@ -239,6 +239,33 @@ def test_meta_grammar_round_trips_emit_and_null_constant_bindings():
         g_ast = meta.parse_file(rawast.grammar_path(name))
         assert meta.parse_string(meta.save(g_ast).decode("utf-8")) == g_ast, name
 
+
+def test_meta_grammar_string_constant_not_confused_with_null_keyword():
+    """A binding whose value is the *string* "null"/"true"/"false" saves as
+    a quoted string, not the bare keyword.
+
+    Regression for the can_consume Key gap where `"null":null` (CONSTANT's
+    null-keyword alt, a foreign-const discriminator) fell through to a
+    bare-literal match and wrongly claimed the string "null" — saving
+    `:type="null"` as `:type=null`, which re-parsed as the null constant.
+    This is what kept systemverilog.rawast (its `NULL_LIT` binds
+    `:type="null"`) from round-tripping through the meta-grammar."""
+    meta = rawast.Grammar("rawast")
+    src = (
+        "use: std\n"
+        "start: <X>\n"
+        'X: sequence dict { "k":type="null" }\n'
+    )
+    ast = meta.parse_string(src)
+    out = meta.save(ast).decode("utf-8")
+    assert ':type="null"' in out          # quoted string, not bare `null`
+    assert ":type=null" not in out
+    assert meta.parse_string(out) == ast
+
+    # The full SV grammar (the last holdout) now round-trips too.
+    sv_ast = meta.parse_file(rawast.grammar_path("systemverilog.rawast"))
+    assert meta.parse_string(meta.save(sv_ast).decode("utf-8")) == sv_ast
+
     # Compact save stays single-line (no indentation newlines).
     compact = meta.save(ast, pretty=False).decode("utf-8")
     assert "\n  " not in compact
