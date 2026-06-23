@@ -184,9 +184,7 @@ def test_meta_grammar_design_matches_runtime():
 def test_meta_grammar_pretty_prints_indented_grammar():
     """Saving a grammar through the meta-grammar with pretty=True emits
     indented, space-separated .rawast: rule bodies open with a newline,
-    items indent one level, and tokens are space-separated. Round-trips
-    to the same dict for grammars without null/emit constant bindings
-    (those have a separate, pre-existing save-completeness gap)."""
+    items indent one level, and tokens are space-separated."""
     meta = rawast.Grammar("rawast")
     src = (
         "use: std\n"
@@ -207,6 +205,39 @@ def test_meta_grammar_pretty_prints_indented_grammar():
 
     # Pretty output re-parses to the same grammar dict.
     assert meta.parse_string(out) == ast
+
+
+def test_meta_grammar_round_trips_emit_and_null_constant_bindings():
+    """`:@` (emit) and `:null`/`:true`/`:false` constant bindings survive a
+    save→parse round-trip through the meta-grammar.
+
+    Regression for the can_consume gap where an OPTIONAL wrapper carrying an
+    inline Choice (`?<KEY_VALUE>` over `{ "@":emit=true, <CONSTANT>:value=@ }`)
+    was skipped on save — dropping the `:@`/`:null` suffix entirely. With the
+    shallow inline-Choice dispatch check, the binding is preserved."""
+    meta = rawast.Grammar("rawast")
+    src = (
+        "use: std\n"
+        "start: <X>\n"
+        'X: choice {\n'
+        '  "s":@,\n'
+        '  "null":null,\n'
+        '  "t":true\n'
+        "}\n"
+    )
+    ast = meta.parse_string(src)
+    out = meta.save(ast).decode("utf-8")
+    # The constant-binding suffixes are emitted, not dropped.
+    assert '"s":@' in out
+    assert '"null":null' in out
+    assert '"t":true' in out
+    assert meta.parse_string(out) == ast
+
+    # And every bundled .rawast grammar that uses these bindings round-trips
+    # through the meta-grammar (the design grammar reproduces itself).
+    for name in ("rawast.rawast", "lefdef.rawast", "gdsii.rawast"):
+        g_ast = meta.parse_file(rawast.grammar_path(name))
+        assert meta.parse_string(meta.save(g_ast).decode("utf-8")) == g_ast, name
 
     # Compact save stays single-line (no indentation newlines).
     compact = meta.save(ast, pretty=False).decode("utf-8")

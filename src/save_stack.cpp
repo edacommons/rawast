@@ -810,6 +810,50 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
     return can_consume_peek(g, node_id, peek_value, peek_key, s);
 }
 
+// Shallow dispatchability of an INLINE Choice consumer against a dict
+// scope — used by the container=None can_consume walk to decide whether
+// an OPTIONAL wrapper carrying an inline Choice (e.g. the meta-grammar's
+// `?<KEY_VALUE>` over `{ "@":emit=true, <CONSTANT>:value=@ }`) should
+// emit or skip. Unlike dispatchable_for_dict, this does NOT recurse
+// through Refs (so it never returns the cycle-guard's permissive `true`)
+// and fires ONLY on a concrete field match: an alt's const discriminator
+// equals the dict's field, OR an alt's V-name marker names a field that
+// is present and unconsumed. Plain keys (no emit/value field) correctly
+// skip.
+bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
+                              const DictValue& dict,
+                              const std::set<std::string>& consumed) {
+    const Node& ch = g.node(g.resolve_ref(choice_id));
+    if (ch.kind != NodeKind::Choice) return false;
+    for (NodeId alt : ch.children) {
+        const Node& a = g.node(g.resolve_ref(alt));
+        // (a) const discriminators: dict[field] must equal an alt value.
+        for (const auto& d : collect_child_discriminators(g, a)) {
+            auto it = dict.data().find(d.field);
+            if (it == dict.data().end() || consumed.count(d.field)) continue;
+            for (const auto& v : d.values) {
+                if (values_equal_v2(it->second, v.get())) return true;
+            }
+        }
+        // (b) field-presence: a V-name marker whose field is present.
+        if (a.kind == NodeKind::Sequence) {
+            for (std::size_t i = 0; i < a.children.size(); ++i) {
+                const Node& m = g.node(g.resolve_ref(a.children[i]));
+                if (m.kind != NodeKind::Value || !m.is_name) continue;
+                auto fn = as_string(m.value);
+                if (!fn) continue;
+                bool is_list = false;
+                std::string field = strip_list_suffix(fn->data(), is_list);
+                if (dict.data().find(field) != dict.data().end()
+                    && !consumed.count(field)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool can_consume_peek(const Grammar& g, NodeId node_id,
                       ValuePtr peek_value, const std::string& peek_key,
                       const SaveState& s) {
@@ -1146,6 +1190,22 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                                     }
                                 }
                             }
+                        }
+                    } else if (cn.kind == NodeKind::Choice) {
+                        // Inline Choice consumer with no preceding V-name
+                        // marker — e.g. KEY_VALUE's `{ "@":emit=true,
+                        // <CONSTANT>:value=@ }`. When the enclosing rule is
+                        // reached as an OPTIONAL (`?<KEY_VALUE>`),
+                        // can_consume must decide emit-vs-skip HERE; the
+                        // "dispatch happens deeper" path never runs for a
+                        // skipped optional, so without this an emit (`:@`)
+                        // or null/bool-constant (`:null`) binding is dropped
+                        // on save. Shallow, non-recursive field match only —
+                        // never the catch-all over-fire the deep
+                        // dispatchable_for_dict recursion would cause.
+                        if (inline_choice_consumable(g, c, *scope->dict,
+                                                     scope->consumed)) {
+                            walked_consumer = true;
                         }
                     }
                     continue;
