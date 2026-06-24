@@ -431,6 +431,13 @@ bool Grammar::has_opchain(NodeId id) const noexcept {
     return nodes_[id.value()].opchain;
 }
 
+bool Grammar::has_any_opchain() const noexcept {
+    for (const auto& n : nodes_) {
+        if (n.opchain) return true;
+    }
+    return false;
+}
+
 bool Grammar::has_opchain_in_chain(NodeId id) const noexcept {
     NodeId cur = id;
     std::unordered_set<std::uint32_t> seen;
@@ -759,6 +766,17 @@ ValuePtr compact_opchain(const ValuePtr& v) {
         // Empty / absent `tail` → no operators ran, just pass the lhs
         // through unchanged.
         return lhs;
+    }
+
+    // Non-binary tail entry (e.g. `inside {..}` carries `body`, not
+    // `rhs`) — can't fold to `{op,args}`. Leave the whole chain raw so
+    // the always-wrap save path handles it untouched; cascade-aware
+    // expand never sees a half-folded inside chain.
+    for (const auto& te : tail_arr->data()) {
+        auto td = as_dict(te);
+        if (!td || td->data().find("rhs") == td->data().end()) {
+            return recursed;
+        }
     }
 
     // Fold the tail left-to-right.
@@ -2304,7 +2322,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         // Ref along the chain to it) carries the flag, compact any
         // always-wrap chain shape in the produced AST. See
         // `compact_opchain` for the transform.
-        if (has_opchain_in_chain(start)) {
+        if (has_opchain_in_chain(start) || has_any_opchain()) {
             result_value = compact_opchain(result_value);
         }
         return result_value;

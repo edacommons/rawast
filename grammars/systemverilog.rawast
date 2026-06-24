@@ -2008,8 +2008,15 @@ BIN_EXPR: <LOR_EXPR>:#opchain
 // level doubled work on the failure path (10 levels → 2^10 = 1024×).
 // The flat shape calls NEXT exactly once per level; the `repeat`
 // (zero-or-more) absorbs operator runs but never re-invokes NEXT
-// when there are none. `#opchain` compaction unwraps a no-tail
-// wrapper back to its lhs, so the output AST shape is unchanged.
+// when there are none.
+//
+// `#opchain` (on BIN_EXPR) drives the post-parse compaction that folds
+// these always-wrap `{lhs, tail}` levels into a flat `{op, args}` tree
+// (empty no-operator levels collapse to their `lhs`). Save reconstructs
+// the per-tier cascade via the cascade-aware expand (Grammar::
+// opchain_ladder + rebuild_cascade in save_stack.cpp). Compaction fires
+// for SV through has_any_opchain() even though BIN_EXPR sits below the
+// source-text start rule.
 LOR_EXPR: sequence dict {
   <LAND_EXPR>:lhs=@,
   repeat <LOR_TAIL>:tail[]=@
@@ -2026,7 +2033,7 @@ BOR_EXPR: sequence dict {
   <BXOR_EXPR>:lhs=@,
   repeat <BOR_TAIL>:tail[]=@
 }
-BOR_TAIL:  sequence dict { "|":op="|", <BXOR_EXPR>:rhs=@ }
+BOR_TAIL:  sequence dict { "|":op="|", !"|", <BXOR_EXPR>:rhs=@ }
 
 BXOR_EXPR: sequence dict {
   <BAND_EXPR>:lhs=@,
@@ -2039,7 +2046,7 @@ BAND_EXPR: sequence dict {
   <EQUALITY_EXPR>:lhs=@,
   repeat <BAND_TAIL>:tail[]=@
 }
-BAND_TAIL:  sequence dict { "&":op="&", <EQUALITY_EXPR>:rhs=@ }
+BAND_TAIL:  sequence dict { "&":op="&", !"&", <EQUALITY_EXPR>:rhs=@ }
 
 EQUALITY_EXPR: sequence dict {
   <RELATIONAL_EXPR>:lhs=@,

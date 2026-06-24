@@ -144,12 +144,12 @@ def test_continuous_assign(sv_grammar):
     cont = [i for i in items if i["type"] == "cont_assign"][0]
     assignments = cont["assignments"]
     assert assignments[0]["lhs"]["name"] == "y"
-    # RHS is `a & b` — bitwise-and. Linear-PEG grammar: at the BAND
-    # level, `lhs=a` and `tail=[{op:&, rhs:b}]`. The OUTER passthrough
-    # wrappers (LOR/LAND/BOR/BXOR) are stripped by unwrap().
-    rhs = unwrap(assignments[0]["rhs"])
-    assert rhs["tail"][0]["op"] == "&"
-    assert len(rhs["tail"]) == 1
+    # RHS is `a & b` — bitwise-and. The `#opchain` compaction folds the
+    # always-wrap cascade into a flat `{op, args:[...]}` node (the empty
+    # `{lhs}` precedence-passthrough wrappers vanish).
+    rhs = assignments[0]["rhs"]
+    assert rhs["op"] == "&"
+    assert [a["name"] for a in rhs["args"]] == ["a", "b"]
 
 
 def test_module_instantiation_named_ports(sv_grammar):
@@ -172,10 +172,9 @@ def test_module_instantiation_named_ports(sv_grammar):
 
 
 def test_expression_arithmetic(sv_grammar):
-    """Arithmetic expression `a * 2 + b` — exercises the per-level
-    repeat-tail pattern. The IR shape is `{lhs, tail: [{op, rhs}]}` at
-    each precedence level, with sub-expressions nested in `lhs`/`rhs`
-    when they involve higher-precedence operators."""
+    """Arithmetic expression `a * 2 + b` — `#opchain` compaction yields a
+    flat `{op, args}` tree with precedence reflected in the nesting:
+    `{op:+, args:[{op:*, args:[a, 2]}, b]}`."""
     src = """
     module e1 (input [7:0] a, input [7:0] b, output [7:0] y);
       assign y = a * 2 + b;
@@ -184,12 +183,11 @@ def test_expression_arithmetic(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    rhs = unwrap(cont["assignments"][0]["rhs"])
-    # ADD level (after stripping wrappers): lhs is `a * 2`, tail is `[{op:+, rhs:b}]`
-    assert rhs["tail"][0]["op"] == "+"
-    # lhs of ADD unwraps to MUL: `a * 2`
-    add_lhs = unwrap(rhs["lhs"])
-    assert add_lhs["tail"][0]["op"] == "*"
+    rhs = cont["assignments"][0]["rhs"]
+    # Outer node is the lower-precedence `+`; its first arg is the `*`.
+    assert rhs["op"] == "+"
+    assert rhs["args"][0]["op"] == "*"
+    assert rhs["args"][0]["args"][0]["name"] == "a"
 
 
 def test_expression_comparison(sv_grammar):
@@ -202,9 +200,10 @@ def test_expression_comparison(sv_grammar):
     r = sv_grammar.parse_string(src)
     cont = [i for i in r["descriptions"][0]["items"]
             if i["type"] == "cont_assign"][0]
-    rhs = unwrap(cont["assignments"][0]["rhs"])
-    # EQUALITY (after stripping wrappers): lhs=x, tail=[{op:==, rhs: 8'hAA}]
-    assert rhs["tail"][0]["op"] == "=="
+    rhs = cont["assignments"][0]["rhs"]
+    # `#opchain`-compacted: `{op:==, args:[x, 8'hAA]}`.
+    assert rhs["op"] == "=="
+    assert rhs["args"][0]["name"] == "x"
 
 
 def test_expression_concatenation(sv_grammar):
@@ -1231,3 +1230,41 @@ def test_sv_named_call_arg_value_round_trips(sv_grammar):
         out = out.decode("utf-8") if isinstance(out, bytes) else out
         assert "()" not in out, f"value dropped for {arg}: {out!r}"
         assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_expression_opchain_compaction_round_trips(sv_grammar):
+    """SV expressions parse to the `#opchain`-compacted flat `{op, args}`
+    shape (no empty `{lhs}` precedence-passthrough wrappers) and still
+    round-trip losslessly through save — the cascade-aware expand re-nests
+    the compacted form back into the always-wrap tier cascade.
+
+    Regression for the cascade-aware opchain integration: compaction is
+    enabled for SV (an `#opchain` rule embedded below the source-text start
+    rule), and save reconstructs the full per-tier `{lhs,tail}` shape."""
+    cases = [
+        ("a & b", {"op": "&"}),
+        ("a & b | c", {"op": "|"}),        # `&` binds tighter → nested in args[0]
+        ("a * 2 + b", {"op": "+"}),
+        ("a == b && c != d", {"op": "&&"}),
+        ("(a + b) * c", {"op": "*"}),
+        ("a ? b : c", None),               # ternary: not an opchain node
+        ("clk", None),                     # bare leaf: no wrapper at all
+    ]
+    for expr, shape in cases:
+        a = sv_grammar.parse_string(
+            f"module m; assign y = {expr}; endmodule\n")
+        rhs = a["descriptions"][0]["items"][0]["assignments"][0]["rhs"]
+        # No empty single-`lhs` passthrough wrappers survive.
+        assert not (isinstance(rhs, dict) and set(rhs.keys()) == {"lhs"})
+        if shape:
+            assert rhs["op"] == shape["op"]
+            assert "args" in rhs and "tail" not in rhs
+        # Lossless round-trip through save.
+        out = sv_grammar.save(a)
+        out = out.decode("utf-8") if isinstance(out, bytes) else out
+        assert sv_grammar.parse_string(out) == a, expr
+    # `&` nests inside `|` (precedence preserved in the flat tree).
+    a = sv_grammar.parse_string("module m; assign y = a & b | c; endmodule\n")
+    rhs = a["descriptions"][0]["items"][0]["assignments"][0]["rhs"]
+    assert rhs["op"] == "|"
+    assert rhs["args"][0]["op"] == "&"

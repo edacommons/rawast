@@ -13,10 +13,27 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace rawast {
+
+// Derived precedence ladder for an always-wrap `#opchain` cascade (e.g.
+// SystemVerilog's BIN_EXPR → LOR_EXPR → … → MUL_EXPR). Built by walking
+// the `lhs`-Ref chain from the opchain rule and collecting each tier's
+// operator set. Used by the save direction to re-nest a compacted
+// `{op,args}` expression back into the full per-tier `{lhs,tail}` shape
+// the always-wrap rules emit. `valid` is false for non-cascade opchain
+// roots (e.g. sv_pp_expr's Choice form, which round-trips via its own
+// passthrough alts and doesn't need re-nesting).
+struct OpchainLadder {
+    std::unordered_map<std::string, int> op_tier;  // operator → tier index
+    int tier_count = 0;
+    NodeId root_tier;        // first/loosest tier rule (rebuild starts here)
+    bool valid = false;
+};
 
 // A complete grammar plus its terminal-parser registry and the list of
 // parsers to run between tokens (whitespace, comments). Owns the arena
@@ -83,6 +100,14 @@ public:
     // `start:` top_ Ref → EXPR Ref → ADD body where EXPR carries
     // the flag).
     bool has_opchain_in_chain(NodeId id) const noexcept;
+    // True if ANY node carries the opchain flag (not just the start-rule
+    // ref-chain). Enables compaction for grammars that embed an `#opchain`
+    // rule below a structural start rule (e.g. SystemVerilog's BIN_EXPR
+    // under the source-text start).
+    bool has_any_opchain() const noexcept;
+    // Lazily-built, cached precedence ladder for an always-wrap opchain
+    // cascade. Computed once on first call; see OpchainLadder.
+    const OpchainLadder& opchain_ladder() const;
     // Key-only: opt the KeyParser into word-boundary strict matching at
     // parse time. The literal still matches byte-by-byte; the strict
     // flag additionally requires the byte after the match to be non-word
@@ -338,6 +363,8 @@ private:
     // Indent step for save-direction pretty-print (default two spaces).
     std::string indent_step_ = "  ";
     NodeId top_;
+    // Lazily-computed opchain ladder cache (see opchain_ladder()).
+    mutable std::optional<OpchainLadder> opchain_ladder_cache_;
 
     // Profiling — mutable so `parse_from(...) const` can write the
     // report back to the Grammar. profile_enabled_ is the runtime
