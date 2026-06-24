@@ -600,7 +600,7 @@ TYPE_SPEC: choice {
 // the array cleanly; embedding `repeat <X>:items[]=@` directly in
 // MODULE_DECL breaks Choice dispatch at save time.
 MODULE_ITEMS: sequence array {
-  repeat <MODULE_ITEM>
+  repeat <MODULE_ITEM> indent tab newline
 }
 
 // Flat Choice — directives inlined for save-dispatch reasons (see
