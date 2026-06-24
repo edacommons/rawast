@@ -1569,9 +1569,10 @@ NULL_STMT: sequence dict { ";":type="null_stmt" }
 
 BLOCK_STMT: sequence dict {
   'begin':@:type="block" space,
-  ?<BLOCK_LABEL> space,
-  repeat <BLOCK_ITEM>:items[]=@,
-  'end':@ space,
+  ?<BLOCK_LABEL>,
+  "" newline,
+  repeat <BLOCK_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'end':@ space,
   ?<END_LABEL>:end_label=@
 }
 
