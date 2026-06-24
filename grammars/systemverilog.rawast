@@ -1590,10 +1590,10 @@ BLOCK_ITEM: choice {
 }
 
 IF_STMT: sequence dict {
-  ?<UNIQUENESS>:uniqueness=@,
-  'if':@:type="if",
-  "(", <EXPR>:cond=@, ")",
-  <STATEMENT>:then=@,
+  ?<UNIQUENESS>:uniqueness=@ space,
+  'if':@:type="if" space,
+  "(", <EXPR>:cond=@, ")" space,
+  <STATEMENT>:then=@ space,
   ?<ELSE_CLAUSE>
 }
 
@@ -1610,9 +1610,10 @@ CASE_STMT: sequence dict {
   ?<UNIQUENESS>:uniqueness=@ space,
   <CASE_KIND>:kind=@:type="case" space,
   "(", <EXPR>:selector=@, ")" space,
-  ?'inside':is_inside=true space,
-  repeat+ <CASE_ITEM>:items[]=@,
-  'endcase' space
+  ?'inside':is_inside=true,
+  "" newline,
+  repeat+ <CASE_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endcase' space
 }
 
 CASE_KIND: choice {
@@ -1638,12 +1639,12 @@ CASE_LABEL: choice {
 }
 
 FOR_STMT: sequence dict {
-  'for':@:type="for",
+  'for':@:type="for" space,
   "(",
-  <FOR_INIT_LIST>:init=@, ";",
-  <EXPR>:cond=@, ";",
+  <FOR_INIT_LIST>:init=@, ";" space,
+  <EXPR>:cond=@, ";" space,
   <FOR_STEP_LIST>:step=@,
-  ")",
+  ")" space,
   <STATEMENT>:body=@
 }
 
@@ -1748,8 +1749,8 @@ INC_DEC_STMT_PRE: sequence dict {
 }
 
 WHILE_STMT: sequence dict {
-  'while':@:type="while",
-  "(", <EXPR>:cond=@, ")",
+  'while':@:type="while" space,
+  "(", <EXPR>:cond=@, ")" space,
   <STATEMENT>:body=@
 }
 
