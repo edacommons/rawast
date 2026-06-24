@@ -202,6 +202,7 @@ private:
 // ---------------------------------------------------------------------------
 
 bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s);
+ValuePtr rebuild_cascade(const ValuePtr& v, const OpchainLadder& L, int tier);
 
 tl::expected<void, SaveError>
 do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
@@ -859,6 +860,16 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                       const SaveState& s) {
     NodeId rid = g.resolve_ref(node_id);
     const Node& n = g.node(rid);
+
+    // Opchain root tier (always-wrap cascade): accepts ANY expression
+    // value. The incoming AST is compacted (`{op,args}` / bare leaf), so
+    // the normal `{lhs,tail}` shape check would reject it and the Choice
+    // dispatch (EXPR/COND_EXPR) could never pick the cascade. The
+    // per-dispatch re-nest inside do_consume_body restores the `lhs` field.
+    if (const OpchainLadder& L = g.opchain_ladder();
+        L.valid && rid.value() == L.root_tier.value()) {
+        return true;
+    }
 
     switch (n.kind) {
     case NodeKind::Key: {
@@ -1675,6 +1686,17 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         if (!v) return tl::unexpected(SaveError{
             "container Sequence with null value"});
 
+        // `#opchain` per-dispatch re-nest: when this Sequence is the root
+        // (loosest) tier of an always-wrap opchain cascade, the incoming
+        // value is in compacted `{op,args}` (or bare-leaf) form. Re-nest it
+        // into the full per-tier `{lhs,tail}` shape the cascade rules emit.
+        // Fires once at the root tier; nested sub-expressions (paren bodies,
+        // call args, …) re-enter here through their own EXPR dispatch.
+        if (const OpchainLadder& L = g.opchain_ladder();
+            L.valid && rid.value() == L.root_tier.value()) {
+            v = rebuild_cascade(v, L, 0);
+        }
+
         if (n.container == Container::Array) {
             auto arr = as_array(v);
             if (!arr) return tl::unexpected(SaveError{
@@ -2141,7 +2163,235 @@ ValuePtr wrap_atom_as_chain(const ValuePtr& v) {
     return out;
 }
 
+// Collect the operator literals a tail-item rule discriminates on. Handles
+// a Sequence tail (`{<OP>:op=@, <NEXT>:rhs=@}`) directly and a Choice tail
+// (RELATIONAL_OR_INSIDE_TAIL = `choice {<REL_TAIL>, <INSIDE_TAIL>}`) by
+// unioning its alternatives. Used by opchain_ladder() to build the
+// operator→tier map.
+void collect_tier_ops(const Grammar& g, NodeId item,
+                      std::vector<std::string>& out, int depth = 0) {
+    if (depth > 6) return;
+    NodeId rid = g.resolve_ref(item);
+    if (rid.value() >= g.node_count()) return;
+    const Node& n = g.node(rid);
+    if (n.kind == NodeKind::Choice) {
+        for (NodeId alt : n.children) collect_tier_ops(g, alt, out, depth + 1);
+        return;
+    }
+    if (n.kind != NodeKind::Sequence) return;
+    bool found = false;
+    for (const auto& d : collect_child_discriminators(g, n)) {
+        if (d.field != "op") continue;
+        for (const auto& v : d.values) {
+            if (auto s = as_string(v)) { out.push_back(s->data()); found = true; }
+        }
+    }
+    if (found) return;
+    // No direct `op` discriminator — this is a binding wrapper around the
+    // real tail rule (`repeat <X_TAIL>:tail[]=@` wraps X_TAIL in a Seq with
+    // the `tail` V-name marker). Follow its Ref/Choice children to reach
+    // the tail rule that carries the op discriminator.
+    for (NodeId c : n.children) {
+        NodeId cr = g.resolve_ref(c);
+        if (cr.value() == rid.value() || cr.value() >= g.node_count()) continue;
+        const Node& cn = g.node(cr);
+        if (cn.kind == NodeKind::Sequence || cn.kind == NodeKind::Choice) {
+            collect_tier_ops(g, c, out, depth + 1);
+        }
+    }
+}
+
+// Re-nest a compacted expression value back into the always-wrap
+// `{lhs, tail}` cascade the grammar's tier rules expect, starting at
+// `tier`. Inverse of compact_opchain for the always-wrap shape. The base
+// case (tier >= tier_count) returns the value untouched — its nested
+// sub-expressions (paren bodies, call args, …) are separate EXPR
+// dispatches and re-enter this function via the per-dispatch hook, so no
+// structural recursion is needed here.
+ValuePtr rebuild_cascade(const ValuePtr& v, const OpchainLadder& L, int tier);
+
+// Flatten a same-tier left-nested compacted chain into (lhs, [(op,operand)…]).
+// `{-, [{+,[a,b]}, c]}` at the ADD tier → (a, [(+,b),(-,c)]).
+void flatten_same_tier(const ValuePtr& v, const OpchainLadder& L, int tier,
+                       ValuePtr& lhs_out,
+                       std::vector<std::pair<std::string, ValuePtr>>& entries) {
+    auto d = as_dict(v);
+    if (d) {
+        auto op_it = d->data().find("op");
+        auto args_it = d->data().find("args");
+        auto args = (args_it != d->data().end()) ? as_array(args_it->second) : nullptr;
+        if (op_it != d->data().end() && args && args->data().size() >= 2) {
+            if (auto op_sv = as_string(op_it->second)) {
+                auto t = L.op_tier.find(op_sv->data());
+                if (t != L.op_tier.end() && t->second == tier) {
+                    flatten_same_tier(args->data()[0], L, tier, lhs_out, entries);
+                    for (std::size_t i = 1; i < args->data().size(); ++i) {
+                        entries.emplace_back(op_sv->data(), args->data()[i]);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    lhs_out = v;  // base operand for this tier
+}
+
+ValuePtr rebuild_cascade(const ValuePtr& v, const OpchainLadder& L, int tier) {
+    if (tier >= L.tier_count || !v) return v;
+    auto d = as_dict(v);
+
+    // Raw `{lhs, tail}` node left by compact (e.g. an `inside` chain the
+    // fold guard skipped). Place it at the tier of its first tail op.
+    if (d && d->data().count("lhs") && d->data().count("tail")) {
+        int node_tier = -1;
+        if (auto ta = as_array(d->data().at("tail"))) {
+            if (!ta->data().empty()) {
+                if (auto te0 = as_dict(ta->data()[0])) {
+                    auto o = te0->data().find("op");
+                    if (o != te0->data().end()) {
+                        if (auto os = as_string(o->second)) {
+                            auto it = L.op_tier.find(os->data());
+                            if (it != L.op_tier.end()) node_tier = it->second;
+                        }
+                    }
+                }
+            }
+        }
+        if (node_tier > tier || node_tier < 0) {
+            auto out = std::make_shared<DictValue>();
+            out->data().emplace("lhs", rebuild_cascade(v, L, tier + 1));
+            return out;
+        }
+        // node_tier == tier: keep this node here; recurse lhs + each rhs.
+        auto out = std::make_shared<DictValue>();
+        out->data().emplace("lhs", rebuild_cascade(d->data().at("lhs"), L, tier + 1));
+        auto new_tail = std::make_shared<ArrayValue>();
+        for (const auto& te : as_array(d->data().at("tail"))->data()) {
+            auto ted = as_dict(te);
+            if (!ted) { new_tail->data().push_back(te); continue; }
+            auto rhs_it = ted->data().find("rhs");
+            if (rhs_it == ted->data().end()) { new_tail->data().push_back(te); continue; }
+            auto nte = std::make_shared<DictValue>();
+            for (const auto& [k, val] : ted->data()) {
+                nte->data().emplace(k, k == "rhs"
+                    ? rebuild_cascade(val, L, tier + 1) : val);
+            }
+            new_tail->data().push_back(nte);
+        }
+        out->data().emplace("tail", new_tail);
+        return out;
+    }
+
+    // Compacted `{op, args}` chain?
+    int head_tier = -1;
+    if (d) {
+        auto op_it = d->data().find("op");
+        auto args_it = d->data().find("args");
+        auto args = (args_it != d->data().end()) ? as_array(args_it->second) : nullptr;
+        if (op_it != d->data().end() && args && args->data().size() >= 2) {
+            if (auto op_sv = as_string(op_it->second)) {
+                auto t = L.op_tier.find(op_sv->data());
+                if (t != L.op_tier.end()) head_tier = t->second;
+            }
+        }
+    }
+    if (head_tier < 0 || head_tier > tier) {
+        // Passthrough tier: `{lhs: <next>}` with NO tail key (matches the
+        // always-wrap parse shape for a zero-operator level).
+        auto out = std::make_shared<DictValue>();
+        out->data().emplace("lhs", rebuild_cascade(v, L, tier + 1));
+        return out;
+    }
+    // head_tier == tier: build this tier's chain.
+    ValuePtr lhs_operand;
+    std::vector<std::pair<std::string, ValuePtr>> entries;
+    flatten_same_tier(v, L, tier, lhs_operand, entries);
+    auto out = std::make_shared<DictValue>();
+    out->data().emplace("lhs", rebuild_cascade(lhs_operand, L, tier + 1));
+    auto tail_arr = std::make_shared<ArrayValue>();
+    for (const auto& [op, operand] : entries) {
+        auto te = std::make_shared<DictValue>();
+        te->data().emplace("op", make_string(op));
+        te->data().emplace("rhs", rebuild_cascade(operand, L, tier + 1));
+        tail_arr->data().push_back(te);
+    }
+    out->data().emplace("tail", tail_arr);
+    return out;
+}
+
 } // namespace
+
+const OpchainLadder& Grammar::opchain_ladder() const {
+    if (opchain_ladder_cache_) return *opchain_ladder_cache_;
+    OpchainLadder L;
+    // If the opchain is reachable from the start rule's Ref-chain, the
+    // global save-entry expand (and parse-entry compact) own it — that's
+    // the expression-first case (sv_pp_expr, test_opchain). Leave the
+    // per-dispatch ladder invalid so the two paths never double-process.
+    // The per-dispatch path is only for an opchain embedded below a
+    // structural start rule (SystemVerilog's BIN_EXPR under source-text).
+    if (has_opchain_in_chain(top())) {
+        opchain_ladder_cache_ = L;  // invalid
+        return *opchain_ladder_cache_;
+    }
+    // Find an opchain-marked node; resolve to its root tier rule.
+    NodeId root;
+    for (std::size_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i].opchain) {
+            root = resolve_ref(NodeId{static_cast<std::uint32_t>(i)});
+            break;
+        }
+    }
+    // Valid only for an always-wrap (Sequence-dict) cascade. A Choice root
+    // (sv_pp_expr's passthrough form) round-trips on its own — leave invalid.
+    if (root.valid() && root.value() < nodes_.size()
+        && node(root).kind == NodeKind::Sequence) {
+        NodeId cur = root;
+        int tier = 0;
+        std::unordered_set<std::uint32_t> seen;
+        while (cur.valid() && cur.value() < nodes_.size()
+               && node(cur).kind == NodeKind::Sequence
+               && seen.insert(cur.value()).second) {
+            const Node& n = node(cur);
+            NodeId next_ref;       // the lhs-bound Ref (next/tighter tier)
+            NodeId tail_item;      // the repeat's item (the tail rule)
+            bool prev_lhs = false;
+            for (NodeId c : n.children) {
+                const Node& corig = node(c);
+                if (corig.kind == NodeKind::Value && corig.is_name) {
+                    auto sv = as_string(corig.value);
+                    prev_lhs = (sv && sv->data() == "lhs");
+                    continue;
+                }
+                if (prev_lhs && corig.kind == NodeKind::Ref) {
+                    next_ref = c; prev_lhs = false; continue;
+                }
+                prev_lhs = false;
+                if (node(resolve_ref(c)).kind == NodeKind::Repeat) {
+                    const Node& rep = node(resolve_ref(c));
+                    std::size_t idx = rep.has_separator ? 1 : 0;
+                    if (idx < rep.children.size()) tail_item = rep.children[idx];
+                }
+            }
+            if (tail_item.valid()) {
+                std::vector<std::string> ops;
+                collect_tier_ops(*this, tail_item, ops);
+                for (auto& op : ops) L.op_tier.emplace(op, tier);
+            }
+            ++tier;
+            if (!next_ref.valid()) break;
+            NodeId nx = resolve_ref(next_ref);
+            if (nx.value() >= nodes_.size()
+                || node(nx).kind != NodeKind::Sequence) break;
+            cur = nx;
+        }
+        L.tier_count = tier;
+        L.root_tier = root;
+        L.valid = (tier > 0 && !L.op_tier.empty());
+    }
+    opchain_ladder_cache_ = std::move(L);
+    return *opchain_ladder_cache_;
+}
 
 // Definition of Grammar::save lives here (rather than in
 // grammar.cpp) so the entire save engine — the helpers in this
