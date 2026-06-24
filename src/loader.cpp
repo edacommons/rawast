@@ -335,6 +335,20 @@ build_item(Grammar& g, const Value& val) {
             if (!entries.empty()) {
                 auto child_r = build_inline(g, val);
                 if (!child_r) return tl::unexpected(child_r.error());
+                // Pretty attrs (indent/tab/space/newline/tail) belong on
+                // the binding WRAPPER — the unit emitted in the enclosing
+                // sequence — not duplicated on the inner expr. build_inline
+                // already copied them onto the child from `val`; clear them
+                // so they don't double-apply (stacked indent, blank lines,
+                // double spaces). apply_pretty_attrs(wrapper) re-sets them.
+                {
+                    Node& c = g.node(*child_r);
+                    c.depth_in = false;
+                    c.indent_emit = false;
+                    c.space_after = false;
+                    c.newline_after = false;
+                    c.tail.clear();
+                }
                 NodeId wrapper = g.new_sequence();
                 for (const auto& e : entries) {
                     if (e.name.empty()) {
