@@ -110,8 +110,10 @@ TEST_CASE("Pretty: emission order is tab, content, tail, space, newline") {
 
     std::ostringstream out;
     REQUIRE(g.save(out, make_string("any")));
-    // depth=1, indent_step="  ": tab → "  ", content "X", tail ";", space " ", newline "\n"
-    CHECK(out.str() == "  X; \n");
+    // depth=1, indent_step="  ": tab → "  ", content "X", tail ";", space
+    // " " (trimmed from the line end by the pretty trailing-whitespace
+    // pass), newline "\n".
+    CHECK(out.str() == "  X;\n");
 }
 
 // --- JSON-form loader: pretty-print fields on item dicts -----------------
@@ -284,7 +286,7 @@ TEST_CASE("Pretty: pretty=false skips tab/indent/newline; keeps space and tail")
     CHECK(pretty_out.str() ==
         "[\n"
         "  1 ,\n"
-        "  2 \n"
+        "  2\n"        // trailing space trimmed by the pretty pass
         "]"
     );
 
