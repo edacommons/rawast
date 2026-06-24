@@ -2033,7 +2033,11 @@ BOR_EXPR: sequence dict {
   <BXOR_EXPR>:lhs=@,
   repeat <BOR_TAIL>:tail[]=@
 }
-BOR_TAIL:  sequence dict { "|":op="|", !"|", <BXOR_EXPR>:rhs=@ }
+// `!"||"` (the contiguous two-char literal) before `"|"` rejects only a
+// glued `||` (logical-or, looser tier) — NOT a spaced `a | |b` where the
+// second `|` is a unary reduction operand. A whitespace-skipping `!"|"`
+// would wrongly reject `a | |b`.
+BOR_TAIL:  sequence dict { !"||", "|":op="|", <BXOR_EXPR>:rhs=@ }
 
 BXOR_EXPR: sequence dict {
   <BAND_EXPR>:lhs=@,
@@ -2046,7 +2050,7 @@ BAND_EXPR: sequence dict {
   <EQUALITY_EXPR>:lhs=@,
   repeat <BAND_TAIL>:tail[]=@
 }
-BAND_TAIL:  sequence dict { "&":op="&", !"&", <EQUALITY_EXPR>:rhs=@ }
+BAND_TAIL:  sequence dict { !"&&", "&":op="&", <EQUALITY_EXPR>:rhs=@ }
 
 EQUALITY_EXPR: sequence dict {
   <RELATIONAL_EXPR>:lhs=@,
