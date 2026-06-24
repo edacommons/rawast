@@ -309,7 +309,7 @@ PARAM_DECL_TYPE_IMPLICIT: sequence dict {
   ?<PARAM_TYPE_DEFAULT>:default=@
 }
 
-PARAM_TYPE_DEFAULT: sequence dict { "=", <EXPR>:value=@ }
+PARAM_TYPE_DEFAULT: sequence dict { "" space, "=" space, <EXPR>:value=@ }
 
 // TYPE_SPEC is REQUIRED here (not optional) so this rule only matches
 // when the parameter type is a built-in keyword. `parameter MyType x`
@@ -706,7 +706,7 @@ NET_NAME: sequence dict {
 // Optional initializer on a net (e.g. `wire x = a & b;`). Non-
 // container sequence: its `initial` binding flows up into the
 // caller's dict.
-NET_INIT: sequence { "=", <EXPR>:initial=@ }
+NET_INIT: sequence { "" space, "=" space, <EXPR>:initial=@ }
 
 REG_DECL: sequence dict {
   <REG_KIND>:kind=@:type="reg_decl" space,
@@ -815,7 +815,7 @@ ENUM_LABEL: sequence dict {
   ?<ENUM_LABEL_VALUE>:value=@
 }
 
-ENUM_LABEL_VALUE: sequence dict { "=", <EXPR>:value=@ }
+ENUM_LABEL_VALUE: sequence dict { "" space, "=" space, <EXPR>:value=@ }
 
 // `[packed] struct [signing] { <fields> }` — struct/union types.
 // Body parsed directly as a sequence of field declarations.
@@ -877,7 +877,7 @@ STRUCT_FIELD_PKG_TYPE: sequence dict {
 
 STRUCT_FIELD_USER_TYPE: sequence { sv_identifier }
 
-STRUCT_FIELD_INIT: sequence dict { "=", <EXPR>:value=@ }
+STRUCT_FIELD_INIT: sequence dict { "" space, "=" space, <EXPR>:value=@ }
 
 // User-defined-typed declaration: `<typedef'd_name> [range] <names>;`.
 // Tried at module-item position AFTER all the built-in-keyword
@@ -973,7 +973,7 @@ DRIVE_STRENGTH: sequence dict {
 }
 
 ASSIGNMENT_PAIR: sequence dict {
-  <LVALUE>:lhs=@, "=", <EXPR>:rhs=@
+  <LVALUE>:lhs=@ space, "=" space, <EXPR>:rhs=@
 }
 
 // Per IEEE 1800-2017 `variable_lvalue` (also `net_lvalue` and
@@ -1161,11 +1161,11 @@ PARAM_BINDING_POSITIONAL: sequence dict {
 }
 
 INSTANCE: sequence dict {
-  <IDENT_OR_MACRO>:name=@,
+  <IDENT_OR_MACRO>:name=@ space,
   ?<UNPACKED_DIMENSIONS>:array=@,
-  "(",
-  repeat <PORT_BINDING>:port_bindings[]=@ separator ",",
-  ")"
+  "(" newline,
+  repeat <PORT_BINDING>:port_bindings[]=@ indent tab separator "," newline,
+  "" newline, "" tab, ")"
 }
 
 // Order matters: PORT_BINDING_NAMED (`.name(expr)`) tried before
@@ -1556,7 +1556,7 @@ LOCAL_VAR_DECL_USER: sequence dict {
   ";"
 }
 
-LOCAL_VAR_INIT: sequence dict { "=", <EXPR>:value=@ }
+LOCAL_VAR_INIT: sequence dict { "" space, "=" space, <EXPR>:value=@ }
 
 // Statement-position macro: `MY_ASSERT(req, gnt);`. Same form as a
 // function call but with the `-prefix and an optional trailing `;`
@@ -1711,8 +1711,8 @@ FOR_STEP: choice {
 }
 
 FOR_STEP_COMPOUND: sequence dict {
-  <LVALUE>:lhs=@,
-  <ASSIGN_OP>:type=@,
+  <LVALUE>:lhs=@ space,
+  <ASSIGN_OP>:type=@ space,
   <EXPR>:rhs=@
 }
 
@@ -1771,9 +1771,9 @@ FOREVER_STMT: sequence dict {
 // engine falls through from one alt to the other in the STATEMENT
 // Choice (the shared-leading-ref lint catches this).
 ASSIGN_STMT: sequence dict {
-  <LVALUE>:lhs=@,
-  <ASSIGN_OP>:type=@,
-  ?<DELAY_OR_EVENT>:delay=@,
+  <LVALUE>:lhs=@ space,
+  <ASSIGN_OP>:type=@ space,
+  ?<DELAY_OR_EVENT>:delay=@ space,
   <EXPR>:rhs=@,
   ";"
 }
@@ -3151,7 +3151,7 @@ CLASS_VISIBILITY: choice { 'local':@, 'protected':@ }
 
 RAND_QUAL: choice { 'randc':@, 'rand':@ }
 
-CLASS_PROPERTY_INIT: sequence dict { "=", <EXPR>:value=@ }
+CLASS_PROPERTY_INIT: sequence dict { "" space, "=" space, <EXPR>:value=@ }
 
 // `[local|protected] function [<TYPE>] NAME(args); body endfunction`
 // CLASS_FUNCTION/CLASS_TASK don't use `:@` on the keyword Key
