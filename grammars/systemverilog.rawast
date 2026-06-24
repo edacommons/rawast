@@ -386,10 +386,10 @@ PORT_LIST: choice {
 // shorthand). PORT_BODY_NEXT wraps the leading `,` so we can put
 // the Choice over direction-vs-cont forms in one place.
 PORT_LIST_ANSI: sequence dict {
-  "(":style="ansi",
-  <PORT_BODY_FIRST>:ports[]=@,
+  "(":style="ansi" newline,
+  <PORT_BODY_FIRST>:ports[]=@ indent tab,
   repeat <PORT_BODY_NEXT>:ports[]=@,
-  ")"
+  "" newline, ")"
 }
 
 // First port — must have a direction keyword. The pkg-qualified
@@ -410,7 +410,7 @@ PORT_BODY_FIRST: choice {
 // inherited-direction ports. The non-container Sequence passes
 // PORT_BODY_ANY's emitted port-dict up through PORT_LIST_ANSI's
 // `:ports[]=@` binding.
-PORT_BODY_NEXT: sequence { ",", <PORT_BODY_ANY> }
+PORT_BODY_NEXT: sequence { ",", "" newline, <PORT_BODY_ANY> indent tab }
 
 PORT_BODY_ANY: choice {
   <PORT_DECL_ANSI_USERTYPE>,
