@@ -175,9 +175,9 @@ MODULE_KEYWORD: choice {
 // inside the port list for derived parameters that can't be
 // overridden by the instantiator. Each entry is `<PARAM_DECL_OR_LOCAL>`.
 PARAM_PORT_LIST: sequence dict {
-  "#", "(",
-  repeat+ <PARAM_DECL_OR_LOCAL>:params[]=@ separator ",",
-  ")"
+  "#", "(" newline,
+  repeat+ <PARAM_DECL_OR_LOCAL>:params[]=@ indent tab separator "," newline,
+  "" newline, ")"
 }
 
 // Order matters: PARAM_DECL_VALUE before PARAM_DECL_USERTYPE so the
@@ -1202,9 +1202,9 @@ PORT_BINDING_POSITIONAL: sequence dict {
 // ─── Generate ───────────────────────────────────────────────────────────
 
 GENERATE_BLOCK: sequence dict {
-  'generate':@:type="generate" space,
-  repeat <GENERATE_ITEM>:items[]=@ space,
-  'endgenerate' space
+  'generate':@:type="generate" newline,
+  repeat <GENERATE_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endgenerate' space
 }
 
 GENERATE_ITEM: choice {
@@ -1269,9 +1269,10 @@ GEN_BLOCK: choice {
 }
 
 GEN_NAMED_BLOCK: sequence dict {
-  'begin':@:type="gen_block" space, ?<BLOCK_LABEL> space,
-  repeat <GENERATE_ITEM>:items[]=@ space,
-  'end':@ space,
+  'begin':@:type="gen_block" space, ?<BLOCK_LABEL>,
+  "" newline,
+  repeat <GENERATE_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'end':@ space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -2951,9 +2952,9 @@ CLASS_DECL_VIRTUAL: sequence dict {
   ?<PARAM_PORT_LIST>:params=@,
   ?<CLASS_EXTENDS>:extends=@,
   ?<CLASS_IMPLEMENTS>:implements=@,
-  ";",
+  ";" newline,
   <CLASS_ITEMS>:items=@,
-  "" space, 'endclass' space,
+  'endclass' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -2964,9 +2965,9 @@ CLASS_DECL_PLAIN: sequence dict {
   ?<PARAM_PORT_LIST>:params=@,
   ?<CLASS_EXTENDS>:extends=@,
   ?<CLASS_IMPLEMENTS>:implements=@,
-  ";",
+  ";" newline,
   <CLASS_ITEMS>:items=@,
-  "" space, 'endclass' space,
+  'endclass' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3002,7 +3003,7 @@ CLASS_IMPLEMENTS: sequence dict {
 }
 
 CLASS_ITEMS: sequence array {
-  repeat <CLASS_ITEM>
+  repeat <CLASS_ITEM> indent tab newline
 }
 
 CLASS_ITEM: choice {
