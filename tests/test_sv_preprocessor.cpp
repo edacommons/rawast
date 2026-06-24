@@ -227,9 +227,10 @@ TEST_CASE("sv_pp define: mixed body — ref + text + string + macro_use") {
 TEST_CASE("sv_pp define: empty body round-trips") {
     auto g = load_grammar();
     auto ast = parse(g, "`define FOO\n");
-    // Canonical save emits the identifier's trailing `space` even on
-    // empty bodies — semantically equivalent to the parse input.
-    CHECK(save(g, ast) == "`define FOO \n");
+    // Canonical save emits the identifier's `space`, trimmed from the
+    // line end by the pretty trailing-whitespace pass — semantically
+    // equivalent to the parse input (empty body).
+    CHECK(save(g, ast) == "`define FOO\n");
 }
 
 TEST_CASE("sv_pp define: simple body round-trips") {

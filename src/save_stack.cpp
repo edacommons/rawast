@@ -2432,7 +2432,35 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     }
     SaveState s;
     s.push_q({value, false, ""});
-    return do_consume(*this, out, start, s, 0, pretty);
+    if (!pretty) {
+        return do_consume(*this, out, start, s, 0, pretty);
+    }
+    // Pretty: render to a buffer, then strip trailing spaces/tabs from
+    // each line. The save grammar carries `space` attrs for token
+    // separation (round-trip), which leak as trailing whitespace before
+    // a newline / `;` / closer in the indented form. Trailing whitespace
+    // is insignificant on re-parse, so trimming it is round-trip-safe.
+    std::ostringstream buf;
+    auto r = do_consume(*this, buf, start, s, 0, pretty);
+    if (!r) return r;
+    const std::string text = buf.str();
+    std::string trimmed;
+    trimmed.reserve(text.size());
+    std::size_t line_start = 0;
+    for (std::size_t i = 0; i <= text.size(); ++i) {
+        if (i == text.size() || text[i] == '\n') {
+            std::size_t end = i;
+            while (end > line_start
+                   && (text[end - 1] == ' ' || text[end - 1] == '\t')) {
+                --end;
+            }
+            trimmed.append(text, line_start, end - line_start);
+            if (i < text.size()) trimmed.push_back('\n');
+            line_start = i + 1;
+        }
+    }
+    out << trimmed;
+    return {};
 }
 
 } // namespace rawast
