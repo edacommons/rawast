@@ -779,8 +779,14 @@ ValuePtr compact_opchain(const ValuePtr& v) {
         }
     }
 
-    // Fold the tail left-to-right.
+    // Fold the tail left-to-right. `fold_produced` tracks whether `acc`
+    // is a chain THIS fold built — only then is same-op arg-extension
+    // safe. Without it, a unary-reduction lhs (`&a` → `{op:&, args:[a]}`)
+    // gets wrongly merged with a following binary `& b` into
+    // `{op:&, args:[a, b]}` instead of `{op:&, args:[{op:&,args:[a]}, b]}`
+    // (`(&a) & b`), since both share the `&` op string.
     ValuePtr acc = lhs;
+    bool fold_produced = false;
     for (const auto& te : tail_arr->data()) {
         auto td = as_dict(te);
         if (!td) continue;
@@ -801,14 +807,10 @@ ValuePtr compact_opchain(const ValuePtr& v) {
                 auto ao_sv = as_string(ao_it->second);
                 auto aa_arr = as_array(aa_it->second);
                 if (ao_sv && aa_arr && ao_sv->data() == op
-                    // Same-op collapse only if no nested mixed-op
-                    // boundary lies inside — i.e. args contains only
-                    // values produced by THIS fold (not a user-given
-                    // {op,args} dict from the input). The fold itself
-                    // produces nested same-op dicts only via this
-                    // branch, so reaching here implies acc was either
-                    // the original lhs (atom) or a previously
-                    // extended same-op chain. Either case is safe.
+                    // Only extend a chain THIS fold built — never a
+                    // user-given `{op,args}` (e.g. a unary reduction
+                    // `&a`), which would conflate unary and binary `&`.
+                    && fold_produced
                 ) {
                     auto new_args = std::make_shared<ArrayValue>();
                     for (const auto& a : aa_arr->data()) {
@@ -836,6 +838,7 @@ ValuePtr compact_opchain(const ValuePtr& v) {
         new_acc->data().emplace("op", make_string(op));
         new_acc->data().emplace("args", new_args);
         acc = new_acc;
+        fold_produced = true;
     }
 
     if (!has_other) return acc;

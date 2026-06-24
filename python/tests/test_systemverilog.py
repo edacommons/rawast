@@ -1268,3 +1268,33 @@ def test_sv_expression_opchain_compaction_round_trips(sv_grammar):
     rhs = a["descriptions"][0]["items"][0]["assignments"][0]["rhs"]
     assert rhs["op"] == "|"
     assert rhs["args"][0]["op"] == "&"
+
+
+def test_sv_unary_reduction_vs_binary_op(sv_grammar):
+    """Unary reduction operators (`&a`, `|a`, `~&a`) share their token with
+    the binary forms (`a & b`). Two ambiguities the flat `{op,args}` form
+    surfaced and fixed:
+
+    * `a && b` must be logical-and, not `a & (&b)` — the `!"&&"`/`!"||"`
+      contiguous lookahead on BAND_TAIL/BOR_TAIL keeps the binary `&`/`|`
+      from swallowing the first char of a glued `&&`/`||`.
+    * `&a & b` must be `(&a) & b`, not `a & b` — compact_opchain's
+      `fold_produced` guard stops it merging the unary reduction `&a`
+      (`{op:&,args:[a]}`) into the binary `&` chain.
+    """
+    def rhs(e):
+        a = sv_grammar.parse_string(f"module m; assign y = {e}; endmodule\n")
+        return a["descriptions"][0]["items"][0]["assignments"][0]["rhs"]
+
+    # Unary reduction: one arg.
+    assert rhs("&a") == {"op": "&", "args": [{"type": "ref", "name": "a"}]}
+    # Binary: two refs.
+    assert rhs("a & b")["op"] == "&" and len(rhs("a & b")["args"]) == 2
+    # Logical-and is NOT bitwise-and-of-reduction.
+    assert rhs("a && b")["op"] == "&&"
+    assert rhs("a || b")["op"] == "||"
+    # Leading reduction stays distinct from the binary chain.
+    r = rhs("&a & b")
+    assert r["op"] == "&"
+    assert r["args"][0] == {"op": "&", "args": [{"type": "ref", "name": "a"}]}
+    assert r["args"][1]["name"] == "b"
