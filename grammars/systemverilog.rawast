@@ -2021,13 +2021,13 @@ LOR_EXPR: sequence dict {
   <LAND_EXPR>:lhs=@,
   repeat <LOR_TAIL>:tail[]=@
 }
-LOR_TAIL:  sequence dict { "||":op="||", <LAND_EXPR>:rhs=@ }
+LOR_TAIL:  sequence dict { "" space, "||":op="||" space, <LAND_EXPR>:rhs=@ }
 
 LAND_EXPR: sequence dict {
   <BOR_EXPR>:lhs=@,
   repeat <LAND_TAIL>:tail[]=@
 }
-LAND_TAIL:  sequence dict { "&&":op="&&", <BOR_EXPR>:rhs=@ }
+LAND_TAIL:  sequence dict { "" space, "&&":op="&&" space, <BOR_EXPR>:rhs=@ }
 
 BOR_EXPR: sequence dict {
   <BXOR_EXPR>:lhs=@,
@@ -2037,26 +2037,26 @@ BOR_EXPR: sequence dict {
 // glued `||` (logical-or, looser tier) — NOT a spaced `a | |b` where the
 // second `|` is a unary reduction operand. A whitespace-skipping `!"|"`
 // would wrongly reject `a | |b`.
-BOR_TAIL:  sequence dict { !"||", "|":op="|", <BXOR_EXPR>:rhs=@ }
+BOR_TAIL:  sequence dict { !"||", "" space, "|":op="|" space, <BXOR_EXPR>:rhs=@ }
 
 BXOR_EXPR: sequence dict {
   <BAND_EXPR>:lhs=@,
   repeat <BXOR_TAIL>:tail[]=@
 }
-BXOR_TAIL:  sequence dict { <BXOR_OP>:op=@, <BAND_EXPR>:rhs=@ }
+BXOR_TAIL:  sequence dict { "" space, <BXOR_OP>:op=@ space, <BAND_EXPR>:rhs=@ }
 BXOR_OP:    choice { "^~":@, "~^":@, "^":@ }
 
 BAND_EXPR: sequence dict {
   <EQUALITY_EXPR>:lhs=@,
   repeat <BAND_TAIL>:tail[]=@
 }
-BAND_TAIL:  sequence dict { !"&&", "&":op="&", <EQUALITY_EXPR>:rhs=@ }
+BAND_TAIL:  sequence dict { !"&&", "" space, "&":op="&" space, <EQUALITY_EXPR>:rhs=@ }
 
 EQUALITY_EXPR: sequence dict {
   <RELATIONAL_EXPR>:lhs=@,
   repeat <EQUALITY_TAIL>:tail[]=@
 }
-EQUALITY_TAIL:  sequence dict { <EQUALITY_OP>:op=@, <RELATIONAL_EXPR>:rhs=@ }
+EQUALITY_TAIL:  sequence dict { "" space, <EQUALITY_OP>:op=@ space, <RELATIONAL_EXPR>:rhs=@ }
 
 // Longest-first so `===` wins over `==` and `!==` wins over `!=`.
 EQUALITY_OP: choice {
@@ -2073,7 +2073,7 @@ RELATIONAL_OR_INSIDE_TAIL: choice {
   <INSIDE_TAIL>
 }
 
-RELATIONAL_TAIL: sequence dict { <RELATIONAL_OP>:op=@, <SHIFT_EXPR>:rhs=@ }
+RELATIONAL_TAIL: sequence dict { "" space, <RELATIONAL_OP>:op=@ space, <SHIFT_EXPR>:rhs=@ }
 
 // `inside { [1:10], 20, 30, ... }` — set membership. Body captured raw.
 INSIDE_TAIL: sequence dict {
@@ -2092,7 +2092,7 @@ SHIFT_EXPR: sequence dict {
   <ADD_EXPR>:lhs=@,
   repeat <SHIFT_TAIL>:tail[]=@
 }
-SHIFT_TAIL:  sequence dict { <SHIFT_OP>:op=@, <ADD_EXPR>:rhs=@ }
+SHIFT_TAIL:  sequence dict { "" space, <SHIFT_OP>:op=@ space, <ADD_EXPR>:rhs=@ }
 
 // Arithmetic shifts (<<<, >>>) before logical so longer wins.
 SHIFT_OP: choice {
@@ -2103,14 +2103,14 @@ ADD_EXPR: sequence dict {
   <MUL_EXPR>:lhs=@,
   repeat <ADD_TAIL>:tail[]=@
 }
-ADD_TAIL:  sequence dict { <ADD_OP>:op=@, <MUL_EXPR>:rhs=@ }
+ADD_TAIL:  sequence dict { "" space, <ADD_OP>:op=@ space, <MUL_EXPR>:rhs=@ }
 ADD_OP:    choice { "+":@, "-":@ }
 
 MUL_EXPR: sequence dict {
   <POWER_EXPR>:lhs=@,
   repeat <MUL_TAIL>:tail[]=@
 }
-MUL_TAIL:  sequence dict { <MUL_OP>:op=@, <POWER_EXPR>:rhs=@ }
+MUL_TAIL:  sequence dict { "" space, <MUL_OP>:op=@ space, <POWER_EXPR>:rhs=@ }
 MUL_OP:    choice { "*":@, "/":@, "%":@ }
 
 // POWER is right-associative per SV LRM §11.4.4 — chain recurses on
@@ -2118,7 +2118,7 @@ MUL_OP:    choice { "*":@, "/":@, "%":@ }
 POWER_EXPR:  choice { <POWER_CHAIN>, <UNARY_EXPR> }
 POWER_CHAIN: sequence dict {
   <UNARY_EXPR>:lhs=@,
-  "**":op="**",
+  "" space, "**":op="**" space,
   <POWER_EXPR>:rhs=@
 }
 

@@ -1298,3 +1298,25 @@ def test_sv_unary_reduction_vs_binary_op(sv_grammar):
     assert r["op"] == "&"
     assert r["args"][0] == {"op": "&", "args": [{"type": "ref", "name": "a"}]}
     assert r["args"][1]["name"] == "b"
+
+
+def test_sv_expression_operator_spacing_round_trips(sv_grammar):
+    """Binary cascade operators save with surrounding spaces (`a & b`, not
+    `a&b`), which also closes the glue class where a binary op abutting a
+    same-char unary operand would re-parse wrong: `a & &b` -> `a&&b`
+    (logical-and) or `a + +b` -> `a++b` (post-increment)."""
+    def saved_rhs(e):
+        a = sv_grammar.parse_string(f"module m; assign y = {e}; endmodule\n")
+        out = sv_grammar.save(a)
+        out = out.decode("utf-8") if isinstance(out, bytes) else out
+        return out, sv_grammar.parse_string(out) == a
+
+    out, rt = saved_rhs("a&b|c")
+    assert "a & b | c" in out and rt          # spaced, round-trips
+    out, rt = saved_rhs("a==b&&c!=d")
+    assert "a == b && c != d" in out and rt
+    # The glue class now round-trips (was the open edge).
+    for e in ("a & &b", "a + +b", "a | |b"):
+        out, rt = saved_rhs(e)
+        assert rt, f"{e!r} did not round-trip: {out!r}"
+        assert "&&" not in out.replace("&&b", "") or e == "a & &b"
