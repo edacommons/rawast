@@ -3564,12 +3564,127 @@ SEQUENCE_DECL: sequence dict {
 // pass to extract structure.
 COVERGROUP_DECL: sequence dict {
   'covergroup':@:type="covergroup" space,
-  sv_identifier:name=@ space,
-  ?<METHOD_PORT_LIST>:args=@ space,
-  *:body=@,
-  'endgroup' space,
+  sv_identifier:name=@,
+  ?<METHOD_PORT_LIST>:args=@,
+  ?<COVERGROUP_SAMPLE>:sample=@,
+  ?<EVENT_CONTROL>:clocking=@,
+  ";" newline,
+  repeat <COVERGROUP_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endgroup' space,
   ?<END_LABEL>:end_label=@
 }
+
+// `with function sample (args)` — covergroup sample method (IEEE 1800
+// §19.8.1). Tried before the clocking-event clause.
+COVERGROUP_SAMPLE: sequence dict {
+  "" space, 'with' space, 'function' space, 'sample' space,
+  <METHOD_PORT_LIST>:args=@
+}
+
+COVERGROUP_ITEM: choice {
+  <COVERGROUP_OPTION>,
+  <COVER_CROSS>,
+  <COVERPOINT>
+}
+
+// `option.X = v;` / `type_option.X = v;`
+COVERGROUP_OPTION: sequence dict {
+  choice { 'type_option':kind="type_option", 'option':kind="option" },
+  ".", sv_identifier:name=@,
+  "=" space, <EXPR>:value=@,
+  ";"
+}
+
+// `[label :] coverpoint <expr> [iff (cond)] (";" | "{ bins }")`
+COVERPOINT: sequence dict {
+  ?<COVER_LABEL>:label=@,
+  'coverpoint':@:type="coverpoint" space,
+  <EXPR>:expr=@,
+  ?<COVER_IFF>:iff=@,
+  <COVER_BODY>:body=@
+}
+
+// `[label :] cross p1, p2, ... (";" | "{ bins }")`
+COVER_CROSS: sequence dict {
+  ?<COVER_LABEL>:label=@,
+  'cross':@:type="cross" space,
+  repeat+ <EXPR>:points[]=@ separator "," space,
+  ?<COVER_IFF>:iff=@,
+  <COVER_BODY>:body=@
+}
+
+COVER_LABEL: sequence dict { sv_identifier:name=@, "" space, ":" space }
+
+COVER_IFF: sequence dict {
+  "" space, 'iff' space, "(", <EXPR>:cond=@, ")"
+}
+
+COVER_BODY: choice {
+  sequence dict { "" space, "{":type="cover_bins" newline,
+    repeat <BINS_DECL>:bins[]=@ indent tab newline,
+    "" tab, "}" },
+  sequence dict { ";":type="cover_simple" }
+}
+
+BINS_DECL: sequence dict {
+  ?'wildcard':is_wildcard=true space,
+  <BINS_KIND>:kind=@ space,
+  sv_identifier:name=@,
+  ?<BINS_ARRAY>:array=@,
+  "" space, "=" space,
+  <BINS_RHS>:value=@,
+  ";"
+}
+BINS_KIND: choice { 'illegal_bins':@, 'ignore_bins':@, 'bins':@ }
+BINS_ARRAY: sequence dict { "[", ?<EXPR>:size=@, "]" }
+BINS_RHS: choice {
+  sequence dict { 'default':is_default=true, ?<BINS_DEFAULT_SEQ>:default_seq=@ },
+  <BINS_SELECT_EXPR>,
+  <BINS_TRANS>,
+  sequence dict { "{",
+    repeat+ <BIN_VALUE>:values[]=@ separator "," space, "}" }
+}
+BIN_VALUE: choice { <INSIDE_RANGE>, <EXPR> }
+
+// Cross-bin select (IEEE 1800-2017 §19.6.1): `binsof(x) [intersect {s}]`
+// optionally combined with `&&`/`||` (e.g. UVM cross filters).
+// NB: fields are `head`/`ops`, NOT `lhs`/`tail` — the latter is the
+// opchain always-wrap shape, which compact_opchain folds (`&&`/`||` are
+// ladder ops), turning this into `{op,args}` the bins save can't rebuild
+// (it then saved as an empty `{}`).
+BINS_SELECT_EXPR: sequence dict {
+  <BINS_SELECT_TERM>:head=@,
+  repeat <BINS_SELECT_TAIL>:ops[]=@,
+  ?<BINS_SELECT_WITH>:with=@,
+  ?<COVER_IFF>:iff=@
+}
+BINS_SELECT_WITH: sequence dict {
+  "" space, 'with' space, "(", <EXPR>:cond=@, ")"
+}
+BINS_SELECT_TAIL: sequence dict {
+  "" space, choice { "&&":bool_op="&&", "||":bool_op="||" } space,
+  <BINS_SELECT_TERM>:operand=@
+}
+BINS_SELECT_TERM: choice {
+  sequence dict { "(", <BINS_SELECT_EXPR>:group=@, ")" },
+  sequence dict {
+    ?"!":negate=true,
+    'binsof':@:type="binsof", "(", <EXPR>:arg=@, ")",
+    ?<BINS_INTERSECT>:intersect=@
+  }
+}
+BINS_INTERSECT: sequence dict {
+  "" space, 'intersect' space,
+  "{", repeat+ <BIN_VALUE>:values[]=@ separator "," space, "}"
+}
+
+// Transition bin: `( a => b [=> c ...] )` (IEEE 1800-2017 §19.5).
+BINS_TRANS: sequence dict {
+  "(":type="bins_trans",
+  repeat+ <EXPR>:trans[]=@ separator "=>" space,
+  ")"
+}
+BINS_DEFAULT_SEQ: sequence dict { "" space, 'sequence':is_sequence=true }
 
 // `clocking [NAME] @(<event>); <items> endclocking [: NAME]`.
 // Used in testbenches to declare a clock domain with timing/skew
