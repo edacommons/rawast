@@ -1505,3 +1505,16 @@ def test_sv_expression_method_chaining(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(F % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_typedef_in_subroutine_body(sv_grammar):
+    """Local `typedef` inside a function/task body (a TASK_ITEM) — valid SV
+    and emitted by UVM `uvm_object_utils` field automation. Regression for
+    the expanded-mode coverage gap."""
+    src = ("class c; function void f();\n"
+           "  bit ok;\n"
+           "  typedef my_cfg_t __local_type__;\n"
+           "  int sz;\n"
+           "endfunction endclass\n")
+    ast = sv_grammar.parse_string(src)
+    assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

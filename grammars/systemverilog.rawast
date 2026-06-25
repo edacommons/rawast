@@ -1442,6 +1442,7 @@ TASK_PORT_USERTYPED: sequence dict {
 // has every chance to match a declaration first.
 TASK_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
+  <TYPEDEF_DECL>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
