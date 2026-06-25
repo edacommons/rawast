@@ -68,7 +68,7 @@ SOURCE_TEXT ignore whitespace line_comment block_comment: sequence dict {
 // ends up empty/wrong-typed and every alt's can_consume returns
 // false. The extra rule resolves cleanly per the tcl.SCRIPT pattern.
 DESCRIPTIONS: sequence array {
-  repeat <DESCRIPTION>
+  repeat <DESCRIPTION> newline
 }
 
 // Flat Choice. Preprocessor directives (`define / `undef / `include /
