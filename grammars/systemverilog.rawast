@@ -803,8 +803,10 @@ VIRTUAL_IF_TYPEDEF: sequence dict {
 // labels. Cleaner than capture-then-subparse: the grammar engine
 // handles structure naturally and save round-trips for free.
 ENUM_TYPE: sequence dict {
-  'enum':@:type="enum_type",
-  *:meta=@,
+  'enum':@:type="enum_type" space,
+  ?<TYPE_SPEC>:base_type=@ space,
+  ?<SIGNING_KW>:base_signing=@ space,
+  ?<PACKED_DIMENSIONS>:base_range=@ space,
   "{",
   repeat+ <ENUM_LABEL>:labels[]=@ separator "," space,
   "}"
@@ -820,18 +822,18 @@ ENUM_LABEL_VALUE: sequence dict { "" space, "=" space, <EXPR>:value=@ }
 // `[packed] struct [signing] { <fields> }` — struct/union types.
 // Body parsed directly as a sequence of field declarations.
 STRUCT_TYPE: sequence dict {
-  ?'packed':is_packed=true,
-  'struct':@:type="struct_type",
-  *:meta=@,
+  'struct':@:type="struct_type" space,
+  ?'packed':is_packed=true space,
+  ?<SIGNING_KW>:signing=@ space,
   "{",
   repeat+ <STRUCT_FIELD>:fields[]=@,
   "}"
 }
 
 UNION_TYPE: sequence dict {
-  ?'packed':is_packed=true,
-  'union':@:type="union_type",
-  *:meta=@,
+  'union':@:type="union_type" space,
+  ?'packed':is_packed=true space,
+  ?<SIGNING_KW>:signing=@ space,
   "{",
   repeat+ <STRUCT_FIELD>:fields[]=@,
   "}"
@@ -998,9 +1000,9 @@ LVALUE: choice {
 LVALUE_STREAM: sequence dict {
   "{":type="lvalue_stream",
   <STREAM_DIR>:direction=@,
-  *:slice=@,
+  ?<STREAM_SLICE>:slice=@,
   "{",
-  *:body=@,
+  repeat+ <LVALUE>:items[]=@ separator ",",
   "}",
   "}"
 }
@@ -1501,7 +1503,7 @@ STATEMENT: choice {
 // the terminating `;`.
 EVENT_TRIGGER_STMT: sequence dict {
   choice { "->>":type="event_nonblocking", "->":type="event_blocking" },
-  *:event=@,
+  <HIER_REF>:event=@,
   ";"
 }
 
@@ -2100,8 +2102,19 @@ INSIDE_TAIL: sequence dict {
   "" space,
   'inside':op="inside" space,
   "{",
-  *:body=@,
+  repeat+ <INSIDE_ELEM>:elements[]=@ separator ",",
   "}"
+}
+
+// A `inside {...}` set element: a `[lo:hi]` range or a plain value
+// expression (IEEE 1800-2017 §11.4.13). Range tried first.
+INSIDE_ELEM: choice {
+  <INSIDE_RANGE>,
+  <EXPR>
+}
+
+INSIDE_RANGE: sequence dict {
+  "[", <EXPR>:lo=@, ":", <EXPR>:hi=@, "]"
 }
 
 RELATIONAL_OP: choice {
@@ -2341,7 +2354,7 @@ WITH_BRACES: sequence dict {
 WITH_PARENS: sequence dict {
   'with':@:type="with_parens",
   "(",
-  *:body=@,
+  <EXPR>:expr=@,
   ")"
 }
 
@@ -2411,11 +2424,14 @@ NEW_ARGS: choice {
 }
 
 NEW_PARENS: sequence dict {
-  "(", *:text=@, ")"
+  "(":type="new_call",
+  repeat <TASK_ARG>:args[]=@ separator ",",
+  ")"
 }
 
 NEW_BRACKETS: sequence dict {
-  "[", *:text=@, "]"
+  "[":type="new_array", <EXPR>:size=@, "]",
+  ?<NEW_PARENS>:init=@
 }
 
 // Streaming concatenation: `{<<{...}}` or `{>>{...}}`,
@@ -2428,11 +2444,20 @@ NEW_BRACKETS: sequence dict {
 STREAMING_CONCAT: sequence dict {
   "{":type="streaming_concat",
   <STREAM_DIR>:direction=@,
-  *:slice=@,
+  ?<STREAM_SLICE>:slice=@,
   "{",
-  *:body=@,
+  repeat+ <EXPR>:items[]=@ separator ",",
   "}",
   "}"
+}
+
+// Optional slice size on a streaming concat: a type (`byte`), a literal
+// (`8`/`32`), or a parameter name (`LfsrIdxDw`). Deliberately NOT a full
+// EXPR — that would swallow the following concat `{...}`.
+STREAM_SLICE: choice {
+  <TYPE_SPEC>,
+  <NUMBER>,
+  sequence dict { sv_qualified_type:name=@:type="stream_slice_ref" }
 }
 
 STREAM_DIR: choice { "<<":@, ">>":@ }
@@ -3691,9 +3716,22 @@ DO_WHILE_STMT: sequence dict {
 // The bracket-section captures iteration variables as raw text;
 // host re-parses the comma-separated index list.
 FOREACH_STMT: sequence dict {
-  'foreach':@:type="foreach",
-  "(", *:iter=@, ")",
+  'foreach':@:type="foreach" space,
+  "(", <FOREACH_ITER>:iter=@, ")",
   <STATEMENT>:body=@
+}
+
+// `arr[i]`, `arr[i][j]`, `arr[i, j]` — the loop-array reference plus its
+// per-dimension loop variables (IEEE 1800-2017 §12.7.3).
+FOREACH_ITER: sequence dict {
+  sv_qualified_type:array=@,
+  repeat+ <FOREACH_DIM>:dims[]=@
+}
+
+FOREACH_DIM: sequence dict {
+  "[",
+  repeat <sv_identifier>:vars[]=@ separator ",",
+  "]"
 }
 
 // `obj.method(args);` / `obj.field.method(args);` — method call
