@@ -1,4 +1,5 @@
 #include <rawast/preprocessor.hpp>
+#include <functional>
 
 #include <rawast/grammar.hpp>
 #include <rawast/stream.hpp>
@@ -1313,6 +1314,32 @@ void Preprocessor::handle_define(const DictValue& d) {
                 }
                 return out;
             };
+            // Recursive form: strip `\<newline>` from EVERY string in a
+            // value tree. Needed for nested macro-call segments (a
+            // `macro_use` dict) whose captured arguments may span
+            // continuation lines — e.g. `\`C(a, \<newline> b)` inside a
+            // macro body. The flat strip above only reaches bare-string
+            // and `literal`-dict segments, so without this the `\` leaks
+            // into the nested call's args and survives expansion.
+            std::function<ValuePtr(const ValuePtr&)> strip_deep =
+                [&](const ValuePtr& v) -> ValuePtr {
+                    if (!v) return v;
+                    if (auto vs = as_string(v))
+                        return make_string(strip_continuations(vs->data()));
+                    if (auto arr = as_array(v)) {
+                        auto out = std::make_shared<ArrayValue>();
+                        for (const auto& e : arr->data())
+                            out->data().push_back(strip_deep(e));
+                        return out;
+                    }
+                    if (auto dd = as_dict(v)) {
+                        auto out = std::make_shared<DictValue>();
+                        for (const auto& [k, val] : dd->data())
+                            out->data().emplace(k, strip_deep(val));
+                        return out;
+                    }
+                    return v;
+                };
             // The sv_preprocessor body scope emits literal text as
             // bare StringValue segments interleaved with typed dicts
             // (macro_use / ref / string / stringify / token_paste) and
@@ -1378,7 +1405,10 @@ void Preprocessor::handle_define(const DictValue& d) {
                         continue;
                     }
                 }
-                rewritten->data().push_back(seg);
+                // Other typed dict (macro_use / ref / string / stringify
+                // / token_paste): deep-strip continuations from its
+                // captured text (notably a nested call's multi-line args).
+                rewritten->data().push_back(strip_deep(seg));
             }
             m.body_segments = rewritten;
             state_.macros[m.name] = std::move(m);
