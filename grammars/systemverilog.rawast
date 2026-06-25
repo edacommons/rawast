@@ -792,8 +792,8 @@ TYPEDEF_BASE: choice {
 // parameterised form (`virtual push_pull_if#(...)`) reuses
 // PARAM_BINDING for the named-or-positional bindings.
 VIRTUAL_IF_TYPEDEF: sequence dict {
-  'virtual':@:type="virtual_if_type",
-  ?'interface':is_interface_kw=true,
+  'virtual':@:type="virtual_if_type" space,
+  ?'interface':is_interface_kw=true space,
   sv_identifier:name=@,
   ?<PARAM_OVERRIDE>:params=@
 }
@@ -1052,10 +1052,7 @@ INDEXED_PART_SELECT: sequence dict {
 
 DELAY: sequence dict {
   "#",
-  choice {
-    <EXPR>:value=@,
-    sequence { "(", <EXPR>:value=@, ")" }
-  }
+  <EXPR>:value=@
 }
 
 // ─── Always / initial / final ───────────────────────────────────────────
@@ -1102,7 +1099,7 @@ EVENT_CONTROL: sequence dict {
     sequence { "*":wildcard=true },
     sequence { "(", "*":wildcard=true, ")" },
     sequence { "(", <EVENT_EXPR>:events=@, ")" },
-    sequence { sv_identifier:event_id=@ }
+    sequence { sv_identifier:event_id=@, repeat <HIER_PART>:path[]=@ }
   }
 }
 
@@ -1148,7 +1145,18 @@ PARAM_OVERRIDE: sequence dict {
 
 PARAM_BINDING: choice {
   <PARAM_BINDING_NAMED>,
+  <PARAM_BINDING_VIRTUAL>,
   <PARAM_BINDING_POSITIONAL>
+}
+
+// `#(virtual ifc)` / `#(virtual interface ifc)` — a virtual-interface
+// type passed as a parameter value (UVM `uvm_config_db#(virtual clk_if)`).
+// Not an EXPR, so it needs its own positional alternative ahead of the
+// generic EXPR form.
+PARAM_BINDING_VIRTUAL: sequence dict {
+  'virtual':is_virtual=true space,
+  ?'interface':is_interface=true space,
+  sv_qualified_type:vtype=@:type="param_virtual_type"
 }
 
 PARAM_BINDING_NAMED: sequence dict {
@@ -1431,6 +1439,7 @@ TASK_PORT_USERTYPED: sequence dict {
 // (assignments, if/case/while) come last so a leading identifier
 // has every chance to match a declaration first.
 TASK_ITEM: choice {
+  <VIRTUAL_INTERFACE_DECL>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
@@ -1869,6 +1878,8 @@ TASK_CALL: sequence dict {
   !<SV_RESERVED>,
   sv_qualified_type:name=@:type="task_call",
   ?<TASK_ARG_LIST>:args=@,
+  ?<WITH_CLAUSE>:with=@,
+  repeat <DOT_CALL>:chain[]=@,
   ";"
 }
 
@@ -1887,8 +1898,14 @@ TASK_ARG_LIST: sequence dict {
 
 TASK_ARG: choice {
   <TASK_ARG_NAMED>,
-  <TASK_ARG_POSITIONAL>
+  <TASK_ARG_POSITIONAL>,
+  <TASK_ARG_EMPTY>
 }
+
+// `f(a, , c)` — an omitted positional argument (IEEE 1800-2017 §13.5.3,
+// the default-value slot). Matches the empty span between two commas;
+// tried last so it only fires where no real argument is present.
+TASK_ARG_EMPTY: sequence dict { "":type="empty_arg" }
 
 TASK_ARG_NAMED: sequence dict {
   ".", sv_identifier:name=@:style="named",
@@ -2153,6 +2170,7 @@ PRIMARY: choice {
   <ASSIGNMENT_PATTERN>,
   <DEFAULT_VALUE_PATTERN>,
   <SYSTEM_FUNC_CALL>,
+  <LAST_INDEX_REF>,
   <METHOD_CALL>,
   <PARAMETERIZED_TYPE_REF>,
   <FUNC_CALL>,
@@ -2194,9 +2212,9 @@ TYPED_ASSIGNMENT_PATTERN: sequence dict {
 // same shape as instance-side `MODULE_INSTANTIATION#(.X(v))`. Reuse
 // `PARAM_BINDING` so the named (`.NAME(EXPR)`) form is supported.
 PARAMETERIZED_TYPE_REF: sequence dict {
-  sv_identifier:name=@:type="param_type_ref",
+  sv_qualified_type:name=@:type="param_type_ref",
   "#", "(",
-  repeat+ <PARAM_BINDING>:params[]=@ separator ",",
+  repeat <PARAM_BINDING>:params[]=@ separator ",",
   ")",
   ?<PARAM_STATIC_CALL_TAIL>:static_call=@
 }
@@ -2212,9 +2230,8 @@ PARAMETERIZED_TYPE_REF: sequence dict {
 PARAM_STATIC_CALL_TAIL: sequence dict {
   "::",
   sv_identifier:method=@,
-  "(",
-  repeat <TASK_ARG>:args[]=@ separator ",",
-  ")"
+  repeat <SCOPE_RES_SEG>:scopes[]=@,
+  ?<SCOPE_CALL_ARGS>:call=@
 }
 
 // SV-1800 default-value patterns: `'0` (all bits 0), `'1` (all
@@ -2347,12 +2364,33 @@ SUPER_REF: sequence dict {
 // BEFORE HIER_REF so the leading sv_identifier is committed to
 // PKG_QUAL_PRIMARY when followed by `::`. PEG handles the
 // non-match case by rolling back to HIER_REF.
+// `pkg::name`, chained `A::B::C` (IEEE 1800-2017 §23.7 class-scope
+// resolution), and a trailing static-method call `T::type_id::create(x)`
+// (the UVM factory idiom). `scopes[]` carries the 2nd-and-later `::name`
+// segments; `call` the optional `(args)` after the final name.
 PKG_QUAL_PRIMARY: sequence dict {
   sv_identifier:pkg=@:type="pkg_qual_ref",
   "::",
   sv_identifier:name=@,
+  repeat <SCOPE_RES_SEG>:scopes[]=@,
+  ?<SCOPE_CALL_ARGS>:call=@,
   repeat <HIER_PART>:path[]=@,
   ?<RANGE_OR_INDEX>:select=@
+}
+
+// `$` as the last-index token in `arr[$]` / `arr[i:$]` (IEEE 1800-2017
+// §7.10.1 queue/dynamic-array bound). Guarded by `!sv_identifier` so it
+// never steals the `$` of `$display` / `$root` (those are tried earlier
+// as SYSTEM_FUNC_CALL anyway).
+LAST_INDEX_REF: sequence dict { "$":type="last_index", !sv_identifier }
+
+SCOPE_RES_SEG: sequence dict { "::", sv_identifier:name=@ }
+
+SCOPE_CALL_ARGS: sequence dict {
+  "(",
+  repeat <TASK_ARG>:args[]=@ separator ",",
+  ")",
+  ?<WITH_CLAUSE>:with=@
 }
 
 // `null` literal — class handle absence.
@@ -3183,9 +3221,9 @@ CLASS_FUNCTION_TYPED: sequence dict {
   ?<RANGE>:return_range=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endfunction' space,
+  ";" newline,
+  repeat <TASK_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endfunction' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3198,9 +3236,9 @@ CLASS_FUNCTION_VOID: sequence dict {
   ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endfunction' space,
+  ";" newline,
+  repeat <TASK_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endfunction' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3219,9 +3257,9 @@ CLASS_TASK: sequence dict {
   ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endtask' space,
+  ";" newline,
+  repeat <TASK_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endtask' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3412,12 +3450,12 @@ PROPERTY_DECL: sequence dict {
 
 // `sequence NAME([args]); <body> endsequence [: NAME]`
 SEQUENCE_DECL: sequence dict {
-  'sequence':@:type="sequence",
+  'sequence':@:type="sequence" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
   *:body=@,
-  'endsequence',
+  'endsequence' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -3669,7 +3707,20 @@ METHOD_CALL_STMT: sequence dict {
   repeat <TASK_ARG>:args[]=@ separator ",",
   ")",
   ?<WITH_CLAUSE>:with=@,
+  repeat <DOT_CALL>:chain[]=@,
   ";"
+}
+
+// `.method(args)` link in a method-call chain — `obj.get().set(n)`,
+// `pkg::factory().build()`. Appended after a base call in the
+// statement-call rules (kept out of the shared HIER_PART, which the
+// declaration/lvalue rules also consume).
+DOT_CALL: sequence dict {
+  ".", sv_identifier:method=@:type="method_chain",
+  "(",
+  repeat <TASK_ARG>:args[]=@ separator ",",
+  ")",
+  ?<WITH_CLAUSE>:with=@
 }
 
 // `Class#(params)::static_method(args);` — UVM idiom
