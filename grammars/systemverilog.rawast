@@ -1593,6 +1593,8 @@ BLOCK_STMT: sequence dict {
 BLOCK_LABEL: sequence { ":" space, sv_identifier:label=@ }
 
 BLOCK_ITEM: choice {
+  <VIRTUAL_INTERFACE_DECL>,
+  <TYPEDEF_DECL>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
