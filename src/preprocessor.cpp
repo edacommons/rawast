@@ -277,6 +277,11 @@ std::size_t locate_item(const std::string& source,
     return found == std::string::npos ? src_cursor : found;
 }
 
+// Defined below; used by the TEXT_LINE walker's function-like-call
+// (whitespace-before-paren) lookahead.
+std::size_t scan_args(const std::string& text, std::size_t cursor,
+                      std::vector<std::string>& args);
+
 } // namespace
 
 void Preprocessor::walk(const ValuePtr& v, std::string& out,
@@ -354,7 +359,9 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
             auto segments_val = dict_value_or_null(*dict, "segments");
             auto segments = std::dynamic_pointer_cast<ArrayValue>(segments_val);
             if (segments) {
-                for (const auto& seg : segments->data()) {
+                const auto& segs = segments->data();
+                for (std::size_t i = 0; i < segs.size(); ++i) {
+                    const auto& seg = segs[i];
                     if (auto s = std::dynamic_pointer_cast<StringValue>(seg)) {
                         if (s->data().empty()) continue;
                         std::size_t origin =
@@ -366,11 +373,67 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
                         src_cursor = origin + s->data().size();
                     } else if (auto sd = std::dynamic_pointer_cast<DictValue>(seg)) {
                         auto seg_type = dict_string_or_empty(*sd, "type");
-                        if (seg_type == "macro_use") {
-                            handle_macro_use(*sd, out, src_cursor,
-                                             source, parent_span_id,
-                                             /*consume_line=*/false);
+                        if (seg_type != "macro_use") continue;
+                        // Function-like CALL with whitespace before `(`
+                        // (`\`uvm_field_int (saw_error)`). At file-scope
+                        // TEXT_LINE the grammar parses `\`name` as an
+                        // object-like use (no args) and the ` (args)` as a
+                        // following text segment — the LRM permits the
+                        // space for a function-like call. If the macro IS
+                        // function-like and the next segment begins with
+                        // `(`, lift those args into the call before it
+                        // expands (object-like macros keep the verbatim
+                        // text, so `\`A + \`B` is unaffected).
+                        bool has_args = false;
+                        if (auto av = dict_value_or_null(*sd, "args")) {
+                            if (auto aa = std::dynamic_pointer_cast<ArrayValue>(av))
+                                has_args = !aa->data().empty();
                         }
+                        auto nm = dict_string_or_empty(*sd, "name");
+                        auto mit = state_.macros.find(nm);
+                        bool fn_like = mit != state_.macros.end()
+                                       && mit->second.is_function_like;
+                        if (!has_args && fn_like && i + 1 < segs.size()) {
+                            auto ns = std::dynamic_pointer_cast<StringValue>(
+                                segs[i + 1]);
+                            if (ns) {
+                                const std::string& nt = ns->data();
+                                std::size_t p = 0;
+                                while (p < nt.size()
+                                       && (nt[p] == ' ' || nt[p] == '\t')) ++p;
+                                std::vector<std::string> arglist;
+                                std::size_t past = (p < nt.size() && nt[p] == '(')
+                                    ? scan_args(nt, p, arglist) : p;
+                                if (past > p && !arglist.empty()) {
+                                    auto with_args =
+                                        std::make_shared<DictValue>();
+                                    for (const auto& [k, v] : sd->data())
+                                        with_args->data()[k] = v;
+                                    auto aa = std::make_shared<ArrayValue>();
+                                    for (auto& a : arglist)
+                                        aa->data().push_back(make_string(a));
+                                    with_args->data()["args"] = aa;
+                                    handle_macro_use(*with_args, out, src_cursor,
+                                                     source, parent_span_id,
+                                                     /*consume_line=*/false);
+                                    std::string trailing = nt.substr(past);
+                                    if (!trailing.empty()) {
+                                        std::size_t o = locate_item(
+                                            source, src_cursor, trailing);
+                                        record_span(parent_span_id, o,
+                                                    trailing.size(), out.size(),
+                                                    "text");
+                                        out.append(trailing);
+                                        src_cursor = o + trailing.size();
+                                    }
+                                    ++i;  // skip the consumed `(args)` segment
+                                    continue;
+                                }
+                            }
+                        }
+                        handle_macro_use(*sd, out, src_cursor,
+                                         source, parent_span_id,
+                                         /*consume_line=*/false);
                     }
                 }
             }

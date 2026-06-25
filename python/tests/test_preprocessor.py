@@ -49,3 +49,18 @@ def test_stringify_in_nested_macro_call_args():
     out = _expand(src)
     assert 'g("myf");' in out, out
     assert bt not in out and "ARG" not in out
+
+
+def test_function_like_call_with_space_before_paren():
+    """LRM §22.5.1 permits whitespace between a function-like macro name and
+    its `(args)` at the use site (`\\`uvm_field_int (saw_error)`). At file
+    scope the grammar parses `\\`name` as object-like + ` (args)` text; the
+    engine lifts the args into the call when the macro is function-like.
+    Object-like uses keep verbatim spacing."""
+    fl = ("`define M(x, y) f(x, y);\n"
+          "initial `M (a, b)\n")
+    out = _expand(fl)
+    assert "f(a, b);" in out, out
+    # object-like macro followed by parenthesised text — spacing preserved
+    ol = "`define A alpha\n`define B beta\nx = `A + `B;\n"
+    assert "x = alpha + beta;" in _expand(ol)
