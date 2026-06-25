@@ -1596,7 +1596,7 @@ BLOCK_STMT: sequence dict {
   ?<BLOCK_LABEL>,
   "" newline,
   repeat <BLOCK_ITEM>:items[]=@ indent tab newline,
-  "" tab, 'end':@,
+  "" tab, 'end':@ space,
   ?<END_LABEL>:end_label=@
 }
 
