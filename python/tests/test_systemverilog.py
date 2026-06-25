@@ -1403,3 +1403,28 @@ def test_sv_uvm_scope_resolution_expressions(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(W % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_tier_b_expressions_structured(sv_grammar):
+    """Tier-B: previously-raw expression forms now parse to structured
+    sub-trees (no `*:text`/`*:body`/`*:iter`/`*:slice`/`*:meta` blobs) and
+    round-trip: new()/new[], with(), -> event, enum/struct base type,
+    foreach iter, inside sets, streaming concat."""
+    W = "class c; function void f(); %s endfunction endclass"
+    for stmt in [
+        "o = new(a, b);",
+        "arr = new[n];",
+        "x = q.find() with (item > 0);",
+        "-> obj.done;",
+        "if (a inside {[lo:hi], 5, foo}) y = 1;",
+        "foreach (data_valid[i][j]) y = 1;",
+        "x = {<<8{data}};",
+        "{<<{a, b}} = data;",
+    ]:
+        ast = sv_grammar.parse_string(W % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+    # enum base type is structured, not a raw `meta` blob
+    pkg = sv_grammar.parse_string(
+        "package p; typedef enum logic [1:0] {A, B} e_t; endpackage")
+    enum = pkg["descriptions"][0]["items"][0]["base"]
+    assert enum["base_type"] == "logic" and "meta" not in enum
