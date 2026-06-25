@@ -1566,3 +1566,17 @@ def test_sv_block_end_keyword_not_glued(sv_grammar):
         out = sv_grammar.save(ast).decode("utf-8")
         assert "endwhile" not in out and "endelse" not in out
         assert sv_grammar.parse_string(out) == ast
+
+
+def test_sv_fork_join_label_and_items_not_glued(sv_grammar):
+    """fork/join items print one-per-line and a `fork : label` doesn't glue
+    to the first statement. Regression: `fork : drive_irq get_and_drive();`
+    saved as `fork : drive_irqget_and_drive();` in expanded UVM."""
+    T = "class c; task t(); %s endtask endclass"
+    for stmt in [
+        "fork : drive get_and_drive(); wait(c); join",
+        "fork a(); b(); join_none",
+        "fork : mon collect(); join_any",
+    ]:
+        ast = sv_grammar.parse_string(T % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
