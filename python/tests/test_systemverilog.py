@@ -1518,3 +1518,17 @@ def test_sv_typedef_in_subroutine_body(sv_grammar):
            "endfunction endclass\n")
     ast = sv_grammar.parse_string(src)
     assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_typedef_in_begin_end_block(sv_grammar):
+    """Local `typedef` inside a begin/end block (a BLOCK_ITEM), not just a
+    subroutine body — valid SV and emitted by UVM field automation inside
+    `if (...) begin typedef ...; ... end`."""
+    src = ("class c; function void f();\n"
+           "  if (x) begin\n"
+           "    typedef bit [$bits(trans_e)-1:0] __tmp_int_t__;\n"
+           "    __tmp_int_t__ v;\n"
+           "  end\n"
+           "endfunction endclass\n")
+    ast = sv_grammar.parse_string(src)
+    assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
