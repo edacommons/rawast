@@ -1532,3 +1532,18 @@ def test_sv_typedef_in_begin_end_block(sv_grammar):
            "endfunction endclass\n")
     ast = sv_grammar.parse_string(src)
     assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_parameterized_type_signing_param(sv_grammar):
+    """`#(int unsigned)` / `#(bit signed)` — a built-in type with a signing
+    keyword as a parameter value (UVM `uvm_resource#(int unsigned)`). Was a
+    parse gap (the two-keyword form isn't an EXPR)."""
+    F = "class c; function void f(); %s endfunction endclass"
+    for stmt in [
+        "uvm_resource#(int unsigned) r;",
+        "foo#(bit signed) x;",
+        "foo#(int unsigned, logic) y;",
+        "foo#(int) z;",            # plain type param still works
+    ]:
+        ast = sv_grammar.parse_string(F % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

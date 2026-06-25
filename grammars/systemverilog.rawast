@@ -1148,7 +1148,18 @@ PARAM_OVERRIDE: sequence dict {
 PARAM_BINDING: choice {
   <PARAM_BINDING_NAMED>,
   <PARAM_BINDING_VIRTUAL>,
+  <PARAM_BINDING_TYPE_SIGNED>,
   <PARAM_BINDING_POSITIONAL>
+}
+
+// `#(int unsigned)` / `#(bit signed)` — a built-in type WITH a signing
+// keyword as a parameter value (UVM `uvm_resource#(int unsigned)`). The
+// two-keyword form isn't an EXPR; the required signing keyword keeps it
+// from shadowing the plain-type EXPR positional form (`#(int)`).
+PARAM_BINDING_TYPE_SIGNED: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="param_type_signed" space,
+  <SIGNING_KW>:signing=@,
+  ?<PACKED_DIMENSIONS>:range=@
 }
 
 // `#(virtual ifc)` / `#(virtual interface ifc)` — a virtual-interface
