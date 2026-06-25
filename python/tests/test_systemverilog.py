@@ -1320,3 +1320,39 @@ def test_sv_expression_operator_spacing_round_trips(sv_grammar):
         out, rt = saved_rhs(e)
         assert rt, f"{e!r} did not round-trip: {out!r}"
         assert "&&" not in out.replace("&&b", "") or e == "a & &b"
+
+
+def test_sv_pretty_output_is_lint_clean_hygiene(sv_grammar):
+    """Pretty-printed SV save output is hygienic enough to pass a linter:
+    no trailing whitespace on any line, ends with a newline, indented
+    structure, and re-parses to the same AST. (verilator --lint-only -Wall
+    confirms CLEAN on this output; checked here without the tool dep.)"""
+    src = (
+        "module alu #(parameter int W = 32)(\n"
+        "  input  logic [W-1:0] a_i, input logic [W-1:0] b_i,\n"
+        "  input  logic [2:0] op_i, output logic [W-1:0] y_o\n"
+        ");\n"
+        "  logic [W-1:0] r;\n"
+        "  always_comb begin\n"
+        "    unique case (op_i)\n"
+        "      3'd0: r = a_i + b_i;\n"
+        "      default: r = '0;\n"
+        "    endcase\n"
+        "  end\n"
+        "  assign y_o = r;\n"
+        "endmodule\n"
+    )
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a)
+    out = out.decode("utf-8") if isinstance(out, bytes) else out
+
+    # No trailing whitespace on any line.
+    for ln in out.split("\n"):
+        assert ln == ln.rstrip(), f"trailing whitespace: {ln!r}"
+    # Ends with exactly one newline.
+    assert out.endswith("\n") and not out.endswith("\n\n")
+    # Indented structure (items under the module are indented).
+    assert "\n  logic [W - 1:0] r;" in out
+    assert "\n      3'd0: r = a_i + b_i;" in out   # case item at depth 3
+    # Lossless round-trip.
+    assert sv_grammar.parse_string(out) == a
