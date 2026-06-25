@@ -1451,3 +1451,18 @@ def test_sv_tier_c_constraints_structured(sv_grammar):
     a = sv_grammar.parse_string(W % "constraint k { x == 1; }")
     blk = a["descriptions"][0]["items"][0]["block"]
     assert "items" in blk and "body" not in blk
+
+
+def test_sv_keyword_space_glue_regressions(sv_grammar):
+    """Latent keyword/name save-glue bugs found by the grammar space audit
+    (tools/grammar_space_audit.py): a word-emitter must not abut a following
+    keyword/name on save. Regression for `MyT t`->`MyTt` (for-init usertype)
+    and `do begin`->`dobegin` (do-while)."""
+    F = "class c; function void f(); %s endfunction endclass"
+    for stmt in [
+        "for (MyT t = t.first(); t != null; t = t.next()) x = 1;",
+        "do begin x = 1; end while (c);",
+        "do x = 1; while (c);",
+    ]:
+        ast = sv_grammar.parse_string(F % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

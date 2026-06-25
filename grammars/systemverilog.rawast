@@ -1689,9 +1689,9 @@ FOR_INIT: choice {
 // from ASSIGNMENT_PAIR by requiring two identifiers + `=`.
 FOR_INIT_USERTYPE: sequence dict {
   !<TYPE_SPEC>,
-  sv_qualified_type:type_spec=@:type="for_init_usertype",
+  sv_qualified_type:type_spec=@:type="for_init_usertype" space,
   sv_identifier:name=@,
-  "=", <EXPR>:value=@
+  "=" space, <EXPR>:value=@
 }
 
 FOR_INIT_GENVAR: sequence dict {
@@ -1928,7 +1928,7 @@ TASK_ARG_POSITIONAL: sequence dict {
 }
 
 DISABLE_STMT: sequence dict {
-  'disable':@, sv_identifier:target=@, ";":type="disable"
+  'disable':@ space, sv_identifier:target=@, ";":type="disable"
 }
 
 WAIT_STMT: sequence dict {
@@ -2900,8 +2900,8 @@ PACKAGE_DECL: sequence dict {
 // keyword. Tried BEFORE INTERFACE_DECL so the `interface class …`
 // path wins over the bare `interface NAME …` form.
 INTERFACE_CLASS_DECL: sequence dict {
-  'interface':type="interface_class",
-  'class':@,
+  'interface':type="interface_class" space,
+  'class':@ space,
   ?<LIFETIME>:lifetime=@,
   sv_identifier:name=@,
   ?<PARAM_PORT_LIST>:params=@,
@@ -3398,7 +3398,7 @@ DIST_WEIGHT: sequence dict {
 // `<name>` (inheriting direction from the preceding entry). Host
 // walks left-to-right to apply inherited directions.
 MODPORT_DECL: sequence dict {
-  'modport':@:type="modport",
+  'modport':@:type="modport" space,
   sv_identifier:name=@,
   "(",
   repeat+ <MODPORT_GROUP>:ports[]=@ separator ",",
@@ -3424,7 +3424,7 @@ MODPORT_GROUP_INHERIT: sequence dict {
 // captured as raw text up to the trailing `;`. Host re-parses if it
 // needs to manipulate the body.
 LET_DECL: sequence dict {
-  'let':@:type="let",
+  'let':@:type="let" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   "=",
@@ -3536,7 +3536,7 @@ ASSERT_KIND_KW: choice { 'property':@, 'sequence':@ }
 
 // `property NAME([args]); <body> endproperty [: NAME]`
 PROPERTY_DECL: sequence dict {
-  'property':@:type="property",
+  'property':@:type="property" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
@@ -3662,7 +3662,7 @@ EXTERN_DECL: sequence dict {
 // (user-defined primitive). Body is a small DSL of input/output
 // declarations + a truth table. Captured raw.
 UDP_DECL: sequence dict {
-  'primitive':@:type="primitive",
+  'primitive':@:type="primitive" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
   ";",
@@ -3673,7 +3673,7 @@ UDP_DECL: sequence dict {
 
 // `config NAME; <items> endconfig [: NAME]` — design configuration.
 CONFIG_DECL: sequence dict {
-  'config':@:type="config",
+  'config':@:type="config" space,
   sv_identifier:name=@,
   ";",
   *:body=@,
@@ -3694,7 +3694,7 @@ CONFIG_DECL: sequence dict {
 // MODULE_KEYWORD's `program` alt would only fire as a fallback
 // when PROGRAM_DECL fails (e.g. when `endmodule` is used).
 PROGRAM_DECL: sequence dict {
-  'program':@:type="program",
+  'program':@:type="program" space,
   sv_identifier:name=@,
   ?<PARAM_PORT_LIST>:param_ports=@,
   ?<PORT_LIST>:ports=@,
@@ -3777,9 +3777,9 @@ CONTINUE_STMT: sequence dict {
 
 // `do <stmt> while (<expr>);` — post-test loop.
 DO_WHILE_STMT: sequence dict {
-  'do':@:type="do_while",
-  <STATEMENT>:body=@,
-  'while',
+  'do':@:type="do_while" space,
+  <STATEMENT>:body=@ space,
+  'while' space,
   "(", <EXPR>:cond=@, ")",
   ";"
 }
