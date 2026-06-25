@@ -1486,3 +1486,22 @@ def test_sv_covergroup_structured(sv_grammar):
     cg = sv_grammar.parse_string(C % "covergroup g; cp: coverpoint a; endgroup")
     body = cg["descriptions"][0]["items"][0]
     assert "items" in body and "body" not in body  # structured, not raw
+
+
+def test_sv_expression_method_chaining(sv_grammar):
+    """Method-call chains in EXPRESSION context — `f().g()`, `obj.m1().m2().x`
+    — round-trip. (Statement-level chaining was added in Tier A; this adds
+    the expression/RHS form, the #1 gap in real UVM-expanded code, e.g.
+    `uvm_get_report_object().uvm_get_report_object()`.) Must not regress
+    statement chaining."""
+    F = "class c; function void f(); %s endfunction endclass"
+    for stmt in [
+        "x = a().b();",
+        "x = obj.m1().m2().field;",
+        "x = uvm_get_report_object().uvm_get_report_object();",
+        "x = q.find() with (item > 0);",
+        "a().b();",          # statement form still works
+        "q.size();",
+    ]:
+        ast = sv_grammar.parse_string(F % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

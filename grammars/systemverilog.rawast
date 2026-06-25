@@ -2332,7 +2332,8 @@ METHOD_CALL: sequence dict {
   "(",
   repeat <TASK_ARG>:args[]=@ separator ",",
   ")",
-  ?<WITH_CLAUSE>:with=@
+  ?<WITH_CLAUSE>:with=@,
+  ?<CALL_CHAIN>:chain=@
 }
 
 // Optional `with { ... }` (constraint block style) OR `with (expr)`
@@ -2654,7 +2655,22 @@ FUNC_CALL: sequence dict {
   "(",
   repeat <TASK_ARG>:args[]=@ separator ",",
   ")",
-  ?<WITH_CLAUSE>:with=@
+  ?<WITH_CLAUSE>:with=@,
+  ?<CALL_CHAIN>:chain=@
+}
+
+// Method-call postfix chain in EXPRESSION context: `f().g().h`,
+// `obj.get().set(n)`. A dedicated rule (NOT the shared HIER_PART, which
+// the statement/lvalue rules consume) so adding `.method(args)` here
+// can't disturb METHOD_CALL_STMT's `path then (args)` shape.
+CALL_CHAIN: sequence dict {
+  repeat+ <CHAIN_LINK>:links[]=@
+}
+CHAIN_LINK: choice {
+  <DOT_CALL>,
+  <HIER_DOT>,
+  <HIER_PART_RANGE>,
+  <HIER_SELECT>
 }
 
 // System function call: `$name(arg, ...)` — same shape as task call
