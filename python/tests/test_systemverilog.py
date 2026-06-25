@@ -1547,3 +1547,22 @@ def test_sv_parameterized_type_signing_param(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(F % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_block_end_keyword_not_glued(sv_grammar):
+    """A `begin…end` block's `end` keeps a trailing space so it doesn't glue
+    to a following keyword (`end while`, `end else`, block-`end` followed by
+    a sibling `if`). Regression: dropping the space (to avoid the cosmetic
+    `end  else` double-space) glued `end`+`if` -> `endif` in expanded UVM
+    task bodies, breaking round-trip."""
+    T = "class c; task t(); %s endtask endclass"
+    for stmt in [
+        "do begin x = 1; end while (c);",
+        "forever begin x <= 1; end",
+        "fork begin a(); end join_none",
+        "if (p) begin x = 1; end else begin y = 1; end",
+    ]:
+        ast = sv_grammar.parse_string(T % stmt)
+        out = sv_grammar.save(ast).decode("utf-8")
+        assert "endwhile" not in out and "endelse" not in out
+        assert sv_grammar.parse_string(out) == ast
