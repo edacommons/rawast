@@ -1356,3 +1356,50 @@ def test_sv_pretty_output_is_lint_clean_hygiene(sv_grammar):
     assert "\n      3'd0: r = a_i + b_i;" in out   # case item at depth 3
     # Lossless round-trip.
     assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_class_method_bodies_are_structured(sv_grammar):
+    """Class function/task bodies are parsed into structured statement
+    items (TASK_ITEM), not captured as an opaque raw `body` blob — so a
+    consumer can walk the AST for semantics without re-parsing. Regression
+    for the Tier-A raw-capture sweep."""
+    src = (
+        "class c;\n"
+        "  function automatic int f(int a);\n"
+        "    int r;\n"
+        "    r = a + 1;\n"
+        "    if (a > 0) return r;\n"
+        "    return 0;\n"
+        "  endfunction\n"
+        "  task t();\n"
+        "    @posedge_ev;\n"
+        "    x <= 1;\n"
+        "  endtask\n"
+        "endclass\n"
+    )
+    ast = sv_grammar.parse_string(src)
+    cls = ast["descriptions"][0]
+    fn = cls["items"][0]
+    # The function body is a list of structured items, not a raw string.
+    assert "items" in fn and isinstance(fn["items"], list)
+    assert "body" not in fn  # no opaque catch-all blob
+    assert len(fn["items"]) == 4  # decl, assign, if, return
+    # Lossless round-trip of the structured form.
+    assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_uvm_scope_resolution_expressions(sv_grammar):
+    """UVM/SV scope-resolution + call idioms parse (Tier-A expression gaps):
+    chained `::`, parameterized `#()::`, virtual-type params, `$` index,
+    method chaining, randomize-with."""
+    W = "class c; function void f(); %s endfunction endclass"
+    for stmt in [
+        "x = a::b::c;",
+        "m = pkg::klass#()::type_id::create(\"m\");",
+        "ok = uvm_config_db#(virtual vif_t)::get(null, \"\", \"v\", vif);",
+        "y = q[$];",
+        "srv::get_server().set_max_quit_count(n);",
+        "std::randomize(z) with {z < 8;};",
+    ]:
+        ast = sv_grammar.parse_string(W % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
