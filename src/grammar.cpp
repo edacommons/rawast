@@ -718,13 +718,22 @@ void note_progress(ParseError& max_progress, const ParseError& err) {
 //   * The original `lhs` / `tail` keys are dropped from the output;
 //     any other keys on the wrapper carry through.
 //   * Empty tail (or no tail at all): unwrap to `lhs`.
-ValuePtr compact_opchain(const ValuePtr& v) {
+// `foldable` (when non-null) restricts which tail operators may be folded
+// into the compact `{op,args}` form: only ops the save-side cascade can
+// rebuild (the opchain ladder's tiers). Chains whose op sits ABOVE the
+// `#opchain`-marked cascade — implication `->`/`<->`, which is the
+// loosest EXPR tier — are left in always-wrap `{lhs,tail}` form so they
+// round-trip via their own grammar rule (IMPL_CHAIN) rather than a
+// rebuild the ladder has no tier for. Null `foldable` folds everything
+// (the start-chain case, whose global expand_opchain owns the full chain).
+ValuePtr compact_opchain(const ValuePtr& v,
+                         const std::unordered_set<std::string>* foldable) {
     if (!v) return v;
 
     if (auto arr = as_array(v)) {
         auto out = std::make_shared<ArrayValue>();
         for (const auto& elt : arr->data()) {
-            out->data().push_back(compact_opchain(elt));
+            out->data().push_back(compact_opchain(elt, foldable));
         }
         return out;
     }
@@ -735,7 +744,7 @@ ValuePtr compact_opchain(const ValuePtr& v) {
     // Recurse on field values first.
     auto recursed = std::make_shared<DictValue>();
     for (const auto& [k, val] : d->data()) {
-        recursed->data().emplace(k, compact_opchain(val));
+        recursed->data().emplace(k, compact_opchain(val, foldable));
     }
 
     auto lhs_it = recursed->data().find("lhs");
@@ -776,6 +785,17 @@ ValuePtr compact_opchain(const ValuePtr& v) {
         auto td = as_dict(te);
         if (!td || td->data().find("rhs") == td->data().end()) {
             return recursed;
+        }
+        // Op outside the cascade ladder (e.g. implication `->`/`<->`,
+        // a tier above the #opchain mark) — the save rebuild has no tier
+        // for it. Leave the chain always-wrap to round-trip via its rule.
+        if (foldable) {
+            auto op_it = td->data().find("op");
+            auto op_sv = op_it != td->data().end()
+                ? as_string(op_it->second) : nullptr;
+            if (!op_sv || foldable->find(op_sv->data()) == foldable->end()) {
+                return recursed;
+            }
         }
     }
 
@@ -2326,7 +2346,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         // always-wrap chain shape in the produced AST. See
         // `compact_opchain` for the transform.
         if (has_opchain_in_chain(start) || has_any_opchain()) {
-            result_value = compact_opchain(result_value);
+            // When the per-dispatch ladder is valid (opchain below a
+            // structural start rule, e.g. SV's BIN_EXPR), restrict folding
+            // to ops the ladder can rebuild on save. Otherwise (start-chain
+            // case) fold everything — global expand_opchain owns it.
+            const OpchainLadder& L = opchain_ladder();
+            std::unordered_set<std::string> ops;
+            if (L.valid) {
+                for (const auto& [op, _] : L.op_tier) ops.insert(op);
+            }
+            result_value = compact_opchain(result_value,
+                                           L.valid ? &ops : nullptr);
         }
         return result_value;
     }
