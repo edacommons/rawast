@@ -121,3 +121,25 @@ def test_save_bare_item_emits_no_binding_suffix():
     assert "<Y>" in text
     assert "<Y>:" not in text       # no binding suffix on the bare item
     assert "=" not in text          # no binding has a value
+
+
+# --- opchain: implication `->`/`<->` round-trips (regression) -------------
+
+def test_opchain_implication_round_trips():
+    """`->`/`<->` is the loosest EXPR cascade tier, ABOVE the #opchain
+    mark on BIN_EXPR. compact_opchain used to fold it into `{op,args}`
+    anyway, but the save-side cascade ladder has no tier for it, so saving
+    any `a -> b` died with "no matching grammar alternative ... POWER_EXPR".
+    The fold is now restricted to ladder ops, leaving implication
+    always-wrap so it round-trips via IMPL_CHAIN."""
+    sv = rawast.Grammar("systemverilog")
+    W = "class c; function void f(); %s endfunction endclass"
+    for stmt in [
+        "y = a -> b;",
+        "y = (!g) -> d == 0;",      # implication with a comparison consequent
+        "y = a <-> b;",             # equivalence
+        "y = a -> b -> c;",         # right-chained implication
+        "y = a || b && c;",         # ordinary binary cascade still folds
+    ]:
+        ast = sv.parse_string(W % stmt)
+        assert sv.parse_string(sv.save(ast).decode("utf-8")) == ast
