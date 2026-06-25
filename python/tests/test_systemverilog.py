@@ -1428,3 +1428,26 @@ def test_sv_tier_b_expressions_structured(sv_grammar):
         "package p; typedef enum logic [1:0] {A, B} e_t; endpackage")
     enum = pkg["descriptions"][0]["items"][0]["base"]
     assert enum["base_type"] == "logic" and "meta" not in enum
+
+
+def test_sv_tier_c_constraints_structured(sv_grammar):
+    """Tier-C: constraint blocks parse to structured items (no raw
+    sv_balanced_braces body) and round-trip — expr, inside, implication,
+    dist, soft, if/else, foreach, solve."""
+    W = "class c; %s endclass"
+    for con in [
+        "constraint c1 { x == 50; }",
+        "constraint c2 { num inside {[800:1000]}; }",
+        "constraint c3 { (!is_grant) -> delay == 0; }",
+        "constraint c4 { d dist {1 :/ p, 0 :/ 100 - p}; }",
+        "constraint c5 { soft x == 1; }",
+        "constraint c6 { if (a) x == 1; else x == 2; }",
+        "constraint c7 { foreach (arr[i]) arr[i] < 10; }",
+        "constraint c8 { solve a before b; }",
+    ]:
+        ast = sv_grammar.parse_string(W % con)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+    # constraint body is structured, not a raw blob
+    a = sv_grammar.parse_string(W % "constraint k { x == 1; }")
+    blk = a["descriptions"][0]["items"][0]["block"]
+    assert "items" in blk and "body" not in blk

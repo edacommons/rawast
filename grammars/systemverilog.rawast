@@ -3312,9 +3312,81 @@ METHOD_PORT_LIST: sequence dict {
 CONSTRAINT_DECL: sequence dict {
   'constraint':@:type="constraint" space,
   sv_identifier:name=@ space,
-  "{",
-  sv_balanced_braces:body=@,
-  "}"
+  <CONSTRAINT_BLOCK>:block=@
+}
+
+// `{ <constraint_item>* }` — a constraint block (IEEE 1800-2017 §18.5).
+// Shared by CONSTRAINT_DECL, implication/if consequents, and inline
+// `randomize() with { ... }` (WITH_BRACES).
+CONSTRAINT_BLOCK: sequence dict {
+  "{":type="constraint_block" newline,
+  repeat <CONSTRAINT_ITEM>:items[]=@ indent tab newline,
+  "" tab, "}"
+}
+
+CONSTRAINT_ITEM: choice {
+  <CONSTRAINT_IF>,
+  <CONSTRAINT_FOREACH>,
+  <CONSTRAINT_SOLVE>,
+  <CONSTRAINT_EXPR_ITEM>
+}
+
+// `if (cond) <block-or-item> [else <block-or-item>]`
+CONSTRAINT_IF: sequence dict {
+  'if':@:type="constraint_if" space,
+  "(", <EXPR>:cond=@, ")" space,
+  <CONSTRAINT_CONSEQUENT>:then=@,
+  ?<CONSTRAINT_ELSE>:else=@
+}
+CONSTRAINT_ELSE: sequence dict {
+  'else' space, <CONSTRAINT_CONSEQUENT>:body=@
+}
+CONSTRAINT_CONSEQUENT: choice {
+  <CONSTRAINT_ITEM>,
+  <CONSTRAINT_BLOCK>
+}
+
+// `foreach (arr[i]) <block-or-item>`
+CONSTRAINT_FOREACH: sequence dict {
+  'foreach':@:type="constraint_foreach" space,
+  "(", <FOREACH_ITER>:iter=@, ")" space,
+  <CONSTRAINT_CONSEQUENT>:body=@
+}
+
+// `solve a, b before c, d;`
+CONSTRAINT_SOLVE: sequence dict {
+  'solve':@:type="constraint_solve" space,
+  repeat+ <EXPR>:solve[]=@ separator "," space,
+  "" space, 'before' space,
+  repeat+ <EXPR>:before[]=@ separator "," space,
+  ";"
+}
+
+// Expression-based item: `[soft] <expr> [ dist {..} | -> consequent ] ;`
+CONSTRAINT_EXPR_ITEM: sequence dict {
+  ?'soft':is_soft=true space,
+  <EXPR>:expr=@,
+  <CONSTRAINT_EXPR_TAIL>:tail=@
+}
+// `->` implication is already an EXPR operator (so `a -> b` is one
+// expression); only `dist` and the plain terminator need a tail here.
+CONSTRAINT_EXPR_TAIL: choice {
+  <CONSTRAINT_DIST_TAIL>,
+  sequence dict { ";":type="constraint_expr" }
+}
+CONSTRAINT_DIST_TAIL: sequence dict {
+  "" space, 'dist':type="constraint_dist" space,
+  "{", repeat+ <DIST_ITEM>:weights[]=@ separator "," space, "}",
+  ";"
+}
+DIST_ITEM: sequence dict {
+  choice { <INSIDE_RANGE>, <EXPR> }:value=@,
+  ?<DIST_WEIGHT>:weight=@
+}
+DIST_WEIGHT: sequence dict {
+  "" space,
+  choice { ":/":mode="per_range", ":=":mode="per_value" } space,
+  <EXPR>:amount=@
 }
 
 // ─── Miscellaneous module-item constructs (parse-only) ──────────────────
