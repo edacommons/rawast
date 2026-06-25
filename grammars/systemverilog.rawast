@@ -1284,8 +1284,8 @@ TASK_DECL: sequence dict {
   sv_qualified_type:name=@,
   ?<TASK_PORT_LIST>:ports=@,
   ";" newline,
-  repeat <TASK_ITEM>:items[]=@ space,
-  'endtask' space,
+  repeat <TASK_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endtask' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -1304,8 +1304,8 @@ FUNCTION_DECL: sequence dict {
   <FUNCTION_HEAD>,
   ?<TASK_PORT_LIST>:ports=@,
   ";" newline,
-  repeat <TASK_ITEM>:items[]=@ space,
-  'endfunction' space,
+  repeat <TASK_ITEM>:items[]=@ indent tab newline,
+  "" tab, 'endfunction' space,
   ?<END_LABEL>:end_label=@
 }
 
@@ -1573,7 +1573,7 @@ BLOCK_STMT: sequence dict {
   ?<BLOCK_LABEL>,
   "" newline,
   repeat <BLOCK_ITEM>:items[]=@ indent tab newline,
-  "" tab, 'end':@ space,
+  "" tab, 'end':@,
   ?<END_LABEL>:end_label=@
 }
 
