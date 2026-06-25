@@ -1466,3 +1466,23 @@ def test_sv_keyword_space_glue_regressions(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(F % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_covergroup_structured(sv_grammar):
+    """Tier-C: covergroup bodies parse to structured coverpoints/cross/bins
+    (no raw `*:body`) and round-trip — incl. `with function sample`, iff
+    guards, bins value-sets/ranges/default, wildcard bins, transition bins,
+    and boolean `binsof ... intersect ... with/iff` cross-selects."""
+    C = "class c; %s endclass"
+    for cg in [
+        "covergroup g with function sample (bit a); cp: coverpoint a; endgroup",
+        "covergroup g2; coverpoint x { bins lo = { [0:7] }; bins d = default; } endgroup",
+        "covergroup g3; cp: coverpoint y iff (en) { wildcard bins w = {3'b1??}; } endgroup",
+        "covergroup g4; cr: cross a, b { bins n = binsof(a) intersect {0}; } endgroup",
+        "covergroup g5; coverpoint z { bins t = (A => B => C); } endgroup",
+    ]:
+        ast = sv_grammar.parse_string(C % cg)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+    cg = sv_grammar.parse_string(C % "covergroup g; cp: coverpoint a; endgroup")
+    body = cg["descriptions"][0]["items"][0]
+    assert "items" in body and "body" not in body  # structured, not raw
