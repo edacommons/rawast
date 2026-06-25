@@ -809,7 +809,18 @@ std::shared_ptr<ArrayValue> substitute_segments(
                             new_args->data().push_back(make_string(std::move(sub)));
                             continue;
                         }
-                        new_args->data().push_back(a);
+                        // Non-string inner arg — a `\`"…\`"` stringify dict
+                        // or a further nested macro_use. Recursively
+                        // substitute the OUTER params into it so a
+                        // stringify operand / nested ref resolves to the
+                        // outer arg BEFORE the inner call expands. Without
+                        // this, `\`uvm_record_int(\`"ARG\`", …)` keeps the
+                        // literal "ARG" (the UVM field-automation leak).
+                        auto one = std::make_shared<ArrayValue>();
+                        one->data().push_back(a);
+                        auto subbed = substitute_segments(*one, params, args);
+                        for (const auto& e : subbed->data())
+                            new_args->data().push_back(e);
                     }
                     auto new_use = std::make_shared<DictValue>();
                     for (const auto& [k, v] : d->data()) {
