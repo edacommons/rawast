@@ -2642,13 +2642,32 @@ UNSIZED_LIT_VAL: choice {
 // Engine doesn't expand macros; treat `<MACRO_USE>` as a permitted
 // stand-in for the `sv_based_digits` literal. Macro form tried first
 // (first byte `\``) so the literal-digits form gets a clean miss.
-BASED_NUM ignore: sequence dict {
+// Split by base: decimal (`'d`) uses the decimal-restricted digit run so
+// `8'd12?b:c` stops at the ternary `?`; the other bases keep the
+// permissive run where `?`/x/z ARE don't-care digits (`8'h12?`). Same
+// `type="based_num"` shape; the base char discriminates on save.
+BASED_NUM: choice {
+  <BASED_NUM_DEC>,
+  <BASED_NUM_GEN>
+}
+BASED_NUM_DEC ignore: sequence dict {
   ?<INT_OR_MACRO>:size=@,
   "'":type="based_num",
   ?<SIGNED_FLAG>:signed=true,
-  <BASE_CHAR>:base=@,
+  <BASE_CHAR_DEC>:base=@,
+  <BASED_VALUE_DEC>:value=@
+}
+BASED_NUM_GEN ignore: sequence dict {
+  ?<INT_OR_MACRO>:size=@,
+  "'":type="based_num",
+  ?<SIGNED_FLAG>:signed=true,
+  <BASE_CHAR_GEN>:base=@,
   <BASED_VALUE>:value=@
 }
+BASE_CHAR_DEC: choice { "d":@, "D":@ }
+BASE_CHAR_GEN: choice { "b":@, "B":@, "o":@, "O":@, "h":@, "H":@ }
+BASED_VALUE_DEC ignore whitespace: sequence { <BASED_DIGITS_DEC_OR_MACRO> }
+BASED_DIGITS_DEC_OR_MACRO: choice { <MACRO_USE>, sv_based_digits_dec }
 
 // Per IEEE 1800-2017 §5.7.1, whitespace is permitted between the
 // base character and the digit run: `'h 30`, `8'b 1010_0101`. Push a

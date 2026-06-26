@@ -55,9 +55,15 @@ public:
 // removed (so `8'h1_0_0_0` parses to `"1000"`).
 class SvBasedDigitsParser final : public Parser {
 public:
-    SvBasedDigitsParser();
+    // `decimal` restricts the alphabet to `[0-9_]` plus a SOLE leading
+    // x/z/? (`'dx`). Decimal literals can't carry x/z/? after digits, so
+    // `8'd12?…` stops the digit run at `?` (a ternary) — unlike `8'h12?`
+    // where `?` is a don't-care digit.
+    explicit SvBasedDigitsParser(bool decimal = false);
     WalkResult walk(StreamReader& sr) override;
     SaveResult  unparse(const Value& value) const override;
+private:
+    bool decimal_ = false;
 };
 
 // Consume one argument of a function-like macro call: bytes up to

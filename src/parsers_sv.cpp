@@ -164,7 +164,14 @@ SaveResult SvIdentifierParser::unparse(const Value& value) const {
 // permissive per LRM. Validity per actual base (hex digit in a binary
 // literal etc.) is the host's concern; we just emit the raw run.
 
-SvBasedDigitsParser::SvBasedDigitsParser() : Parser("sv_based_digits") {}
+// The Parser name MUST match the group's local_name — apply_structured()
+// registers the bare key via the parser's own ::name(). So the decimal
+// variant names itself "sv_based_digits_dec", else it would register
+// under "sv_based_digits" and the bare `sv_based_digits_dec` reference
+// would be unresolved.
+SvBasedDigitsParser::SvBasedDigitsParser(bool decimal)
+    : Parser(decimal ? "sv_based_digits_dec" : "sv_based_digits"),
+      decimal_(decimal) {}
 
 WalkResult SvBasedDigitsParser::walk(StreamReader& sr) {
     sr.mark();
@@ -172,9 +179,25 @@ WalkResult SvBasedDigitsParser::walk(StreamReader& sr) {
     std::string out;
     while (auto c = sr.peek()) {
         if (*c == '_') { sr.get(); continue; }   // strip underscores
-        const bool is_digit =
-            is_hex_digit(*c)                     // 0-9, a-f, A-F
-            || is_xz_digit(*c);                  // x, X, z, Z, ?
+        bool is_digit;
+        if (decimal_) {
+            // `[0-9]`, or a SOLE x/z/? as the whole value (`'dx`). x/z/?
+            // AFTER digits ends the run — `8'd12?` is `12` then a ternary
+            // `?`, not a don't-care digit.
+            if (*c >= '0' && *c <= '9') {
+                is_digit = true;
+            } else if (out.empty() && is_xz_digit(*c)) {
+                out.push_back(*c);
+                sr.get();
+                break;
+            } else {
+                is_digit = false;
+            }
+        } else {
+            is_digit =
+                is_hex_digit(*c)                 // 0-9, a-f, A-F
+                || is_xz_digit(*c);              // x, X, z, Z, ?
+        }
         if (!is_digit) break;
         out.push_back(*c);
         sr.get();
@@ -770,6 +793,9 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_based_digits", []() {
             return std::make_unique<SvBasedDigitsParser>();
+        }},
+        ParserSpec{"sv_based_digits_dec", []() {
+            return std::make_unique<SvBasedDigitsParser>(true);
         }},
         ParserSpec{"sv_line_text", []() {
             return std::make_unique<SvLineTextParser>();
