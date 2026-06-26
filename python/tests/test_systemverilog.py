@@ -1900,3 +1900,18 @@ def test_sv_signing_in_param_default_and_ansi_port(sv_grammar):
     for src in cases:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_no_direction_first_port(sv_grammar):
+    """A first ANSI port with no direction — just type + name
+    (`module m(logic [2:0] span);`). PORT_DECL_NODIR_TYPED existed for
+    subsequent ports but wasn't in PORT_BODY_FIRST, and lacked save spacing
+    (`logic b` -> `logicb`)."""
+    cases = [
+        "module m(logic [2:0] span); endmodule",
+        "module m(logic [2:0] a, logic b); endmodule",
+        "module m(logic a, int b); endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

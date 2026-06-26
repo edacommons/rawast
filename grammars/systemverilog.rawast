@@ -477,6 +477,7 @@ PORT_LIST_ANSI: sequence dict {
 PORT_BODY_FIRST: choice {
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
+  <PORT_DECL_NODIR_TYPED>,
   <PORT_DECL_INTERFACE>,
   <PORT_MACRO>
 }
@@ -521,9 +522,9 @@ PORT_MACRO: sequence dict {
 // Tried AFTER the direction-headed forms so it doesn't shadow them.
 // Reference: Verilator verilog.y `ansi_port_declaration` shape.
 PORT_DECL_NODIR_TYPED: sequence dict {
-  <TYPE_SPEC>:type_spec=@:type="port_decl_nodir",
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
+  <TYPE_SPEC>:type_spec=@:type="port_decl_nodir" space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
