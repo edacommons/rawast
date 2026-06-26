@@ -1215,7 +1215,7 @@ PARAM_BINDING_VIRTUAL: sequence dict {
 
 PARAM_BINDING_NAMED: sequence dict {
   ".", sv_identifier:name=@:style="named",
-  "(", <EXPR>:value=@, ")"
+  "(", ?<EXPR>:value=@, ")"
 }
 
 PARAM_BINDING_POSITIONAL: sequence dict {

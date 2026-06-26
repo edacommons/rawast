@@ -1742,3 +1742,17 @@ def test_sv_task_function_ranged_implicit_port(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_empty_named_param_override(sv_grammar):
+    """A named parameter override with an empty value, `.NAME()` (Xilinx
+    primitive style — use the default), parses + round-trips. Empty named
+    PORT connections `.x()` already worked; param overrides required a value."""
+    M = "module m; %s endmodule"
+    cases = [
+        "PLL #(.A()) u (.x(y));",
+        "PLL #(.A(1), .B()) u (.x(), .y(z));",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
