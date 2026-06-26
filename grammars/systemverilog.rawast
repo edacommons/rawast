@@ -4360,14 +4360,14 @@ RANDSEQUENCE_STMT: sequence dict {
 
 // `wait fork ;` — wait for all forked threads to terminate.
 WAIT_FORK_STMT: sequence dict {
-  'wait':@:type="wait_fork",
+  'wait':@:type="wait_fork" space,
   'fork',
   ";"
 }
 
 // `disable fork ;` — terminate all forked threads.
 DISABLE_FORK_STMT: sequence dict {
-  'disable':@:type="disable_fork",
+  'disable':@:type="disable_fork" space,
   'fork',
   ";"
 }

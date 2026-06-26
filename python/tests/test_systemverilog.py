@@ -2038,3 +2038,14 @@ def test_sv_static_audit_glue_fixes(sv_grammar):
         "module m; initial assign x = y; endmodule"
     )["descriptions"][0]["items"][0]["body"]
     assert body["type"] == "proc_assign"
+
+
+def test_sv_disable_wait_fork_spacing(sv_grammar):
+    """`disable fork;` / `wait fork;` must not glue to `disablefork`/`waitfork`
+    on save (found by the static space-audit)."""
+    for src in ["module m; initial disable fork; endmodule",
+                "module m; initial wait fork; endmodule"]:
+        ast = sv_grammar.parse_string(src)
+        out = sv_grammar.save(ast).decode("utf-8")
+        assert "disablefork" not in out and "waitfork" not in out
+        assert sv_grammar.parse_string(out) == ast
