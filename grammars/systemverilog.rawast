@@ -166,6 +166,13 @@ SV_ATTRIBUTE: sequence dict {
   "*)"
 }
 
+// `(* attr *) <statement>` — an attribute instance prefixing a statement
+// (IEEE 1800-2017 §5.12 — attributes may precede statements).
+ATTRIBUTED_STMT: sequence dict {
+  <SV_ATTRIBUTE>:attribute=@:type="attributed_stmt" space,
+  <STATEMENT>:stmt=@
+}
+
 // `import "DPI-C" [pure | context] [c_name =] function|task NAME (args);`
 // Foreign function interface declaration. Body captured raw to the
 // trailing `;` so the full signature (return type, args with default
@@ -700,6 +707,7 @@ MODULE_ITEM: choice {
   <DPI_IMPORT>,
   <DPI_EXPORT>,
   <PORT_DECL_STMT>,
+  <PORT_DECL_STMT_USERTYPE>,
   <NET_DECL>,
   <NET_DECL_USERTYPE>,
   <REG_DECL>,
@@ -767,6 +775,19 @@ PORT_DECL_STMT: sequence dict {
   <PORT_DIRECTION>:direction=@:type="port_decl" space,
   ?<TYPE_SPEC>:type_spec=@ space,
   ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ sv_identifier:names[]=@ separator "," space,
+  ";"
+}
+
+// `input <user_type> name;` — a non-ANSI port whose type is a user-defined
+// or pkg-qualified type (`input p::p_t p;`). Tried after PORT_DECL_STMT,
+// which fails on the two-identifier `<dir> <type> <name>` shape (it reads
+// `p::p_t` as a single name and chokes). The required name keeps it from
+// claiming a plain `input x;`.
+PORT_DECL_STMT_USERTYPE: sequence dict {
+  <PORT_DIRECTION>:direction=@:type="port_decl_user" space,
+  sv_qualified_type:type_spec=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   repeat+ sv_identifier:names[]=@ separator "," space,
   ";"
@@ -1633,6 +1654,7 @@ TASK_ITEM: choice {
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <PORT_DECL_STMT>,
+  <PORT_DECL_STMT_USERTYPE>,
   <NET_DECL>,
   <NET_DECL_USERTYPE>,
   <REG_DECL>,
@@ -1650,6 +1672,7 @@ STATEMENT: choice {
   <INCLUDE>,
   <IFDEF>,
   <IFNDEF>,
+  <ATTRIBUTED_STMT>,
   <MACRO_STMT>,
   <BLOCK_STMT>,
   <FORK_JOIN>,
