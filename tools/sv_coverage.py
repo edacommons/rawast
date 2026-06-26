@@ -35,6 +35,11 @@ def find_uvm():
 
 
 EXPAND_PREDEF = ('`include "uvm_macros.svh"\n`include "dv_macros.svh"\n'
+                 # prim_assert.sv's ifdef guards pick the standard macros in a
+                 # normal (non-synthesis/non-yosys) build — include them
+                 # directly so `ASSERT(...)` expands to real assert property
+                 # instead of an opaque, undefined macro-use.
+                 '`include "prim_assert_standard_macros.svh"\n'
                  '`define __FILE__ "f"\n`define __LINE__ 0\n')
 
 sv_pp = rawast.Grammar("sv_preprocessor")
