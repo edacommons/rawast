@@ -1833,3 +1833,21 @@ def test_sv_empty_item_and_range_only_port(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_default_disable_iff_and_deferred_assert(sv_grammar):
+    """Module-level `default disable iff <expr>;` (§16.11, the SVA default
+    disable) and deferred immediate assertions `assert final (…) else …` /
+    `assert #0 (…)` as module items (§16.4). CVA6/PULP idioms."""
+    M = "module m; %s endmodule"
+    cases = [
+        "default disable iff (!rst_ni);",
+        "default disable iff rst_ni;",
+        "assert final ($onehot0(onehot)) else $fatal(1, \"x\");",
+        "a1: assert final (cond);",
+        "assert #0 (z);",
+        "assume final (w);",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
