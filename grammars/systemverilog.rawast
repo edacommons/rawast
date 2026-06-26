@@ -3624,15 +3624,55 @@ SVA_DISABLE_IFF: sequence dict {
   'disable' space, 'iff' space, "(", <EXPR>:cond=@, ")", "" space
 }
 
-// property_expr: not / sequence-implies-property / bare sequence
+// property_expr: prefix forms (not / temporal / if / abort) tried first
+// (distinctive leading keywords), then implication, then bare sequence.
 PROPERTY_EXPR: choice {
   <PROP_NOT>,
+  <PROP_TEMPORAL>,
+  <PROP_IF>,
+  <PROP_ABORT>,
   <PROP_IMPL>,
   <SEQUENCE_EXPR>
 }
 
 PROP_NOT: sequence dict {
   'not':@:type="prop_not" space, <PROPERTY_EXPR>:prop=@
+}
+
+// `s_eventually p` / `eventually [m:n] p` / `always p` / `always [m:n] p`
+// / `s_always [m:n] p` / `nexttime p` / `nexttime [n] p` / `s_nexttime …`
+PROP_TEMPORAL: sequence dict {
+  "":type="prop_temporal",
+  <PROP_TEMPORAL_OP>:temporal_op=@ space,
+  ?<SVA_BRACKET_RANGE>:range=@,
+  <PROPERTY_EXPR>:prop=@
+}
+PROP_TEMPORAL_OP: choice {
+  's_eventually':@, 'eventually':@, 's_always':@, 'always':@,
+  's_nexttime':@, 'nexttime':@
+}
+SVA_BRACKET_RANGE: sequence dict {
+  "[", <SVA_REP_AMOUNT>:amount=@, "]", "" space
+}
+
+// `if (expr) property_expr [else property_expr]`
+PROP_IF: sequence dict {
+  'if':@:type="prop_if" space, "(", <EXPR>:cond=@, ")", "" space,
+  <PROPERTY_EXPR>:then=@,
+  ?<PROP_ELSE>:else_branch=@
+}
+PROP_ELSE: sequence dict {
+  "" space, 'else' space, <PROPERTY_EXPR>:prop=@
+}
+
+// `accept_on (expr) p` / `reject_on` / `sync_accept_on` / `sync_reject_on`
+PROP_ABORT: sequence dict {
+  "":type="prop_abort",
+  <PROP_ABORT_OP>:abort_op=@ space, "(", <EXPR>:cond=@, ")", "" space,
+  <PROPERTY_EXPR>:prop=@
+}
+PROP_ABORT_OP: choice {
+  'sync_accept_on':@, 'sync_reject_on':@, 'accept_on':@, 'reject_on':@
 }
 
 // sequence |-> / |=> property (operator required; the parent choice
@@ -3666,8 +3706,13 @@ SVA_SEQ_OP: choice {
 // boolean expression — each with an optional repetition suffix.
 SEQ_TERM: choice {
   <SEQ_DELAY_PREFIX>,
+  <SEQ_FIRST_MATCH>,
   <SEQ_PAREN_REP>,
   <SEQ_BOOL_REP>
+}
+SEQ_FIRST_MATCH: sequence dict {
+  'first_match':@:type="first_match", "(", <SEQUENCE_EXPR>:seq=@, ")",
+  ?<SVA_REPETITION>:repetition=@
 }
 SEQ_DELAY_PREFIX: sequence dict {
   <CYCLE_DELAY>:delay=@ space, <SEQ_TERM>:operand=@
