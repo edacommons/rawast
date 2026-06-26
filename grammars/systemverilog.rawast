@@ -231,6 +231,7 @@ PARAM_PORT_LIST: sequence dict {
 // `<TYPE_SPEC>` (not optional) so it doesn't gobble `parameter
 // MyType x` — that needs to fall through to USERTYPE.
 PARAM_DECL_OR_LOCAL: choice {
+  <PARAM_DECL_LOCALPARAM_TYPE>,
   <PARAM_DECL_LOCALPARAM_USERTYPE>,
   <PARAM_DECL_LOCALPARAM>,
   <PARAM_DECL_TYPE>,
@@ -340,6 +341,18 @@ PARAM_DECL_USERTYPE: sequence dict {
 
 PARAM_DECL_TYPE: sequence dict {
   'parameter':@:type="param_type" space,
+  'type' space,
+  sv_identifier:name=@,
+  ?<PARAM_TYPE_DEFAULT>:default=@
+}
+
+// `localparam type NAME = <type>` inside a `#(...)` param-port list — the
+// localparam counterpart of PARAM_DECL_TYPE. Tried before
+// PARAM_DECL_LOCALPARAM_USERTYPE (which would mis-read `type` as a user
+// type name and then reject an inline-aggregate default). CVA6 config
+// structs: `#(localparam type sbe_t = struct packed {…}, …)`.
+PARAM_DECL_LOCALPARAM_TYPE: sequence dict {
+  'localparam':@:type="localparam_type" space,
   'type' space,
   sv_identifier:name=@,
   ?<PARAM_TYPE_DEFAULT>:default=@

@@ -1851,3 +1851,19 @@ def test_sv_default_disable_iff_and_deferred_assert(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_localparam_type_in_param_port_list(sv_grammar):
+    """`localparam type NAME = <type>` inside a `#(...)` param-port list,
+    including an inline-aggregate default (CVA6 config structs:
+    `#(localparam type sbe_t = struct packed {…})`). Previously `type` was
+    mis-read as a user type name, so an inline-struct default was rejected."""
+    cases = [
+        "module m #( localparam type A = struct packed { logic x; } ) (); endmodule",
+        "module m #( localparam type A = my_t ) (); endmodule",
+        "module m #( parameter type A = struct packed { logic x; },"
+        " localparam type B = logic ) (); endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
