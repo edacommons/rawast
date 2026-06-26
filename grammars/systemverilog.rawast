@@ -78,6 +78,7 @@ DESCRIPTIONS: sequence array {
 // the source through it before handing the result to this parser.
 DESCRIPTION: choice {
   <SV_ATTRIBUTE>,
+  <SV_COMPILER_DIRECTIVE>,
   <DPI_IMPORT>,
   <DPI_EXPORT>,
   <PACKAGE_DECL>,
@@ -110,6 +111,46 @@ DESCRIPTION: choice {
   <CHECKER_DECL>,
   <SYSTEM_TASK_CALL>,
   <USER_TYPED_DECL>
+}
+
+// IEEE 1800-2017 §22 "other" compiler directives appearing in source.
+// The preprocessor passes these through verbatim (a consumer may want the
+// timescale/nettype info), so the SV grammar structures them as top-level
+// items instead of choking. `timescale`'s two time literals are <NUMBER>
+// (a TIME_LIT) per operand — NOT <EXPR>, which would eat the `/` as
+// division.
+SV_COMPILER_DIRECTIVE: choice {
+  <CD_TIMESCALE>,
+  <CD_NETTYPE>,
+  <CD_NOARG>
+}
+CD_TIMESCALE: sequence dict {
+  "`timescale":@:type="timescale" space,
+  <SV_TIMESCALE_VALUE>:time_unit=@ space, "/" space,
+  <SV_TIMESCALE_VALUE>:time_prec=@
+}
+// `1ns` (glued — NUMBER parses it as one TIME_LIT) OR `1 ns` (a plain
+// number then a separate unit keyword, as Forencich's cores write it).
+SV_TIMESCALE_VALUE: sequence dict {
+  <NUMBER>:value=@ space, ?<TIME_UNIT_KW>:unit=@
+}
+TIME_UNIT_KW: choice {
+  'ms':@, 'us':@, 'ns':@, 'ps':@, 'fs':@, 's':@
+}
+CD_NETTYPE: sequence dict {
+  "`default_nettype":@:type="default_nettype" space,
+  <NETTYPE_VALUE>:nettype=@
+}
+NETTYPE_VALUE: choice {
+  'none':@, 'wire':@, 'tri0':@, 'tri1':@, 'trireg':@, 'tri':@,
+  'wand':@, 'wor':@, 'uwire':@
+}
+CD_NOARG: sequence dict {
+  <CD_NOARG_KW>:directive=@:type="compiler_directive"
+}
+CD_NOARG_KW: choice {
+  "`resetall":@, "`celldefine":@, "`endcelldefine":@,
+  "`nounconnected_drive":@, "`end_keywords":@
 }
 
 // SV-1800 attribute syntax: `(* attr_name = value, attr_name2 = value, ... *)`.

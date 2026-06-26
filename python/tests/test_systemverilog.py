@@ -1704,3 +1704,25 @@ def test_sv_clocking_block_structured(sv_grammar):
         I % "clocking cb @(posedge clk);\n input a; output b;\nendclocking")
     items = ast["descriptions"][0]["items"][0]["items"]
     assert items[0]["type"] == "clocking_dir" and items[0]["direction"] == "input"
+
+
+def test_sv_compiler_directives_in_source(sv_grammar):
+    """IEEE §22 compiler directives that the preprocessor passes through
+    verbatim (`timescale`, `default_nettype`, `resetall`, `celldefine`/
+    `endcelldefine`) are structured as top-level items, not parse errors.
+    `timescale` time literals come glued (`1ns`) or spaced (`1 ns`).
+    Regression: blocked 100% of Forencich verilog-* cores (all start with
+    `timescale`)."""
+    cases = [
+        "`timescale 1ns / 1ps\nmodule m; endmodule",
+        "`timescale 1 ns / 1 ps\nmodule m; endmodule",
+        "`timescale 100 ns / 10 ps\nmodule m; endmodule",
+        "`default_nettype none\nmodule m; endmodule\n`default_nettype wire",
+        "`resetall\n`celldefine\nmodule m; endmodule\n`endcelldefine",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+    ast = sv_grammar.parse_string("`timescale 1ns / 1ps\nmodule m; endmodule")
+    assert ast["descriptions"][0]["type"] == "timescale"
