@@ -1777,3 +1777,25 @@ def test_sv_decimal_based_number_then_ternary(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_inline_anonymous_aggregate_decls(sv_grammar):
+    """Anonymous inline enum/struct/union used directly as a data type (no
+    typedef) — `enum logic [3:0] {…} state;`, `struct packed {…} s, t;` —
+    and as a type-parameter default — `localparam type bht_t = struct packed
+    {…};`. CVA6/Snitch/Ariane write these heavily. Were parse gaps."""
+    M = "module m; %s endmodule"
+    cases = [
+        "enum logic [3:0] { A, B } state;",
+        "enum logic { READY, STALL } state_q, state_d;",
+        "struct packed { logic [7:0] x; logic y; } s;",
+        "union packed { logic [7:0] x; } u;",
+        "localparam type bht_t = struct packed { logic [9:0] x; logic v; };",
+        "parameter type rvfi_t = struct packed { logic a; };",
+        # typedef forms still work
+        "typedef enum logic [3:0] { A, B } e_t;",
+        "localparam int W = 8;",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

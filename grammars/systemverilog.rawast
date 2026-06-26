@@ -91,7 +91,9 @@ DESCRIPTION: choice {
   <INTERFACE_CLASS_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
+  <INLINE_AGG_DECL>,
   <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_TYPE_STMT>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <IMPORT_STMT>,
@@ -350,7 +352,14 @@ PARAM_DECL_TYPE_IMPLICIT: sequence dict {
   ?<PARAM_TYPE_DEFAULT>:default=@
 }
 
-PARAM_TYPE_DEFAULT: sequence dict { "" space, "=" space, <EXPR>:value=@ }
+// A type parameter's default is a TYPE — which can be an inline
+// aggregate (`localparam type pte_t = struct packed {…}`, CVA6/Ariane)
+// as well as a type name / built-in. Try the aggregate forms first, then
+// fall back to EXPR (covers type names and built-in keywords).
+PARAM_TYPE_DEFAULT: sequence dict {
+  "" space, "=" space, <PARAM_TYPE_VALUE>:value=@
+}
+PARAM_TYPE_VALUE: choice { <INLINE_AGG_TYPE>, <EXPR> }
 
 // TYPE_SPEC is REQUIRED here (not optional) so this rule only matches
 // when the parameter type is a built-in keyword. `parameter MyType x`
@@ -667,6 +676,7 @@ MODULE_ITEM: choice {
   <GENVAR_DECL>,
   <NETTYPE_DECL>,
   <PARAM_DECL_STMT>,
+  <LOCALPARAM_DECL_TYPE_STMT>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <CONT_ASSIGN>,
@@ -701,6 +711,7 @@ MODULE_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
+  <INLINE_AGG_DECL>,
   <SYSTEM_TASK_CALL>,
   <USER_TYPED_DECL>,
   <MACRO_STMT>
@@ -880,6 +891,25 @@ UNION_TYPE: sequence dict {
   "}"
 }
 
+// Anonymous inline aggregate type used DIRECTLY as a data declaration
+// (no typedef): `enum logic [3:0] {…} state;`, `struct packed {…} s;`,
+// `union packed {…} u, v = '0;`. Same ENUM_TYPE/STRUCT_TYPE/UNION_TYPE
+// the typedef form uses, followed by a variable list. CVA6/Snitch/Ariane
+// use these heavily inline instead of a separate typedef.
+INLINE_AGG_DECL: sequence dict {
+  "":type="inline_agg_decl",
+  <INLINE_AGG_TYPE>:agg_type=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ <AGG_VAR>:vars[]=@ separator "," space,
+  ";"
+}
+INLINE_AGG_TYPE: choice { <ENUM_TYPE>, <STRUCT_TYPE>, <UNION_TYPE> }
+AGG_VAR: sequence dict {
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<STRUCT_FIELD_INIT>:init=@
+}
+
 // Struct/union field: `<TYPE> [range] <NAME> [unpacked-dim] [= init];`.
 // Optional `rand` / `randc` qualifier — used when the struct is a
 // class property whose enclosing class invokes `randomize()`, the
@@ -977,6 +1007,19 @@ LOCALPARAM_DECL_STMT: sequence dict {
   sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   "=" space, <EXPR>:value=@,
+  ";"
+}
+
+// `localparam type NAME = <type>;` — type localparam (the `type` keyword).
+// Default is a type, including an inline aggregate (`= struct packed {…}`,
+// CVA6/Ariane). Mirrors `parameter type` (PARAM_DECL_TYPE). Must precede
+// LOCALPARAM_DECL_USERTYPE_STMT in DESCRIPTION so `type` isn't grabbed as
+// a user type name.
+LOCALPARAM_DECL_TYPE_STMT: sequence dict {
+  'localparam':@:type="localparam_type" space,
+  'type' space,
+  sv_identifier:name=@,
+  ?<PARAM_TYPE_DEFAULT>:default=@,
   ";"
 }
 
@@ -1499,6 +1542,7 @@ TASK_PORT_USERTYPED: sequence dict {
 TASK_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_DECL>,
+  <LOCALPARAM_DECL_TYPE_STMT>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
@@ -1651,6 +1695,7 @@ BLOCK_LABEL: sequence { ":" space, sv_identifier:label=@ }
 BLOCK_ITEM: choice {
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_DECL>,
+  <LOCALPARAM_DECL_TYPE_STMT>,
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
@@ -3171,6 +3216,7 @@ CLASS_ITEM: choice {
   <IFNDEF>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
+  <INLINE_AGG_DECL>,
   <PARAM_DECL_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <CLASS_PURE_VIRTUAL_FUNCTION>,
