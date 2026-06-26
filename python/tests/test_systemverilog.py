@@ -1756,3 +1756,24 @@ def test_sv_empty_named_param_override(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_decimal_based_number_then_ternary(sv_grammar):
+    """`8'd12?b:c` — a DECIMAL based number immediately before a ternary `?`.
+    Decimal can't carry x/z/? after digits, so the digit run must stop at
+    `?` (the ternary). Hex/binary keep `?` as a don't-care digit. Underscores
+    in decimal (`8'd1_000`) still work. Regression: the base-blind digit
+    lexer ate the `?`, so `8'd12?b:c` (and any save that stripped the spaces
+    around the ternary) failed to parse."""
+    M = "module m; initial %s endmodule"
+    cases = [
+        "x = 8'd12?b:c;",
+        "x = (a > 8'd12?b:8'd12) - c;",
+        "x = 8'dx;",            # decimal sole don't-care
+        "x = 8'd1_000;",        # decimal underscores preserved
+        "x = 4'b10??;",         # binary don't-cares unaffected
+        "x = 8'h1z;",           # hex z digit unaffected
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
