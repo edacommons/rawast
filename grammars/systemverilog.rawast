@@ -103,6 +103,7 @@ DESCRIPTION: choice {
   <TASK_DECL>,
   <MODULE_DECL>,
   <NET_DECL>,
+  <NET_DECL_USERTYPE>,
   <REG_DECL>,
   <INTEGER_DECL>,
   <CONT_ASSIGN>,
@@ -700,6 +701,7 @@ MODULE_ITEM: choice {
   <DPI_EXPORT>,
   <PORT_DECL_STMT>,
   <NET_DECL>,
+  <NET_DECL_USERTYPE>,
   <REG_DECL>,
   <INTEGER_DECL>,
   <GENVAR_DECL>,
@@ -776,6 +778,19 @@ NET_DECL: sequence dict {
   ?<NET_SIGNING>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   ?<DELAY>:delay=@ space,
+  repeat+ <NET_NAME>:names[]=@ separator "," space,
+  ";"
+}
+
+// `wire <user_type> name;` — a net with a user-defined data type
+// (`wire my_t w;`). Tried AFTER NET_DECL: the plain form fails on the
+// two-identifier `<kind> <type> <name>` shape (it reads `my_t` as the
+// name and then chokes on `w`), so this catches it. The required second
+// name keeps it from claiming a plain `wire w;`.
+NET_DECL_USERTYPE: sequence dict {
+  <NET_KIND>:kind=@:type="net_decl_usertype" space,
+  sv_qualified_type:data_type=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   repeat+ <NET_NAME>:names[]=@ separator "," space,
   ";"
 }
@@ -1608,6 +1623,7 @@ TASK_ITEM: choice {
   <LOCALPARAM_DECL_STMT>,
   <PORT_DECL_STMT>,
   <NET_DECL>,
+  <NET_DECL_USERTYPE>,
   <REG_DECL>,
   <INTEGER_DECL>,
   <USER_TYPED_DECL>,
@@ -1773,6 +1789,7 @@ BLOCK_ITEM: choice {
   <LOCALPARAM_DECL_USERTYPE_STMT>,
   <LOCALPARAM_DECL_STMT>,
   <NET_DECL>,
+  <NET_DECL_USERTYPE>,
   <REG_DECL>,
   <INTEGER_DECL>,
   <USER_TYPED_DECL>,
