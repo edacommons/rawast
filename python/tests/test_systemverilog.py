@@ -2065,3 +2065,16 @@ def test_sv_nonansi_function_task_ports(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_net_user_type(sv_grammar):
+    """A net with a user-defined data type — `wire my_t w;`,
+    `wire t wt;` (t a typedef). Plain/builtin/ranged nets still work."""
+    M = "module m; %s endmodule"
+    cases = [
+        "wire my_t w;", "typedef logic [3:0] t; wire t wt;",
+        "wire my_t a, b;", "wire w;", "wire [3:0] x;", "wire logic wl;",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
