@@ -3624,15 +3624,42 @@ SVA_DISABLE_IFF: sequence dict {
   'disable' space, 'iff' space, "(", <EXPR>:cond=@, ")", "" space
 }
 
-// property_expr: prefix forms (not / temporal / if / abort) tried first
-// (distinctive leading keywords), then implication, then bare sequence.
-PROPERTY_EXPR: choice {
+// Top level: a property TERM, then a flat chain of property-level binary
+// operators (or / and / until* / implies / iff). NOTE flat chain — for a
+// MIXED unparenthesised implication+binary (`a |-> b and c |-> d`) the
+// grouping follows parse order, not the full LRM precedence table;
+// parenthesised forms (the common style) group correctly. Round-trips
+// regardless. head/ops/operand (not lhs/tail — avoids #opchain folding).
+PROPERTY_EXPR: sequence dict {
+  <PROP_TERM>:head=@,
+  repeat <PROP_BIN_LINK>:ops[]=@
+}
+PROP_BIN_LINK: sequence dict {
+  "" space, <PROP_BIN_OP>:prop_op=@ space, <PROP_TERM>:operand=@
+}
+PROP_BIN_OP: choice {
+  'or':@, 'and':@, 'until_with':@, 's_until_with':@,
+  'until':@, 's_until':@, 'implies':@, 'iff':@
+}
+
+// property term: prefix forms (not / temporal / if / abort) first
+// (distinctive leading keywords), then implication, a parenthesised
+// property, then a bare sequence.
+PROP_TERM: choice {
   <PROP_NOT>,
   <PROP_TEMPORAL>,
   <PROP_IF>,
   <PROP_ABORT>,
   <PROP_IMPL>,
+  <PROP_PAREN>,
   <SEQUENCE_EXPR>
+}
+
+// `( property_expr )` — a parenthesised PROPERTY (e.g. `(a |-> b)`), as
+// distinct from a parenthesised SEQUENCE (SEQ_PAREN_REP). Tried after
+// PROP_IMPL so `(seq) |-> prop` still parses as an implication.
+PROP_PAREN: sequence dict {
+  "(":type="prop_group", <PROPERTY_EXPR>:prop=@, ")"
 }
 
 PROP_NOT: sequence dict {

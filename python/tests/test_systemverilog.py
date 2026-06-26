@@ -1626,8 +1626,10 @@ def test_sv_sva_property_structured(sv_grammar):
     ast = sv_grammar.parse_string(
         M % "assert property (@(posedge clk) a ##1 b |-> c);")
     body = ast["descriptions"][0]["items"][0]["body"]
-    assert body["prop"]["type"] == "implication"
-    assert body["prop"]["antecedent"]["ops"][0]["delay"]["type"] == "cycle_delay"
+    # prop is a property binary-op chain {head, ops}; a bare implication
+    # is the head with an empty ops list.
+    assert body["prop"]["head"]["type"] == "implication"
+    assert body["prop"]["head"]["antecedent"]["ops"][0]["delay"]["type"] == "cycle_delay"
 
 
 def test_sv_sva_property_level_operators(sv_grammar):
@@ -1653,4 +1655,30 @@ def test_sv_sva_property_level_operators(sv_grammar):
 
     ast = sv_grammar.parse_string(
         M % "assert property (@(posedge clk) s_eventually a);")
-    assert ast["descriptions"][0]["items"][0]["body"]["prop"]["type"] == "prop_temporal"
+    body = ast["descriptions"][0]["items"][0]["body"]
+    assert body["prop"]["head"]["type"] == "prop_temporal"
+
+
+def test_sv_sva_property_binary_operators(sv_grammar):
+    """SVA property-level binary operators: and / or / until / s_until /
+    until_with / implies / iff between properties — structured as a flat
+    {head, ops} chain, and round-trip. Parenthesised properties
+    (`(a |-> b) and (c |-> d)`) group correctly."""
+    M = "module m; %s endmodule"
+    cases = [
+        "assert property (@(posedge clk) (a |-> b) and (c |-> d));",
+        "assert property (@(posedge clk) (a |-> b) or (c |-> d));",
+        "assert property (@(posedge clk) a until b);",
+        "assert property (@(posedge clk) a s_until b);",
+        "assert property (@(posedge clk) a until_with b);",
+        "assert property (@(posedge clk) (a |-> b) implies (c |-> d));",
+        "assert property (@(posedge clk) (a |=> b) iff (c |=> d));",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+    ast = sv_grammar.parse_string(
+        M % "assert property (@(posedge clk) (a |-> b) and (c |-> d));")
+    prop = ast["descriptions"][0]["items"][0]["body"]["prop"]
+    assert prop["ops"][0]["prop_op"] == "and"
