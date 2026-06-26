@@ -1111,8 +1111,17 @@ ASSIGNMENT_PAIR: sequence dict {
 // (IEEE: variable_lvalue or net_lvalue).
 LVALUE: choice {
   <LVALUE_STREAM>,
+  <LVALUE_ASSIGN_PATTERN>,
   <LVALUE_CONCAT>,
   <LVALUE_PLAIN>
+}
+
+// `'{ lv, lv, … } = rhs` — an assignment pattern as the LHS of an
+// assignment (§10.2.2), unpacking the rhs into several lvalues.
+LVALUE_ASSIGN_PATTERN: sequence dict {
+  "'{":type="lvalue_pattern",
+  repeat <LVALUE>:elements[]=@ separator "," space,
+  "}"
 }
 
 // `{<<{a, b, c}} = data;` — streaming concatenation on the LHS of

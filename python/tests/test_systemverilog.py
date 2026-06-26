@@ -1938,3 +1938,15 @@ def test_sv_labeled_statement(sv_grammar):
     for src in cases:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_assignment_pattern_lvalue(sv_grammar):
+    """An assignment pattern as the LHS — `'{a, b} = data;` (§10.2.2),
+    unpacking the rhs into several lvalues."""
+    cases = [
+        "module m; initial '{a, b} = data; endmodule",
+        "module m; initial '{x, y, z} = pkt; endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
