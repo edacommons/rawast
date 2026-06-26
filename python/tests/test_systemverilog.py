@@ -1960,3 +1960,19 @@ def test_sv_net_with_data_type(sv_grammar):
     for stmt in ["wire logic wl;", "wire logic [7:0] x;", "tri logic z;", "wire [3:0] y;"]:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_interface_port_save_spacing(sv_grammar):
+    """An interface port `iface intf` must keep the space between the
+    interface type and the port name on save (was gluing to `ifaceintf`),
+    while `iface.modport intf` keeps `.modport` attached."""
+    cases = [
+        "module m (iface intf); endmodule",
+        "module m (iface.mp intf); endmodule",
+        "module m (axi_if.master a, axi_if.slave b); endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        out = sv_grammar.save(ast).decode("utf-8")
+        assert "ifaceintf" not in out
+        assert sv_grammar.parse_string(out) == ast

@@ -543,6 +543,7 @@ PORT_DECL_NODIR_TYPED: sequence dict {
 PORT_DECL_INTERFACE: sequence dict {
   sv_identifier:interface=@:type="port_decl_interface",
   ?<MODPORT_SUFFIX>:modport=@,
+  "" space,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@
 }
