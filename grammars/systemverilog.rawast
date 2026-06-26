@@ -700,7 +700,9 @@ MODULE_ITEM: choice {
   <CHECKER_DECL>,
   <PROPERTY_DECL>,
   <SEQUENCE_DECL>,
+  <DEFAULT_DISABLE_IFF>,
   <CONCURRENT_ASSERT>,
+  <IMMEDIATE_ASSERT>,
   <MODPORT_DECL>,
   <CLASS_DECL_VIRTUAL>,
   <CLASS_DECL_PLAIN>,
@@ -3658,6 +3660,16 @@ SPECIFY_BLOCK: sequence dict {
 // is a `begin … end` block that terminates with `end`). A
 // stylistic trailing `;` after `\`ASSERT(…);`-shaped macro uses is
 // tolerated via the optional terminator.
+// `default disable iff <expr> ;` — IEEE 1800-2017 §16.11, the module-wide
+// default disable condition for concurrent assertions. e.g. CVA6/PULP's
+// `default disable iff (!rst_ni);` / `default disable iff rst_ni;`.
+DEFAULT_DISABLE_IFF: sequence dict {
+  'default':@:type="default_disable_iff" space,
+  'disable' space, 'iff' space,
+  <EXPR>:cond=@,
+  ";"
+}
+
 CONCURRENT_ASSERT: sequence dict {
   ?<ASSERTION_LABEL>:label=@,
   <ASSERT_KIND>:kind=@:type="assert_concurrent" space,
@@ -4190,11 +4202,20 @@ FORK_JOIN_KIND: choice {
 IMMEDIATE_ASSERT: sequence dict {
   ?<ASSERTION_LABEL>:label=@,
   <ASSERT_KIND>:kind=@:type="assert_immediate",
+  ?<ASSERT_DEFER>:defer=@,
   "(",
   sv_balanced_arg:body=@,
   ")",
   <ASSERT_ACTION>:action=@,
   ?";"
+}
+
+// Optional qualifier between the kind and `(`: `final` (final-deferred,
+// §16.4) — `assert final ($onehot0(x)) else …` — or a `#delay`
+// (observed-deferred, `assert #0 (…)`).
+ASSERT_DEFER: choice {
+  sequence dict { "" space, 'final':is_final=true space },
+  sequence dict { "" space, <DELAY>:delay=@ space }
 }
 
 // ─── Extern, UDP, config, program (parse-only) ─────────────────────────
