@@ -140,15 +140,24 @@ std::size_t scan_past_directive_line(const std::string& source,
     return cursor;
 }
 
+// Defined further down; used by process() to lift mid-line conditional
+// directives onto their own lines before the line-oriented parse.
+std::string normalize_inline_conditionals(const std::string& src);
+
 } // namespace
 
-std::string Preprocessor::process(const std::string& text) {
+std::string Preprocessor::process(const std::string& text_in) {
     // Guard against a grammar with no top rule set — the parse
     // engine derefs the top NodeId and would segfault. A no-rule
     // grammar is a degenerate but legitimate construction (e.g. in
     // skeleton tests before sv_preprocessor.rawast lands); pass
     // text through unchanged in that case.
-    if (!pp_grammar_.top().valid()) return text;
+    if (!pp_grammar_.top().valid()) return text_in;
+
+    // Normalize mid-line conditional directives (`\`ifdef … `else … `endif`
+    // embedded in an expression) onto their own lines so the line-oriented
+    // conditional rules can evaluate them. No-op for normal source.
+    const std::string text = normalize_inline_conditionals(text_in);
 
     auto stream = Stream::from_string(text);
     auto parsed = pp_grammar_.parse(stream);
@@ -275,6 +284,90 @@ std::size_t locate_item(const std::string& source,
     if (prefix.empty()) return src_cursor;
     auto found = source.find(prefix, src_cursor);
     return found == std::string::npos ? src_cursor : found;
+}
+
+// Put any conditional compiler directive (`\`ifdef`/`\`ifndef`/`\`elsif`/
+// `\`else`/`\`endif`) that appears MID-LINE onto its own line, so the
+// line-oriented IFDEF/IFNDEF/IF grammar rules can evaluate it. Mid-line
+// conditionals occur inside expression values, e.g. PULP/Snitch's
+// `localparam int X = \`ifdef Y 2 \`else 1 \`endif;`. NO-OP for directives
+// that already start their line (no newline is inserted unless content
+// actually follows the directive on the same line). Skips strings and
+// comments so a `\`ifdef` token inside them isn't touched.
+std::string normalize_inline_conditionals(const std::string& src) {
+    auto is_id = [](char c) {
+        unsigned char u = static_cast<unsigned char>(c);
+        return std::isalnum(u) || c == '_';
+    };
+    std::string out;
+    out.reserve(src.size() + 64);
+    bool line_blank = true;             // only whitespace since last '\n'
+    const std::size_t n = src.size();
+    std::size_t i = 0;
+    while (i < n) {
+        char c = src[i];
+        if (c == '/' && i + 1 < n && src[i + 1] == '/') {        // line comment
+            while (i < n && src[i] != '\n') out += src[i++];
+            continue;
+        }
+        if (c == '/' && i + 1 < n && src[i + 1] == '*') {        // block comment
+            out += src[i++]; out += src[i++];
+            while (i < n && !(src[i] == '*' && i + 1 < n && src[i + 1] == '/')) {
+                if (src[i] == '\n') line_blank = true;
+                out += src[i++];
+            }
+            if (i < n) { out += src[i++]; out += src[i++]; }
+            line_blank = false;
+            continue;
+        }
+        if (c == '"') {                                          // string literal
+            out += src[i++];
+            while (i < n && src[i] != '"') {
+                if (src[i] == '\\' && i + 1 < n) out += src[i++];
+                out += src[i++];
+            }
+            if (i < n) out += src[i++];
+            line_blank = false;
+            continue;
+        }
+        if (c == '`') {
+            std::size_t j = i + 1;
+            while (j < n && is_id(src[j])) ++j;
+            std::string word = src.substr(i + 1, j - (i + 1));
+            bool cond = word == "ifdef" || word == "ifndef" ||
+                        word == "elsif" || word == "else" || word == "endif";
+            // Only MID-LINE conditionals need lifting. A directive that
+            // already starts its line is handled verbatim by the
+            // line-oriented rules — and crucially its condition may be a
+            // full expression (`\`elsif defined(B)`) we must NOT touch.
+            if (cond && !line_blank) {
+                out += '\n';                    // directive on its own line
+                out += '`'; out += word;
+                i = j;
+                if (word == "ifdef" || word == "ifndef" || word == "elsif") {
+                    // keep the condition on the directive's line
+                    while (i < n && (src[i] == ' ' || src[i] == '\t'))
+                        out += src[i++];
+                    if (i < n && src[i] == '`') out += src[i++];   // `\`MACRO cond
+                    while (i < n && is_id(src[i])) out += src[i++];
+                }
+                // add a trailing newline only if real content follows on
+                // this line (else the directive already ends its line).
+                std::size_t k = i;
+                while (k < n && (src[k] == ' ' || src[k] == '\t')) ++k;
+                bool terminated = k >= n || src[k] == '\n' || src[k] == '\r' ||
+                                  (src[k] == '/' && k + 1 < n && src[k + 1] == '/');
+                if (!terminated) { out += '\n'; line_blank = true; }
+                continue;
+            }
+            out += c; ++i; line_blank = false;
+            continue;
+        }
+        if (c == '\n') { out += c; ++i; line_blank = true; continue; }
+        if (c == ' ' || c == '\t' || c == '\r') { out += c; ++i; continue; }
+        out += c; ++i; line_blank = false;
+    }
+    return out;
 }
 
 // Defined below; used by the TEXT_LINE walker's function-like-call

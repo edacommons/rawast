@@ -64,3 +64,19 @@ def test_function_like_call_with_space_before_paren():
     # object-like macro followed by parenthesised text — spacing preserved
     ol = "`define A alpha\n`define B beta\nx = `A + `B;\n"
     assert "x = alpha + beta;" in _expand(ol)
+
+
+def test_inline_ifdef_in_expression():
+    r"""A conditional directive embedded MID-LINE in an expression value —
+    `localparam int X = \`ifdef Y 2 \`else 1 \`endif;` (PULP/Snitch). The
+    line-oriented preprocessor used to sweep the whole line into TEXT_LINE
+    and leak `\`ifdef` to the SV parser; now it's normalized onto its own
+    lines and evaluated. Line-start conditionals are untouched."""
+    bt = chr(96)
+    undef = "localparam int X = " + bt + "ifdef Y 2 " + bt + "else 1 " + bt + "endif;\n"
+    out = _expand(undef)
+    assert bt not in out and "1" in out and "2" not in out  # Y undefined -> else
+
+    defd = bt + "define Y\nx = " + bt + "ifdef Y 2 " + bt + "else 1 " + bt + "endif;\n"
+    out = _expand(defd)
+    assert bt not in out and "2" in out  # Y defined -> then
