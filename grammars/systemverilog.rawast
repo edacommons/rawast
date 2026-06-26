@@ -352,7 +352,7 @@ SV_RESERVED: choice {
   'endproperty':@, 'endsequence':@, 'endspecify':@, 'endtask':@,
   'endchecker':@,
   'join_none':@, 'join_any':@, 'join':@,
-  'return':@,
+  'return':@,    'force':@,   'release':@,
   'end':@,    'else':@,    'begin':@
 }
 
@@ -1835,12 +1835,12 @@ PROC_CONT_ASSIGN: sequence dict {
 // LVALUE on the left and an expression on the right; release just
 // names the signal whose forced value is being relinquished.
 FORCE_STMT: sequence dict {
-  'force':@:type="force",
-  <LVALUE>:lhs=@, "=", <EXPR>:rhs=@, ";"
+  'force':@:type="force" space,
+  <LVALUE>:lhs=@ space, "=" space, <EXPR>:rhs=@, ";"
 }
 
 RELEASE_STMT: sequence dict {
-  'release':@:type="release",
+  'release':@:type="release" space,
   <LVALUE>:lhs=@, ";"
 }
 

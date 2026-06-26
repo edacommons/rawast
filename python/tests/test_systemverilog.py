@@ -1580,3 +1580,18 @@ def test_sv_fork_join_label_and_items_not_glued(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(T % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_force_release_statements(sv_grammar):
+    """`force lhs = rhs;` / `release lhs;` parse as procedural force/release
+    statements, not variable declarations (`force`/`release` are reserved),
+    and don't glue the keyword to the lvalue on save."""
+    src = ("module m; initial begin\n"
+           "  force rf_ren_a = value;\n"
+           "  release rf_ren_a;\n"
+           "end endmodule\n")
+    ast = sv_grammar.parse_string(src)
+    out = sv_grammar.save(ast).decode("utf-8")
+    assert "forcerf" not in out and "releaserf" not in out
+    assert sv_grammar.parse_string(out) == ast
+    assert ast["descriptions"][0]["items"][0]["body"]["items"][0]["type"] == "force"
