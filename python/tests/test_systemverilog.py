@@ -1682,3 +1682,25 @@ def test_sv_sva_property_binary_operators(sv_grammar):
         M % "assert property (@(posedge clk) (a |-> b) and (c |-> d));")
     prop = ast["descriptions"][0]["items"][0]["body"]["prop"]
     assert prop["ops"][0]["prop_op"] == "and"
+
+
+def test_sv_clocking_block_structured(sv_grammar):
+    """Clocking blocks are structured (event, default skew, direction decls
+    with skew/signals) — not raw text — and round-trip. Unhandled forms fall
+    back to raw (no parse regression)."""
+    I = "interface i; %s endinterface"
+    cases = [
+        "clocking cb @(posedge clk);\n input a; output b;\nendclocking",
+        "clocking cb @(posedge clk);\n default input #1step output #0;\n"
+        " input a, b; output c;\nendclocking",
+        "default clocking cb @(posedge clk);\n output negedge x = 1;\nendclocking : cb",
+        "clocking cb @(posedge clk);\n input #1 output #2 sig;\nendclocking",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(I % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+    ast = sv_grammar.parse_string(
+        I % "clocking cb @(posedge clk);\n input a; output b;\nendclocking")
+    items = ast["descriptions"][0]["items"][0]["items"]
+    assert items[0]["type"] == "clocking_dir" and items[0]["direction"] == "input"
