@@ -1505,8 +1505,8 @@ FUNCTION_RETURN: choice {
 }
 
 FUNCTION_RETURN_TYPED: sequence dict {
-  sv_qualified_type:type_spec=@:type="function_return",
-  ?<SIGNING_KW>:signing=@,
+  sv_qualified_type:type_spec=@:type="function_return" space,
+  ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@
 }
 

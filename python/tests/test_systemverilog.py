@@ -1991,3 +1991,18 @@ def test_sv_nonansi_port_decl_save_spacing(sv_grammar):
         out = sv_grammar.save(ast).decode("utf-8")
         assert "inputi" not in out and "outputbyte" not in out
         assert sv_grammar.parse_string(out) == ast
+
+
+def test_sv_function_return_type_signing_spacing(sv_grammar):
+    """A typed function return with signing — `function int unsigned f()` —
+    must keep spaces on save (was gluing `int`+`unsigned` -> `intunsigned`)."""
+    C = "class c; %s endclass"
+    for stmt in [
+        "function int unsigned f(); return 0; endfunction",
+        "function logic [7:0] g(); return 0; endfunction",
+        "function int h(); return 0; endfunction",
+    ]:
+        ast = sv_grammar.parse_string(C % stmt)
+        out = sv_grammar.save(ast).decode("utf-8")
+        assert "intunsigned" not in out
+        assert sv_grammar.parse_string(out) == ast
