@@ -2093,3 +2093,20 @@ def test_sv_localparam_multi_name(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_attr_on_statement_and_usertype_nonansi_port(sv_grammar):
+    """Valid SV the corpora exposed: an attribute instance prefixing a
+    statement (§5.12) — `(* bar *) y = 1;` — and a non-ANSI port with a
+    user/pkg-qualified type (`input p::p_t p;`, `input my_t x;`)."""
+    cases = [
+        "module m; initial begin (* bar *) y = 1; end endmodule",
+        "module m; initial (* x *) y = 1; endmodule",
+        "module foo(p); input p::p_t p; endmodule",
+        "module foo(p); input my_t p; endmodule",
+        "module foo(p); input p; endmodule",
+        "module m; function f; input pkg::t x; f = x; endfunction endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
