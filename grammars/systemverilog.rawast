@@ -3520,10 +3520,18 @@ CONCURRENT_ASSERT: sequence dict {
   <ASSERT_KIND>:kind=@:type="assert_concurrent" space,
   <ASSERT_KIND_KW>:kind_kw=@,
   "(",
-  sv_balanced_arg:body=@,
-  ")",
+  <ASSERT_BODY>,
   <ASSERT_ACTION>:action=@,
   ?";"
+}
+
+// Structured SVA property-spec first; if the temporal cascade can't
+// consume the whole body up to `)`, the choice backtracks to the raw
+// balanced-text capture — so no form ever regresses to a parse failure.
+// The `)` lives INSIDE each alternative so backtracking covers it.
+ASSERT_BODY: choice {
+  sequence { <PROPERTY_SPEC>:body=@, ")" },
+  sequence { sv_balanced_arg:body=@, ")" }
 }
 
 // `action_block`. The `pass else fail` alt is tried first to
@@ -3565,14 +3573,21 @@ ASSERT_KIND: choice {
 ASSERT_KIND_KW: choice { 'property':@, 'sequence':@ }
 
 // `property NAME([args]); <body> endproperty [: NAME]`
+// Structured property-spec, raw fallback (with `endproperty` inside each
+// alt so a partial structured match backtracks cleanly — zero regression).
 PROPERTY_DECL: sequence dict {
   'property':@:type="property" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endproperty',
-  ?<END_LABEL>:end_label=@
+  ";", "" newline,
+  <PROPERTY_DECL_TAIL>
+}
+PROPERTY_DECL_TAIL: choice {
+  sequence {
+    "" tab, <PROPERTY_SPEC>:body=@, ?";", "" newline,
+    'endproperty', ?<END_LABEL>:end_label=@
+  },
+  sequence { *:body=@, 'endproperty', ?<END_LABEL>:end_label=@ }
 }
 
 // `sequence NAME([args]); <body> endsequence [: NAME]`
@@ -3580,11 +3595,122 @@ SEQUENCE_DECL: sequence dict {
   'sequence':@:type="sequence" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endsequence' space,
-  ?<END_LABEL>:end_label=@
+  ";", "" newline,
+  <SEQUENCE_DECL_TAIL>
 }
+SEQUENCE_DECL_TAIL: choice {
+  sequence {
+    "" tab, <SEQUENCE_EXPR>:body=@, ?";", "" newline,
+    'endsequence', ?<END_LABEL>:end_label=@
+  },
+  sequence { *:body=@, 'endsequence' space, ?<END_LABEL>:end_label=@ }
+}
+
+// ─── SVA temporal expression cascade (structured; raw fallback above) ──
+// IEEE 1800-2017 §16.7-16.12. PEG precedence cascade. Flat operator
+// chains use head/ops/operand (NOT lhs/tail/op/rhs — those trigger
+// #opchain folding; see project-sv-opchain-compaction).
+
+// property_spec: [clocking_event] [disable iff (expr)] property_expr
+PROPERTY_SPEC: sequence dict {
+  ?<SVA_CLOCKING>:clocking=@,
+  ?<SVA_DISABLE_IFF>:disable_iff=@,
+  <PROPERTY_EXPR>:prop=@
+}
+
+SVA_CLOCKING: sequence dict { <EVENT_CONTROL>:event=@, "" space }
+
+SVA_DISABLE_IFF: sequence dict {
+  'disable' space, 'iff' space, "(", <EXPR>:cond=@, ")", "" space
+}
+
+// property_expr: not / sequence-implies-property / bare sequence
+PROPERTY_EXPR: choice {
+  <PROP_NOT>,
+  <PROP_IMPL>,
+  <SEQUENCE_EXPR>
+}
+
+PROP_NOT: sequence dict {
+  'not':@:type="prop_not" space, <PROPERTY_EXPR>:prop=@
+}
+
+// sequence |-> / |=> property (operator required; the parent choice
+// falls back to a bare SEQUENCE_EXPR when absent).
+PROP_IMPL: sequence dict {
+  "":type="implication",
+  <SEQUENCE_EXPR>:antecedent=@ space,
+  <SVA_IMPL_OP>:impl_op=@ space,
+  <PROPERTY_EXPR>:consequent=@
+}
+SVA_IMPL_OP: choice { "|->":@, "|=>":@ }
+
+// sequence_expr: a term, then a flat chain of cycle-delay / binary-op
+// links (and / or / intersect / within / throughout).
+SEQUENCE_EXPR: sequence dict {
+  <SEQ_TERM>:head=@,
+  repeat <SEQ_CHAIN>:ops[]=@
+}
+SEQ_CHAIN: choice { <SEQ_DELAY_LINK>, <SEQ_BINOP_LINK> }
+SEQ_DELAY_LINK: sequence dict {
+  "" space, <CYCLE_DELAY>:delay=@ space, <SEQ_TERM>:operand=@
+}
+SEQ_BINOP_LINK: sequence dict {
+  "" space, <SVA_SEQ_OP>:sva_op=@ space, <SEQ_TERM>:operand=@
+}
+SVA_SEQ_OP: choice {
+  'and':@, 'or':@, 'intersect':@, 'within':@, 'throughout':@
+}
+
+// term: leading cycle-delay (`##1 a`), a parenthesised sequence, or a
+// boolean expression — each with an optional repetition suffix.
+SEQ_TERM: choice {
+  <SEQ_DELAY_PREFIX>,
+  <SEQ_PAREN_REP>,
+  <SEQ_BOOL_REP>
+}
+SEQ_DELAY_PREFIX: sequence dict {
+  <CYCLE_DELAY>:delay=@ space, <SEQ_TERM>:operand=@
+}
+SEQ_PAREN_REP: sequence dict {
+  "(":type="seq_group", <SEQUENCE_EXPR>:seq=@, ")",
+  ?<SVA_REPETITION>:repetition=@
+}
+SEQ_BOOL_REP: sequence dict {
+  <EXPR>:expr=@:type="seq_bool",
+  ?<SVA_REPETITION>:repetition=@
+}
+
+// `## N`, `## [M:N]`, `## [*]`, `## [+]`, `## [M:$]`
+CYCLE_DELAY: sequence dict {
+  "##":@:type="cycle_delay",
+  choice {
+    sequence { "[", <SVA_REP_AMOUNT_STAR>:range=@, "]" },
+    <SVA_COUNT>:count=@
+  }
+}
+
+// Each choice alternative is its own dict so the binding has a container
+// (a binding placed directly in a bare `choice` is dropped on save).
+SVA_REP_AMOUNT_STAR: choice { <SVA_STAR>, <SVA_PLUS>, <SVA_RANGE> }
+SVA_STAR: sequence dict { "*":star=true }
+SVA_PLUS: sequence dict { "+":plus=true }
+SVA_COUNT: sequence dict { <EXPR>:value=@ }
+SVA_RANGE: sequence dict {
+  <EXPR>:lo=@, ":", <SVA_RANGE_HI>:hi=@
+}
+SVA_RANGE_HI: choice { <SVA_UNBOUNDED>, <SVA_COUNT> }
+SVA_UNBOUNDED: sequence dict { "$":unbounded=true }
+
+// `[*N]` `[*M:N]` `[*]` `[+]` `[->N]` `[->M:N]` `[=N]` `[=M:N]`
+SVA_REPETITION: sequence dict {
+  "[",
+  <SVA_REP_KIND>:rep_kind=@,
+  ?<SVA_REP_AMOUNT>:amount=@,
+  "]"
+}
+SVA_REP_KIND: choice { "->":@, "*":@, "+":@, "=":@ }
+SVA_REP_AMOUNT: choice { <SVA_RANGE>, <SVA_COUNT> }
 
 // ─── Coverage, clocking, checkers, fork/join, immediate assertions ─────
 
