@@ -1867,3 +1867,18 @@ def test_sv_localparam_type_in_param_port_list(sv_grammar):
     for src in cases:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_typedef_with_signing(sv_grammar):
+    """`typedef logic unsigned [7:0] u8;` — a signing keyword between the
+    base type and the range. HPDcache typedefs use this. Was a parse gap."""
+    M = "module m; %s endmodule"
+    cases = [
+        "typedef logic unsigned [7:0] u8;",
+        "typedef logic signed [15:0] s16;",
+        "typedef bit unsigned w;",
+        "typedef logic [7:0] x;",   # no signing still works
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
