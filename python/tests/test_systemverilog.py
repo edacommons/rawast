@@ -1976,3 +1976,18 @@ def test_sv_interface_port_save_spacing(sv_grammar):
         out = sv_grammar.save(ast).decode("utf-8")
         assert "ifaceintf" not in out
         assert sv_grammar.parse_string(out) == ast
+
+
+def test_sv_nonansi_port_decl_save_spacing(sv_grammar):
+    """Non-ANSI port declarations (`input i;`, `output byte o;`) must keep
+    spaces on save — direction/type/range had none, so `input i` glued to
+    `inputi` and `output byte` to `outputbyte`, breaking round-trip."""
+    cases = [
+        "module m(i, o); input i; output byte o; endmodule",
+        "module m(a, b, we); input [3:0] a; input b; output we; endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        out = sv_grammar.save(ast).decode("utf-8")
+        assert "inputi" not in out and "outputbyte" not in out
+        assert sv_grammar.parse_string(out) == ast
