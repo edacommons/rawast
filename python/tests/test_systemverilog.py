@@ -1950,3 +1950,13 @@ def test_sv_assignment_pattern_lvalue(sv_grammar):
     for src in cases:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_net_with_data_type(sv_grammar):
+    """A net declaration with an explicit data type — `wire logic wl;`,
+    `wire logic [7:0] x;`, `tri logic z;` (§6.7.1). NET_DECL had no
+    data-type slot after the net kind."""
+    M = "module m; %s endmodule"
+    for stmt in ["wire logic wl;", "wire logic [7:0] x;", "tri logic z;", "wire [3:0] y;"]:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
