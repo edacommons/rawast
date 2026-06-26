@@ -762,11 +762,11 @@ EMPTY_ITEM: sequence dict { ";":type="empty_item" }
 //     output reg b;
 //   endmodule
 PORT_DECL_STMT: sequence dict {
-  <PORT_DIRECTION>:direction=@:type="port_decl",
-  ?<TYPE_SPEC>:type_spec=@,
-  ?<SIGNING_KW>:signing=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  repeat+ sv_identifier:names[]=@ separator ",",
+  <PORT_DIRECTION>:direction=@:type="port_decl" space,
+  ?<TYPE_SPEC>:type_spec=@ space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  repeat+ sv_identifier:names[]=@ separator "," space,
   ";"
 }
 
