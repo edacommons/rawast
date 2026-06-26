@@ -2016,3 +2016,25 @@ def test_sv_ternary_save_spacing_after_based_number(sv_grammar):
     for s in ["sel ? 8'hff : 8'h00", "c ? d : e", "a == 1'b1 ? 1 : 2"]:
         ast = sv_grammar.parse_string(M % s)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_static_audit_glue_fixes(sv_grammar):
+    """Glue bugs found by tools/grammar_space_audit.py (static save-glue
+    finder): procedural `assign x = y;` (also: `assign` must be reserved so
+    it's not parsed as a var decl), `class c implements i;`, `extends p
+    implements i;`, and modport `input a` — none may glue on save."""
+    cases = [
+        ("module m; initial assign x = y; endmodule", "assignx", "proc_assign"),
+        ("class c implements ifc; endclass", "cimplements", None),
+        ("class c extends p implements i, j; endclass", "pimplements", None),
+        ("interface i; modport m (input a, output b); endinterface", "inputa", None),
+    ]
+    for src, glue, _ in cases:
+        ast = sv_grammar.parse_string(src)
+        out = sv_grammar.save(ast).decode("utf-8")
+        assert glue not in out, out
+        assert sv_grammar.parse_string(out) == ast
+    body = sv_grammar.parse_string(
+        "module m; initial assign x = y; endmodule"
+    )["descriptions"][0]["items"][0]["body"]
+    assert body["type"] == "proc_assign"
