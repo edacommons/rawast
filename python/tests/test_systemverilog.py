@@ -1817,3 +1817,19 @@ def test_sv_member_reference_cast(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_empty_item_and_range_only_port(sv_grammar):
+    """A bare `;` null item (`typedef logic t;;`, a stray `;`), and a
+    task/function port that is just a packed range + name with no direction
+    or type keyword (`function void f([1:0] a);`, implicit §13.4.2)."""
+    M = "module m; %s endmodule"
+    cases = [
+        "typedef logic t;;",
+        "logic x; ; logic y;",
+        "function void f([1:0] a); endfunction",
+        "function void g([1:0] a, [3:0] b); endfunction",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
