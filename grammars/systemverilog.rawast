@@ -773,6 +773,7 @@ NET_DECL: sequence dict {
   <NET_KIND>:kind=@:type="net_decl" space,
   ?<NET_SIGNING>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
+  ?<DELAY>:delay=@ space,
   repeat+ <NET_NAME>:names[]=@ separator "," space,
   ";"
 }
