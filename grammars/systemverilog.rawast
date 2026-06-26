@@ -915,14 +915,16 @@ AGG_VAR: sequence dict {
 // class property whose enclosing class invokes `randomize()`, the
 // per-field constrained-random qualifier comes through (IEEE
 // 1800-2017 §18.4) before the type. Pure parse: captured as text.
+// One declared type can name SEVERAL fields: `logic none, load, store;`
+// (common in CVA6/Ariane decode structs). The comma-separated names share
+// the type/range; each carries its own optional unpacked dim + init
+// (AGG_VAR is exactly that name+dim+init shape).
 STRUCT_FIELD: sequence dict {
   ?<RAND_QUALIFIER>:rand=@ space,
   <STRUCT_FIELD_TYPE>:type_spec=@ space,
   ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
-  sv_identifier:name=@,
-  ?<UNPACKED_DIMENSIONS>:unpacked=@,
-  ?<STRUCT_FIELD_INIT>:init=@,
+  repeat+ <AGG_VAR>:names[]=@ separator "," space,
   ";"
 }
 
