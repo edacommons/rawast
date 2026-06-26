@@ -428,7 +428,7 @@ SV_RESERVED: choice {
   'endproperty':@, 'endsequence':@, 'endspecify':@, 'endtask':@,
   'endchecker':@,
   'join_none':@, 'join_any':@, 'join':@,
-  'return':@,    'force':@,   'release':@,
+  'return':@,    'force':@,   'release':@,   'assign':@,
   'end':@,    'else':@,    'begin':@
 }
 
@@ -1990,7 +1990,7 @@ ASSIGN_OP: choice {
 }
 
 PROC_CONT_ASSIGN: sequence dict {
-  'assign':@, <LVALUE>:lhs=@, "=", <EXPR>:rhs=@, ";":type="proc_assign"
+  'assign':@ space, <LVALUE>:lhs=@ space, "=" space, <EXPR>:rhs=@, ";":type="proc_assign"
 }
 
 // `force lhs = rhs;` / `release lhs;` — procedural continuous
@@ -3290,8 +3290,9 @@ CLASS_BASE_PLAIN: sequence { sv_identifier }
 // `implements I1, I2, ...` — class implements one or more
 // interfaces (SV-1800 interface classes).
 CLASS_IMPLEMENTS: sequence dict {
-  'implements':@,
-  repeat+ sv_identifier:interfaces[]=@ separator ","
+  "" space,
+  'implements':@ space,
+  repeat+ sv_identifier:interfaces[]=@ separator "," space
 }
 
 CLASS_ITEMS: sequence array {
@@ -3642,7 +3643,7 @@ MODPORT_GROUP: choice {
 }
 
 MODPORT_GROUP_DIR: sequence dict {
-  <PORT_DIRECTION>:direction=@:type="modport_group",
+  <PORT_DIRECTION>:direction=@:type="modport_group" space,
   sv_identifier:name=@
 }
 
