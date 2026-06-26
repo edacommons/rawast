@@ -3915,15 +3915,78 @@ BINS_TRANS: sequence dict {
 BINS_DEFAULT_SEQ: sequence dict { "" space, 'sequence':is_sequence=true }
 
 // `clocking [NAME] @(<event>); <items> endclocking [: NAME]`.
-// Used in testbenches to declare a clock domain with timing/skew
-// info for signals. Body captured raw.
+// Used in testbenches to declare a clock domain with timing/skew info
+// for signals. Structured (event, default skew, direction decls) with a
+// raw-text fallback (the `endclocking` lives inside each alternative so a
+// partial structured match backtracks cleanly — zero parse regression).
 CLOCKING_BLOCK: sequence dict {
   ?<DEFAULT_KW>:is_default=@ space,
   'clocking':@:type="clocking" space,
   ?<IDENT_OPT>:name=@,
-  *:body=@,
-  'endclocking' space,
-  ?<END_LABEL>:end_label=@
+  <CLOCKING_TAIL>
+}
+CLOCKING_TAIL: choice {
+  sequence {
+    <EVENT_CONTROL>:event=@, ";", "" newline,
+    repeat <CLOCKING_ITEM>:items[]=@ indent tab newline,
+    "" tab, 'endclocking' space, ?<END_LABEL>:end_label=@
+  },
+  sequence {
+    *:body=@, 'endclocking' space, ?<END_LABEL>:end_label=@
+  }
+}
+
+CLOCKING_ITEM: choice {
+  <CLOCKING_DEFAULT_SKEW>,
+  <CLOCKING_DIR_DECL>
+}
+
+// `default [input <skew>] [output <skew>];`
+CLOCKING_DEFAULT_SKEW: sequence dict {
+  'default':@:type="clocking_default" space,
+  ?<CLOCKING_IN_SKEW>:input_skew=@,
+  ?<CLOCKING_OUT_SKEW>:output_skew=@,
+  ";"
+}
+CLOCKING_IN_SKEW: sequence dict { 'input':@ space, <CLOCKING_SKEW>:skew=@ }
+CLOCKING_OUT_SKEW: sequence dict { 'output':@ space, <CLOCKING_SKEW>:skew=@ }
+
+// `<input|output|inout> [skew] signal[ = expr][, ...];`
+CLOCKING_DIR_DECL: sequence dict {
+  <CLOCKING_DIR>:direction=@:type="clocking_dir" space,
+  ?<CLOCKING_SKEW>:skew=@,
+  repeat <CLOCKING_SIGNAL>:signals[]=@ separator ",",
+  ";"
+}
+CLOCKING_DIR: choice { 'input':@, 'output':@, 'inout':@ }
+CLOCKING_SIGNAL: sequence dict {
+  sv_identifier:name=@, ?<CLOCKING_SIGNAL_INIT>:init=@
+}
+CLOCKING_SIGNAL_INIT: sequence dict { "" space, "=" space, <EXPR>:value=@ }
+
+// skew: an edge (`posedge`/`negedge`/`edge`) and/or a `#delay`
+// (`#1step`, `#0`, `#(expr)`).
+CLOCKING_SKEW: choice {
+  <CLOCKING_SKEW_EDGE>,
+  <CLOCKING_SKEW_DELAY>
+}
+CLOCKING_SKEW_EDGE: sequence dict {
+  <CLOCK_EDGE_KW>:edge=@, ?<CLOCKING_SKEW_DELAY_TAIL>:delay=@, "" space
+}
+CLOCKING_SKEW_DELAY_TAIL: sequence dict {
+  "" space, <CLOCKING_DELAY_VALUE>:value=@
+}
+CLOCK_EDGE_KW: choice { 'posedge':@, 'negedge':@, 'edge':@ }
+CLOCKING_SKEW_DELAY: sequence dict {
+  <CLOCKING_DELAY_VALUE>:value=@, "" space
+}
+CLOCKING_DELAY_VALUE: sequence dict {
+  "#",
+  choice {
+    sequence { "(", <EXPR>:expr=@, ")" },
+    sequence { "1step":is_1step=true },
+    sequence { <NUMBER>:amount=@ }
+  }
 }
 
 // Single-key rules wrapped in Choice (rawast doesn't allow bare
