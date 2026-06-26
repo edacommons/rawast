@@ -2187,11 +2187,14 @@ IMPL_TAIL: sequence dict {
 
 COND_EXPR: choice { <TERNARY>, <BIN_EXPR> }
 
+// Spaces around `?`/`:` on save: keep a `<based-number> ? …` ternary from
+// gluing to `<based-number>?…`, where in binary/hex `?` is a valid
+// don't-care digit and the lexer would greedily eat it (`1'b1?1:2`).
 TERNARY: sequence dict {
-  <BIN_EXPR>:cond=@,
-  "?":op="?:",
-  <EXPR>:then=@,
-  ":",
+  <BIN_EXPR>:cond=@ space,
+  "?":op="?:" space,
+  <EXPR>:then=@ space,
+  ":" space,
   <EXPR>:else=@
 }
 

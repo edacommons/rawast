@@ -2006,3 +2006,13 @@ def test_sv_function_return_type_signing_spacing(sv_grammar):
         out = sv_grammar.save(ast).decode("utf-8")
         assert "intunsigned" not in out
         assert sv_grammar.parse_string(out) == ast
+
+
+def test_sv_ternary_save_spacing_after_based_number(sv_grammar):
+    """Ternary `?`/`:` save with spaces so a based-number condition doesn't
+    glue: `sel ? 8'hff : 8'h00` must not save as `sel?8'hff:8'h00` (where the
+    binary/hex `?` would be eaten as a don't-care digit). Round-trips."""
+    M = "module m; localparam X = %s; endmodule"
+    for s in ["sel ? 8'hff : 8'h00", "c ? d : e", "a == 1'b1 ? 1 : 2"]:
+        ast = sv_grammar.parse_string(M % s)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
