@@ -838,6 +838,7 @@ TYPEDEF_FORWARD_CLASS: sequence dict {
 TYPEDEF_REGULAR: sequence dict {
   'typedef':@:type="typedef" space,
   <TYPEDEF_BASE>:base=@ space,
+  ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
