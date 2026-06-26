@@ -1628,3 +1628,29 @@ def test_sv_sva_property_structured(sv_grammar):
     body = ast["descriptions"][0]["items"][0]["body"]
     assert body["prop"]["type"] == "implication"
     assert body["prop"]["antecedent"]["ops"][0]["delay"]["type"] == "cycle_delay"
+
+
+def test_sv_sva_property_level_operators(sv_grammar):
+    """SVA property-level operators: temporal prefixes (s_eventually/always/
+    nexttime, with optional [range]), `if (…) … else …`, abort operators
+    (accept_on/reject_on/sync_*), and `first_match` — structured + round-trip."""
+    M = "module m; %s endmodule"
+    cases = [
+        "assert property (@(posedge clk) s_eventually a);",
+        "assert property (@(posedge clk) always a |-> b);",
+        "assert property (@(posedge clk) always [1:3] a);",
+        "assert property (@(posedge clk) s_eventually [1:$] a);",
+        "assert property (@(posedge clk) nexttime a);",
+        "assert property (@(posedge clk) if (sel) a |-> b else c |-> d);",
+        "assert property (@(posedge clk) if (sel) a);",
+        "assert property (@(posedge clk) accept_on (rst) a |-> b);",
+        "assert property (@(posedge clk) reject_on (err) a);",
+        "assert property (@(posedge clk) first_match(a ##1 b) |-> c);",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+    ast = sv_grammar.parse_string(
+        M % "assert property (@(posedge clk) s_eventually a);")
+    assert ast["descriptions"][0]["items"][0]["body"]["prop"]["type"] == "prop_temporal"
