@@ -1726,3 +1726,19 @@ def test_sv_compiler_directives_in_source(sv_grammar):
 
     ast = sv_grammar.parse_string("`timescale 1ns / 1ps\nmodule m; endmodule")
     assert ast["descriptions"][0]["type"] == "timescale"
+
+
+def test_sv_task_function_ranged_implicit_port(sv_grammar):
+    """A function/task ANSI port with explicit direction + packed range but
+    NO type keyword (`input [31:0] dummy`) — implicit type. Verilog cores
+    write ports this way. Was a parse gap (TASK_PORT_IMPLICIT had no range)."""
+    M = "module m; %s endmodule"
+    cases = [
+        "function [7:0] f(input [31:0] dummy); f = 0; endfunction",
+        "function f(input [31:0] a, input [7:0] b); f = 0; endfunction",
+        "task t(input [3:0] a, output [7:0] b); endtask",
+        "function [7:0] f(input x); f = 0; endfunction",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

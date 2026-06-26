@@ -1458,8 +1458,12 @@ TASK_PORT: choice {
   <TASK_PORT_IMPLICIT>
 }
 
+// `input name` OR `input [31:0] name` — explicit direction, implicit
+// type (defaults per §13.4.2), with an optional packed range. Verilog
+// cores write ranged ports without a type keyword: `input [31:0] dummy`.
 TASK_PORT_IMPLICIT: sequence dict {
   <PORT_DIRECTION>:direction=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
   sv_identifier:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<TASK_PORT_INIT>:init=@
