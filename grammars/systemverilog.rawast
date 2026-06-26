@@ -1645,7 +1645,19 @@ STATEMENT: choice {
   <WAIT_STMT>,
   <DELAY_OR_EVENT_STMT>,
   <EVENT_TRIGGER_STMT>,
+  <LABELED_STMT>,
   <NULL_STMT>
+}
+
+// `label : <statement>` — a statement label prefix (IEEE 1800-2017
+// §9.3.5), e.g. `my_blk: begin … end`. Tried LATE so the assert forms
+// keep using their own ASSERTION_LABEL and normal statements aren't
+// shadowed; only a bare `identifier :` lands here. `!<SV_RESERVED>` keeps
+// keywords (`begin`, `end`, …) from being read as labels.
+LABELED_STMT: sequence dict {
+  !<SV_RESERVED>,
+  sv_identifier:label=@:type="labeled_stmt", ":" space,
+  <STATEMENT>:stmt=@
 }
 
 // `-> event;` / `->> #N event;` — event trigger statement

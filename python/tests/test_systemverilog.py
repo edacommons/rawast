@@ -1925,3 +1925,16 @@ def test_sv_net_delay(sv_grammar):
     for stmt in ["wire #10 a;", "wire #5 b = c;", "wire [3:0] #2 d;"]:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_labeled_statement(sv_grammar):
+    """A statement label prefix `label: <stmt>` (§9.3.5), e.g.
+    `always_comb my_cover: begin … end`. Asserts keep their own label form."""
+    cases = [
+        "module m; always_comb my_cover: begin x = 1; end endmodule",
+        "module m; initial lbl: x = 1; endmodule",
+        "class c; task t(); a1: assert(x); endtask endclass",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
