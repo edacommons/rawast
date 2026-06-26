@@ -771,6 +771,7 @@ PORT_DECL_STMT: sequence dict {
 
 NET_DECL: sequence dict {
   <NET_KIND>:kind=@:type="net_decl" space,
+  ?<TYPE_SPEC>:data_type=@ space,
   ?<NET_SIGNING>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   ?<DELAY>:delay=@ space,
