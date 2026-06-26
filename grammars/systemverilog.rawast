@@ -373,7 +373,19 @@ PARAM_DECL_TYPE_IMPLICIT: sequence dict {
 PARAM_TYPE_DEFAULT: sequence dict {
   "" space, "=" space, <PARAM_TYPE_VALUE>:value=@
 }
-PARAM_TYPE_VALUE: choice { <INLINE_AGG_TYPE>, <EXPR> }
+PARAM_TYPE_VALUE: choice {
+  <INLINE_AGG_TYPE>,
+  <PARAM_TYPE_BUILTIN>,
+  <EXPR>
+}
+// A built-in type with optional signing + packed range as a type-param
+// default: `localparam type in_t = logic unsigned [N-1:0]` (HPDcache).
+// TYPE_SPEC required (a keyword), so a user-type name falls through to EXPR.
+PARAM_TYPE_BUILTIN: sequence dict {
+  <TYPE_SPEC>:type_spec=@:type="param_type_builtin" space,
+  ?<SIGNING_KW>:signing=@ space,
+  ?<PACKED_DIMENSIONS>:range=@
+}
 
 // TYPE_SPEC is REQUIRED here (not optional) so this rule only matches
 // when the parameter type is a built-in keyword. `parameter MyType x`
@@ -558,6 +570,7 @@ PORT_NAME_CONT: sequence dict {
 PORT_DECL_ANSI_USERTYPE: sequence dict {
   <PORT_DIRECTION>:direction=@ space,
   sv_qualified_type:type_spec=@:type="port_decl_usertype" space,
+  ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
   ?<UNPACKED_DIMENSIONS>:unpacked=@

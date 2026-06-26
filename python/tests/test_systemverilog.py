@@ -1882,3 +1882,21 @@ def test_sv_typedef_with_signing(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_signing_in_param_default_and_ansi_port(sv_grammar):
+    """A built-in type with signing as a type-param default
+    (`localparam type in_t = logic unsigned [N-1:0]`, HPDcache) and a signed
+    ANSI module port (`input logic signed [7:0] a`). Both were parse gaps —
+    the param default didn't accept a builtin type, and the ANSI usertype
+    port had no signing slot (so `signed` was mis-read as the port name)."""
+    cases = [
+        "module m #( localparam type in_t = logic unsigned [N-1:0] ) (); endmodule",
+        "module m #( parameter type T = logic ) (); endmodule",
+        "module m (input logic signed [7:0] a); endmodule",
+        "module m (output logic unsigned [3:0] y, input b); endmodule",
+        "module m (input logic [7:0] a); endmodule",
+    ]
+    for src in cases:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
