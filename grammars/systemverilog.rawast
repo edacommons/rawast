@@ -1063,7 +1063,18 @@ LOCALPARAM_DECL_STMT: sequence dict {
   sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   "=" space, <EXPR>:value=@,
+  repeat <LOCALPARAM_MORE>:more[]=@,
   ";"
+}
+
+// `, name = value` — additional names sharing one `localparam`'s type
+// (`localparam logic [63:0] a = '0, b = '1;`). Kept as a continuation so
+// the common single-name form's AST shape is unchanged.
+LOCALPARAM_MORE: sequence dict {
+  "" space, ",", "" space,
+  sv_identifier:name=@ space,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  "=" space, <EXPR>:value=@
 }
 
 // `localparam type NAME = <type>;` — type localparam (the `type` keyword).
