@@ -2049,3 +2049,19 @@ def test_sv_disable_wait_fork_spacing(sv_grammar):
         out = sv_grammar.save(ast).decode("utf-8")
         assert "disablefork" not in out and "waitfork" not in out
         assert sv_grammar.parse_string(out) == ast
+
+
+def test_sv_nonansi_function_task_ports(sv_grammar):
+    """Non-ANSI function/task ports declared in the BODY (`function f; input
+    integer x; … endfunction`) — a port declaration as a TASK_ITEM, not in
+    the header port list. Common in Verilog-style functions."""
+    M = "module m; %s endmodule"
+    cases = [
+        "function f; input integer x; f = x; endfunction",
+        "function [30:0] g; input integer inp; g = inp; endfunction",
+        "task t; output integer x; x = 1; endtask",
+        "function f; input reg signed inp; f = inp; endfunction",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
