@@ -1595,3 +1595,36 @@ def test_sv_force_release_statements(sv_grammar):
     assert "forcerf" not in out and "releaserf" not in out
     assert sv_grammar.parse_string(out) == ast
     assert ast["descriptions"][0]["items"][0]["body"]["items"][0]["type"] == "force"
+
+
+def test_sv_sva_property_structured(sv_grammar):
+    """SVA concurrent-assertion property specs are structured (clocking,
+    disable iff, implication |->/|=>, cycle delay ##, repetition [*]/[->]/[=],
+    and/or/intersect/throughout/within, not) — not captured as raw text —
+    and round-trip. Forms the cascade can't handle fall back to raw text
+    (no parse regression)."""
+    M = "module m; %s endmodule"
+    cases = [
+        "a1: assert property (@(posedge clk) a |-> b);",
+        "assert property (@(posedge clk) a |=> b);",
+        "assert property (@(posedge clk) disable iff (!rst_n) a |-> b);",
+        "assert property (@(posedge clk) a ##1 b ##[1:3] c);",
+        "assert property (@(posedge clk) a ##[*] b);",
+        "assert property (@(posedge clk) a[*2] |-> b[->1]);",
+        "assert property (@(posedge clk) a[=2] |-> b);",
+        "assert property (@(posedge clk) (a and b) throughout c |-> d);",
+        "assert property (@(posedge clk) not (a ##1 b));",
+        "cover property (@(posedge clk) a ##1 b);",
+        "property p; @(posedge clk) a |-> b; endproperty",
+        "sequence s; a ##1 b ##2 c; endsequence",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+    # structure check: implication + cycle delay are real nodes, not raw text
+    ast = sv_grammar.parse_string(
+        M % "assert property (@(posedge clk) a ##1 b |-> c);")
+    body = ast["descriptions"][0]["items"][0]["body"]
+    assert body["prop"]["type"] == "implication"
+    assert body["prop"]["antecedent"]["ops"][0]["delay"]["type"] == "cycle_delay"
