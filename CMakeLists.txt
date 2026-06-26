@@ -110,11 +110,11 @@ if(SKBUILD)
     )
     FetchContent_MakeAvailable(nanobind)
 
-    nanobind_add_module(_native NB_STATIC python/src/native.cc)
-    target_link_libraries(_native PRIVATE rawast::rawast)
-    target_compile_features(_native PRIVATE cxx_std_17)
+    nanobind_add_module(_rawast NB_STATIC python/src/native.cc)
+    target_link_libraries(_rawast PRIVATE rawast::rawast)
+    target_compile_features(_rawast PRIVATE cxx_std_17)
 
-    install(TARGETS _native LIBRARY DESTINATION rawast)
+    install(TARGETS _rawast LIBRARY DESTINATION rawast)
 
     # Bundle the canonical grammars/ directory into the wheel under
     # rawast/grammars/ so Grammar(name) and grammar_path(name) resolve

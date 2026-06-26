@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import os
 
-from ._native import Grammar as _Grammar, Preprocessor, Stream, __version__
+from ._rawast import Grammar as _Grammar, Preprocessor, Stream, __version__
 
 
 # Path to bundled grammar files. The wheel ships these under

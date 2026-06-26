@@ -112,7 +112,7 @@ std::string format_parse_error(const rawast::ParseError& e) {
 
 } // namespace
 
-NB_MODULE(_native, m) {
+NB_MODULE(_rawast, m) {
     // Register built-in parser groups so grammars opting in via
     // `"use": ["std", "gdsii"]` resolve correctly. Library-side
     // anonymous-namespace auto-registration is unreliable across
