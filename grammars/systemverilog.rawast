@@ -2369,10 +2369,24 @@ DEFAULT_VALUE_CHAR: choice {
 // an identifier (typedef'd), `signed`/`unsigned`, or a width
 // expression (`8'(x)`). Multiple forms via Choice.
 TYPE_CAST: choice {
+  <TYPE_CAST_MEMBER>,
   <TYPE_CAST_IDENT>,
   <TYPE_CAST_NUM>,
   <TYPE_CAST_SIGNED>
 }
+
+// `pkg_or_struct.MEMBER'(expr)` — the cast size is a dotted member
+// reference (a config-struct/param field), e.g. CVA6's
+// `CVA6Cfg.PLEN'(addr)`. sv_qualified_type stops at `.`, so the member
+// path needs its own run. Tried first; falls through to TYPE_CAST_IDENT
+// for the plain `type'(expr)` form (which has no `.member`).
+TYPE_CAST_MEMBER: sequence dict {
+  sv_qualified_type:base=@:type="type_cast_member",
+  repeat+ <CAST_MEMBER_SEL>:path[]=@,
+  "'",
+  "(", <EXPR>:value=@, ")"
+}
+CAST_MEMBER_SEL: sequence dict { ".", sv_identifier:name=@ }
 
 // `(W+3)'(x)` — width-expression cast (IEEE 1800-2017 §6.24.1).
 // The cast width is a parenthesized expression rather than an

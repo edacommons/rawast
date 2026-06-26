@@ -1799,3 +1799,20 @@ def test_sv_inline_anonymous_aggregate_decls(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_member_reference_cast(sv_grammar):
+    """Cast whose size is a dotted member reference — `CVA6Cfg.PLEN'(addr)`
+    (a config-struct/param field as the cast width). sv_qualified_type stops
+    at `.`, so this needed its own member-path run. Plain casts unaffected."""
+    M = "module m; initial %s endmodule"
+    cases = [
+        "x = CVA6Cfg.PLEN'(addr);",
+        "x = CVA6Cfg.GPLEN'(v[3:0]);",
+        "x = type_t'(y);",       # plain ident cast still works
+        "x = 8'(z);",            # numeric size cast
+        "x = pkg::T'(w);",       # pkg-qualified cast
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
