@@ -112,7 +112,8 @@ DESCRIPTION: choice {
   <BIND_STMT>,
   <CHECKER_DECL>,
   <SYSTEM_TASK_CALL>,
-  <USER_TYPED_DECL>
+  <USER_TYPED_DECL>,
+  <EMPTY_ITEM>
 }
 
 // IEEE 1800-2017 §22 "other" compiler directives appearing in source.
@@ -714,8 +715,13 @@ MODULE_ITEM: choice {
   <INLINE_AGG_DECL>,
   <SYSTEM_TASK_CALL>,
   <USER_TYPED_DECL>,
+  <EMPTY_ITEM>,
   <MACRO_STMT>
 }
+
+// A bare `;` — a null item/statement. SV tolerates stray/empty semicolons
+// (`typedef logic t;;`, a `;` on its own line). Captured so it round-trips.
+EMPTY_ITEM: sequence dict { ";":type="empty_item" }
 
 // Verilog-95 / non-ANSI port declaration: a port direction followed by
 // optional type/range and one or more port names — used as a module
@@ -1500,7 +1506,18 @@ TASK_PORT_LIST: sequence dict {
 TASK_PORT: choice {
   <TASK_PORT_BUILTIN>,
   <TASK_PORT_USERTYPED>,
-  <TASK_PORT_IMPLICIT>
+  <TASK_PORT_IMPLICIT>,
+  <TASK_PORT_RANGE_ONLY>
+}
+
+// `[1:0] a` — no direction, no type keyword, just a packed range + name
+// (implicit type/direction, §13.4.2). e.g. `function void f([1:0] a);`.
+// Range REQUIRED so it can't claim a bare `name`.
+TASK_PORT_RANGE_ONLY: sequence dict {
+  <PACKED_DIMENSIONS>:range=@:type="task_port" space,
+  sv_identifier:name=@,
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<TASK_PORT_INIT>:init=@
 }
 
 // `input name` OR `input [31:0] name` — explicit direction, implicit
