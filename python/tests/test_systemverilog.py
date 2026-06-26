@@ -2078,3 +2078,18 @@ def test_sv_net_user_type(sv_grammar):
     for stmt in cases:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_localparam_multi_name(sv_grammar):
+    """Several names sharing one `localparam` type — `localparam logic [63:0]
+    a = '0, b = '1;`. Kept as a `more[]` continuation so the single-name
+    shape is unchanged."""
+    M = "module m; %s endmodule"
+    cases = [
+        "localparam logic [63:0] a = '0, b = '1, c = 'x;",
+        "localparam A = 1, B = 2;",
+        "localparam int W = 8;",
+    ]
+    for stmt in cases:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
