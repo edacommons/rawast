@@ -1026,9 +1026,10 @@ def test_enum_struct_modport_structured_bodies(sv_grammar):
     r = sv_grammar.parse_string("typedef struct packed { cmd_e cmd; bit [31:0] addr; } trans_t;\n")
     fields = r["descriptions"][0]["base"]["fields"]
     assert len(fields) == 2
-    assert fields[0]["name"] == "cmd"
+    # one type can name several fields, so names is a list
+    assert fields[0]["names"][0]["name"] == "cmd"
     assert fields[0]["type_spec"] == "cmd_e"
-    assert fields[1]["name"] == "addr"
+    assert fields[1]["names"][0]["name"] == "addr"
     assert fields[1]["type_spec"] == "bit"
     assert "range" in fields[1]
     out = sv_grammar.save(r)
@@ -1038,7 +1039,7 @@ def test_enum_struct_modport_structured_bodies(sv_grammar):
     r = sv_grammar.parse_string("typedef union { int i; real r; } u_t;\n")
     fields = r["descriptions"][0]["base"]["fields"]
     assert len(fields) == 2
-    assert fields[0]["name"] == "i"
+    assert fields[0]["names"][0]["name"] == "i"
     assert fields[0]["type_spec"] == "int"
 
     # Modport: direction-headed + inherited groups
