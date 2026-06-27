@@ -42,7 +42,8 @@ EXPAND_PREDEF = ('`include "uvm_macros.svh"\n`include "dv_macros.svh"\n'
                  '`include "prim_assert_standard_macros.svh"\n'
                  '`define __FILE__ "f"\n`define __LINE__ 0\n')
 
-sv_pp = rawast.Grammar("systemverilog")
+# One merged grammar: the Preprocessor enters at PP_FILE; SV parse uses the
+# default start. No separate preprocessor grammar.
 sv = rawast.Grammar("systemverilog")
 
 
@@ -59,7 +60,7 @@ def measure(label, files, expand, show_fails=0):
     for f in files:
         total += 1
         try:
-            src = rawast.Preprocessor(sv_pp, predefined=predef, include_paths=inc,
+            src = rawast.Preprocessor(sv, predefined=predef, include_paths=inc,
                                       on_undefined="leave").process_file(f)
             a = sv.parse_string(src)
             pok += 1
