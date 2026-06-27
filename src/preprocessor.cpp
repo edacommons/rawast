@@ -2160,13 +2160,16 @@ void Preprocessor::handle_if(const DictValue& d, std::string& out,
                     }
                 }
                 bool take = false;
-                if (!opts_.expr_eval) {
-                    state_.warnings.push_back(
-                        {"`if encountered without expr_eval callback; "
-                         "treating branch as false",
-                         state_.current_file, state_.current_line});
-                } else {
-                    ValuePtr v = opts_.expr_eval(cond);
+                {
+                    // `\`if` evaluation is on by default: with no custom
+                    // expr_eval, the engine evaluates the condition itself
+                    // (eval_cond_default — parses the raw cond through
+                    // PP_EXPR and applies C `#if` semantics). Because that
+                    // parse is on-demand and falls back to Undefined, a
+                    // condition outside the PP_EXPR subset is undecidable,
+                    // not a hard failure. A host-set expr_eval overrides it.
+                    ValuePtr v = opts_.expr_eval ? opts_.expr_eval(cond)
+                                                 : eval_cond_default(cond);
                     if (v && v->type() == ValueType::Bool) {
                         take = static_cast<const BoolValue*>(v.get())->data();
                     } else {

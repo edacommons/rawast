@@ -267,70 +267,37 @@ ValuePtr default_pp_expr_eval(
     return *b ? true_value() : false_value();
 }
 
-void Preprocessor::use_default_expr_eval() {
-    opts_.expr_eval = [this](const ValuePtr& cond) -> ValuePtr {
-        return default_pp_expr_eval(cond,
-            [this](const std::string& name) -> std::optional<std::string> {
-                if (auto m = get_macro(name)) {
-                    // The resolver needs a string view of the body
-                    // (the default expr-eval parses it as an int
-                    // in arithmetic context). Render the segments
-                    // back to text — no expansion, just leaf
-                    // representation.
-                    if (!m->body_segments) return std::nullopt;
-                    std::string s;
-                    for (auto& seg : m->body_segments->data()) {
-                        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
-                            s += sv->data();
-                        }
+ValuePtr Preprocessor::eval_cond_default(const ValuePtr& cond) {
+    auto resolver =
+        [this](const std::string& name) -> std::optional<std::string> {
+            if (auto m = get_macro(name)) {
+                // The resolver needs a string view of the body (the
+                // default expr-eval parses it as an int in arithmetic
+                // context). Render the segments back to text — no
+                // expansion, just leaf representation.
+                if (!m->body_segments) return std::nullopt;
+                std::string s;
+                for (auto& seg : m->body_segments->data()) {
+                    if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
+                        s += sv->data();
                     }
-                    return s;
                 }
-                return std::nullopt;
-            });
-    };
-}
-
-void Preprocessor::use_default_expr_eval(const Grammar& expr_grammar) {
-    opts_.expr_eval = [this, &expr_grammar](const ValuePtr& cond)
-        -> ValuePtr {
-        auto resolver =
-            [this](const std::string& name) -> std::optional<std::string> {
-                if (auto m = get_macro(name)) {
-                    // The resolver needs a string view of the body
-                    // (the default expr-eval parses it as an int
-                    // in arithmetic context). Render the segments
-                    // back to text — no expansion, just leaf
-                    // representation.
-                    if (!m->body_segments) return std::nullopt;
-                    std::string s;
-                    for (auto& seg : m->body_segments->data()) {
-                        if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
-                            s += sv->data();
-                        }
-                    }
-                    return s;
-                }
-                return std::nullopt;
-            };
-        // Synthesized AST cond (process_ast path or other grammar
-        // shapes) goes straight to the evaluator — no parse needed.
-        if (!as_string(cond)) {
-            return default_pp_expr_eval(cond, resolver);
-        }
-        // Raw-text cond from sv_preprocessor.rawast's IF rule: parse
-        // it with the supplied expression grammar.
-        auto stream = Stream::from_string(as_string(cond)->data());
-        auto r = expr_grammar.parse(stream);
-        if (!r) {
-            state_.warnings.push_back(
-                {"failed to parse `if condition '" +
-                     as_string(cond)->data() + "': " + r.error().message,
-                 state_.current_file, state_.current_line});
-            return undefined_value();
-        }
-        return default_pp_expr_eval(*r, resolver);
-    };
+                return s;
+            }
+            return std::nullopt;
+        };
+    // Already-structured cond (synthesized via process_ast) — evaluate it
+    // directly.
+    if (!as_string(cond)) return default_pp_expr_eval(cond, resolver);
+    // Raw-text cond from the IF rule: parse it through the PP_EXPR rule of
+    // the preprocessor grammar itself (no separate grammar). A condition
+    // outside the PP_EXPR subset (sized literals, shifts, ternary, macro
+    // calls, …) fails to parse and is reported as undecidable — the engine
+    // then applies on_undecidable, rather than the whole preprocess failing.
+    auto stream = Stream::from_string(as_string(cond)->data());
+    auto r = pp_grammar_.parse_from(stream, "PP_EXPR");
+    if (!r) return undefined_value();
+    return default_pp_expr_eval(*r, resolver);
 }
 
 } // namespace rawast
