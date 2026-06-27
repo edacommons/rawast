@@ -4563,3 +4563,281 @@ VIRTUAL_INTERFACE_DECL: sequence dict {
 }
 
 
+
+
+// ═══════════════════════════════════════════════════════════════
+// Preprocessor rules (merged from sv_preprocessor.rawast).
+// Reachable via parse_from(g, "PP_FILE"); the SV start rule is
+// unchanged. `if/`elsif conditions subparse to the SV COND_EXPR, so
+// no separate expression ladder. Rules clashing with SV carry a PP_
+// prefix (PP_DEFINE/PP_IFDEF/PP_IFNDEF/PP_INCLUDE/PP_MACRO_USE/PP_UNDEF).
+// ═══════════════════════════════════════════════════════════════
+
+// `linespace` + `line_comment` — horizontal whitespace AND
+// trailing `//` comments at every rule-frame boundary, so
+// `\`endif // INC_ASSERT` parses the same as a bare `\`endif`.
+// TEXT_LINE overrides with `ignore:` empty so a `// comment` on
+// its own line stays captured as line content.
+PP_FILE ignore linespace line_comment: sequence array {
+  repeat <PP_ITEM>
+}
+
+PP_ITEM: choice {
+  <PP_DEFINE>,
+  <PP_UNDEF>,
+  <PP_INCLUDE>,
+  <PP_IFDEF>,
+  <PP_IFNDEF>,
+  <IF>,
+  <TEXT_LINE>
+}
+
+PP_IFDEF: sequence dict {
+  "`ifdef":type="ifdef" space,
+  identifier:cond=@,
+  "\n",
+  <BODY>:body=@,
+  repeat <IFDEF_ELSIF>:elsif_branches[]=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif",
+  "\n"
+}
+
+PP_IFNDEF: sequence dict {
+  "`ifndef":type="ifndef" space,
+  identifier:cond=@,
+  "\n",
+  <BODY>:body=@,
+  repeat <IFDEF_ELSIF>:elsif_branches[]=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif",
+  "\n"
+}
+
+BODY: sequence array {
+  repeat <PP_ITEM>
+}
+
+ELSE_BRANCH: sequence dict {
+  "`else",
+  "\n",
+  <BODY>:body=@
+}
+
+IF: sequence dict {
+  <IF_HEAD>:branches[]=@,
+  repeat <ELSIF>:branches[]=@,
+  ?<ELSE_BRANCH>:else_branch=@,
+  "`endif":type="if",
+  "\n"
+}
+
+// IF_HEAD/ELSIF capture the condition as the rest of the line (raw
+// text) — robust: ANY `\`if` preprocesses, even conditions outside the
+// PP_EXPR subset (sized literals, shifts, ternary, macro calls). The
+// evaluator parses the captured text through the PP_EXPR rule below
+// (Grammar::parse_from start="PP_EXPR") on demand; a cond it can't parse
+// is undecidable, never a hard parse failure. The walker trims the
+// leading space (Raw bypasses `ignore`) before evaluating.
+IF_HEAD: sequence dict {
+  "`if" space,
+  *:cond=@:#subparse="COND_EXPR",
+  "\n",
+  <BODY>:body=@
+}
+
+ELSIF: sequence dict {
+  "`elsif" space,
+  *:cond=@:#subparse="COND_EXPR",
+  "\n",
+  <BODY>:body=@
+}
+
+// `\`elsif` in an `\`ifdef`/`\`ifndef` chain tests DEFINEDNESS, so its
+// condition is a macro name. Using `identifier` (not the raw `*` of the
+// expression ELSIF) keeps cond clean — no leading space to trim — and the
+// `space` provides the separator on save.
+IFDEF_ELSIF: sequence dict {
+  "`elsif" space,
+  identifier:cond=@,
+  "\n",
+  <BODY>:body=@
+}
+
+PP_UNDEF: sequence dict {
+  "`undef":type="undef" space,
+  identifier:name=@,
+  "\n"
+}
+
+PP_INCLUDE: sequence dict {
+  "`include":type="include" space,
+  std.string:path=@,
+  "\n"
+}
+
+// A single line of arbitrary text. Line content captured as
+// `scope array { <PP_MACRO_USE> }` so embedded `\`NAME` calls surface
+// as macro_use dicts in segments; everything else stays as bare
+// StringValue text runs. The walker iterates segments.
+//
+// `ignore:` overrides the inherited policy — line whitespace is
+// content. Leading negative-lookaheads keep TEXT_LINE from claiming
+// structural close tokens.
+TEXT_LINE ignore: sequence dict {
+  !"`endif",
+  !"`else",
+  !"`elsif",
+  scope array { <PP_MACRO_USE> }:segments=@,
+  "\n":type="text_line"
+}
+
+// `\`define NAME [(p1, …)] body`. The name + optional params sits
+// inside DECL with empty ignore so the LRM adjacency rule survives:
+//
+//   `\`define FOO(x) bar`    → parameterised: params=["x"], body=[bar]
+//   `\`define FOO (x) bar`   → object-like:   no params,   body=[(x) bar]
+// `\`define NAME [(p1, …)] body` — per SV-1800 §22.5.1, `body` ends
+// at the next UNESCAPED newline. A backslash immediately before a
+// newline (`\<newline>`) is a line continuation: both bytes belong
+// to the body, and the body keeps going. Add `LINE_CONT` as an
+// explicit INNER so scope's byte-scanner consumes it instead of
+// treating the trailing `\n` as the body's terminator.
+PP_DEFINE: sequence dict {
+  "`define":type="define" space,
+  <DECL>:decl=@ space,
+  <DEFINE_BODY>:body=@,
+  "\n"
+}
+
+// Override PP_FILE's inherited `ignore linespace line_comment`,
+// keeping ONLY `linespace`. line_comment must NOT strip `// ...`
+// inside the macro body — if it did, the `//` would be consumed
+// but the trailing comment identifiers (`// init` → `init`) would
+// survive as PARAM_REF INNER matches, leaking the comment WORDS
+// into the body without their `//` marker. With line_comment
+// dropped from the ignore set here, the `//` and the rest of the
+// comment text are captured as raw bytes in a literal segment,
+// and handle_define strips them with full segment-aware skip
+// (find `//` in a literal segment, then drop subsequent typed
+// segments up to the next LINE_CONT boundary).
+//
+// `linespace` is kept so MACRO_USE inside a body still matches
+// `\`OTHER (x)` (LRM §22.5.1 allows whitespace between macro name
+// and the opening `(` at the use site).
+DEFINE_BODY ignore linespace: scope array {
+  <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT>
+}
+
+// `\`\`` — token paste operator (IEEE 1800-2017 §22.5.1). Adjacent
+// to a parameter or identifier on either side; substituted text on
+// the two sides fuses because the operator is dropped at expansion
+// time. Tried BEFORE MACRO_USE so the second backtick of `\`\`X`
+// can't be misread as the start of a `\`X` macro use.
+TOKEN_PASTE: sequence dict {
+  "``":type="token_paste"
+}
+
+// `\`"..\`"` — stringification (IEEE 1800-2017 §22.5.1). Opens
+// and closes a string literal in the expanded text; parameters
+// referenced inside undergo substitution before the literal is
+// formed. Tried BEFORE STRING so the leading `\`"` doesn't get
+// half-parsed as text-`\`` plus a regular `"…"` string.
+STRINGIFY: sequence dict {
+  "`\"":type="stringify",
+  scope array { <PP_MACRO_USE>, <PARAM_REF>, <TOKEN_PASTE> }:segments=@,
+  "`\""
+}
+
+// `\<newline>` — line continuation inside a macro body. Engine
+// consumes both bytes as one INNER match so the surrounding scope's
+// terminator check (looking for an UNESCAPED `\n`) doesn't fire.
+// The captured text still contains the literal `\` + `\n`;
+// Preprocessor::handle_define strips them at store time so the
+// expanded body is the joined form.
+LINE_CONT ignore: sequence { "\\", "\n" }
+
+// `ignore:` empty — the engine runs the OUTER PP_FILE's `ignore
+// linespace` at DECL's boundary (eats the space after `\`define`),
+// then DECL's empty policy takes effect for its internal items.
+// `?<PARAMS>` predictive uses DECL's empty: peek raw cursor — `(`
+// takes PARAMS, space skips it.
+DECL ignore: sequence dict {
+  identifier:name=@,
+  ?<PARAMS>:params=@
+}
+
+// PARAMS overrides with its own `ignore linespace` so internal
+// whitespace works — DECL above has empty ignore which would
+// otherwise propagate into PARAMS via inheritance.
+//
+// Per IEEE 1800-2017 §22.5.1, each formal accepts an optional
+// `= default_text` clause. `default_text` is balanced text up to
+// the next top-level `,` or `)` — `sv_balanced_arg` is exactly
+// this scanner, so the default value captures cleanly even when
+// it itself contains balanced parens (`ARGS_ = ()`, `X = (a+b)`).
+PARAMS ignore linespace: sequence array {
+  "(",
+  repeat <PARAM_FORMAL> separator ",",
+  ")"
+}
+
+PARAM_FORMAL: sequence dict {
+  identifier:name=@,
+  ?<PARAM_FORMAL_DEFAULT>:default=@
+}
+
+PARAM_FORMAL_DEFAULT: sequence dict {
+  "=", sv_balanced_arg:value=@
+}
+
+// `\`NAME[(args)]` use site. No explicit ignore — inherit from
+// caller. LRM §22.5.1 allows whitespace between macro name and the
+// opening `(` of args at the use site (asymmetric to `\`define`,
+// where no whitespace is allowed). Inside a macro body MACRO_USE
+// inherits PP_FILE's `ignore linespace`, so `\`INC (Y)` captures
+// (Y) as args. Inside TEXT_LINE (empty ignore), line content stays
+// verbatim — `\`FOO (5)` at the top level treats `(5)` as text.
+PP_MACRO_USE: sequence dict {
+  "`":type="macro_use",
+  identifier:name=@,
+  ?<MACRO_ARGS>:args=@
+}
+
+// Args at the use site. LRM §22.5.1: each arg is a balanced-paren
+// token run terminating at the top-level `,` or `)`. `sv_balanced_arg`
+// is the depth-tracking scanner that captures exactly one such arg
+// as raw bytes — it follows `()`/`{}`/`[]` nesting and skips over
+// string literals, so embedded commas / closing parens inside nested
+// structures or strings don't end the arg. Same scanner used for
+// PARAM_FORMAL_DEFAULT, so macro-call args and define-default values
+// share one balanced-text implementation.
+//
+// Result shape: ArrayValue<StringValue> — each StringValue holds one
+// arg's raw bytes, the flat-text shape the substitution pipeline
+// consumes.
+//
+// `ignore linespace` applies between structural items (around `,`,
+// before `)`); whitespace INSIDE an arg is preserved by the scanner.
+MACRO_ARGS ignore linespace: sequence array {
+  "(",
+  repeat sv_balanced_arg separator ",",
+  ")"
+}
+
+STRING: sequence dict {
+  std.string:type="string":value=@
+}
+
+PARAM_REF: sequence dict {
+  identifier:type="ref":value=@
+}
+
+
+// ─── `\`if` / `\`elsif` condition expressions ───────────────────
+// Inlined from the former sv_pp_expr.rawast so the preprocessor
+// grammar self-describes its condition syntax and the engine can
+// evaluate `\`if` by default (no separate grammar to pass). These
+// rules inherit PP_FILE's `ignore linespace line_comment`, so a
+// condition parses to the end of its line. AST: {type:ref/int/
+// call/paren} leaves + {op, args[]} ops (compacted via #opchain).
