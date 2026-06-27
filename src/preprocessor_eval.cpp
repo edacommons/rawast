@@ -68,13 +68,22 @@ resolve_ref_as_int(const std::string& name, const RefResolver& resolver) {
     return parse_int(*body);
 }
 
-// `defined(X)` recognises X by its `value` field (the ref's identifier).
+// `defined(X)` — pull X's identifier from the argument. Two AST shapes:
+//   PP/synth:  args:[{type:"ref", value:"X"}]
+//   SV COND_EXPR: args:[{style:"positional", value:{type:"ref", name:"X"}}]
 std::optional<bool>
 eval_defined(const std::shared_ptr<ArrayValue>& args, const RefResolver& resolver) {
     if (!args || args->data().empty()) return std::nullopt;
     auto arg0 = as_dict(args->data()[0]);
     if (!arg0) return std::nullopt;
-    auto name = dict_get_str(*arg0, "value");
+    std::optional<std::string> name = dict_get_str(*arg0, "value");  // old shape
+    if (!name) {
+        // SV: unwrap the positional arg, then read the ref's `name`.
+        auto inner = as_dict(dict_get(*arg0, "value"));
+        const auto& ref = inner ? *inner : *arg0;
+        name = dict_get_str(ref, "name");
+        if (!name) name = dict_get_str(ref, "value");
+    }
     if (!name) return std::nullopt;
     if (!resolver) return std::nullopt;
     return resolver(*name).has_value();
@@ -146,7 +155,7 @@ eval_int(const ValuePtr& v, const RefResolver& resolver) {
     // Leaf type?
     if (auto type_opt = dict_get_str(*d, "type")) {
         const std::string& type = *type_opt;
-        if (type == "int") {
+        if (type == "int" || type == "integer") {
             auto iv = as_int(dict_get(*d, "value"));
             if (!iv) return std::nullopt;
             return iv->data();
@@ -156,10 +165,11 @@ eval_int(const ValuePtr& v, const RefResolver& resolver) {
         }
         if (type == "ref") {
             auto name = dict_get_str(*d, "value");
+            if (!name) name = dict_get_str(*d, "name");  // SV ref uses `name`
             if (!name) return std::nullopt;
             return resolve_ref_as_int(*name, resolver);
         }
-        if (type == "call") {
+        if (type == "call" || type == "func_call") {
             auto name = dict_get_str(*d, "name");
             if (!name) return std::nullopt;
             if (*name == "defined") {
@@ -223,7 +233,7 @@ eval_bool(const ValuePtr& v, const RefResolver& resolver) {
     // Leaf type?
     if (auto type_opt = dict_get_str(*d, "type")) {
         const std::string& type = *type_opt;
-        if (type == "int") {
+        if (type == "int" || type == "integer") {
             auto iv = as_int(dict_get(*d, "value"));
             if (!iv) return std::nullopt;
             return iv->data() != 0;
@@ -236,6 +246,7 @@ eval_bool(const ValuePtr& v, const RefResolver& resolver) {
             // Undefined → false (the standard C-preprocessor semantic for
             // unknown identifiers in `\`if` is to substitute zero).
             auto name = dict_get_str(*d, "value");
+            if (!name) name = dict_get_str(*d, "name");  // SV ref uses `name`
             if (!name) return std::nullopt;
             if (!resolver) return std::nullopt;
             auto body = resolver(*name);
@@ -243,7 +254,7 @@ eval_bool(const ValuePtr& v, const RefResolver& resolver) {
             if (auto n = parse_int(*body)) return *n != 0;
             return true;   // defined, body not int → truthy
         }
-        if (type == "call") {
+        if (type == "call" || type == "func_call") {
             auto name = dict_get_str(*d, "name");
             if (!name) return std::nullopt;
             if (*name == "defined") {
@@ -295,7 +306,7 @@ ValuePtr Preprocessor::eval_cond_default(const ValuePtr& cond) {
     // calls, …) fails to parse and is reported as undecidable — the engine
     // then applies on_undecidable, rather than the whole preprocess failing.
     auto stream = Stream::from_string(as_string(cond)->data());
-    auto r = pp_grammar_.parse_from(stream, "PP_EXPR");
+    auto r = pp_grammar_.parse_from(stream, "COND_EXPR");
     if (!r) return undefined_value();
     return default_pp_expr_eval(*r, resolver);
 }

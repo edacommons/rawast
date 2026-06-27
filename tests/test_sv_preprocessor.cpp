@@ -23,16 +23,17 @@ Grammar load_grammar() {
     register_std_parser_group();
     register_sv_parser_group();
     Grammar g;
-    auto r = load_rawast_grammar_from_file(g, "grammars/sv_preprocessor.rawast");
-    REQUIRE_MESSAGE(r, "loading sv_preprocessor.rawast failed: "
+    auto r = load_rawast_grammar_from_file(g, "grammars/systemverilog.rawast");
+    REQUIRE_MESSAGE(r, "loading systemverilog.rawast failed: "
                        << (r ? "" : r.error()));
     return g;
 }
 
-// Full PP_FILE parse result (an ArrayValue of PP_ITEMs).
+// Full PP_FILE parse result (an ArrayValue of PP_ITEMs). The preprocessor
+// rules live in the merged SV grammar, reached via the PP_FILE start rule.
 ValuePtr parse_file(Grammar& g, const std::string& src) {
     auto stream = Stream::from_string(src);
-    auto r = g.parse(stream);
+    auto r = g.parse_from(stream, "PP_FILE");
     REQUIRE_MESSAGE(r, "parse failed for '" << src << "': "
                        << (r ? "" : r.error().message));
     return *r;
@@ -58,7 +59,7 @@ std::string save(Grammar& g, ValuePtr v) {
         v = std::move(wrapped);
     }
     std::ostringstream out;
-    auto r = g.save(out, std::move(v));
+    auto r = g.save(out, std::move(v), true, g.rule_id("PP_FILE"));
     REQUIRE_MESSAGE(r, "save failed: " << (r ? "" : r.error().message));
     return out.str();
 }
@@ -978,14 +979,15 @@ static ValuePtr if_cond(const ValuePtr& ast, std::size_t i) {
     return br->data().find("cond")->second;
 }
 
-TEST_CASE("sv_pp if: grammar parses cond into a structured PP_EXPR AST") {
+TEST_CASE("sv_pp if: grammar parses cond into a structured COND_EXPR AST") {
     auto g = load_grammar();
     auto ast = parse(g, "`if FOO\n`endif\n");
     CHECK(str_field(ast, "type") == "if");
-    // cond is no longer raw text — it's parsed through PP_EXPR.
+    // cond is no longer raw text — it's subparsed through the SV COND_EXPR,
+    // whose ref node uses `name` (not PP_EXPR's `value`).
     auto cond = if_cond(ast, 0);
     CHECK(str_field(cond, "type") == "ref");
-    CHECK(str_field(cond, "value") == "FOO");
+    CHECK(str_field(cond, "name") == "FOO");
 }
 
 TEST_CASE("sv_pp if: grammar parses `\\`if ... \\`elsif ... \\`endif` conds") {
@@ -1001,8 +1003,8 @@ TEST_CASE("sv_pp if: grammar parses `\\`if ... \\`elsif ... \\`endif` conds") {
         d->data().find("branches")->second);
     REQUIRE(branches);
     REQUIRE(branches->data().size() == 3);
-    CHECK(str_field(if_cond(ast, 0), "value") == "FOO");    // ref
-    CHECK(str_field(if_cond(ast, 1), "name") == "defined");  // call
+    CHECK(str_field(if_cond(ast, 0), "name") == "FOO");      // ref
+    CHECK(str_field(if_cond(ast, 1), "name") == "defined");  // func_call
     CHECK(str_field(if_cond(ast, 2), "op") == ">");          // op chain
 }
 

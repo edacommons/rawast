@@ -5,7 +5,7 @@ import rawast
 
 
 def _expand(src: str) -> str:
-    pp = rawast.Grammar("sv_preprocessor")
+    pp = rawast.Grammar("systemverilog")
     p = rawast.Preprocessor(pp, predefined="", include_paths=[],
                             on_undefined="leave")
     out = p.process(src)
