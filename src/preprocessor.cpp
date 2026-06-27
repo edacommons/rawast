@@ -94,6 +94,22 @@ std::optional<PpOnUndefined> parse_pp_on_undefined(std::string_view name) noexce
     return std::nullopt;
 }
 
+std::string_view to_string(PpOnUndecidable v) noexcept {
+    switch (v) {
+        case PpOnUndecidable::TreatAsFalse: return "false";
+        case PpOnUndecidable::TreatAsTrue:  return "true";
+        case PpOnUndecidable::Error:        return "error";
+    }
+    return "";
+}
+
+std::optional<PpOnUndecidable> parse_pp_on_undecidable(std::string_view name) noexcept {
+    if (name == "false") return PpOnUndecidable::TreatAsFalse;
+    if (name == "true")  return PpOnUndecidable::TreatAsTrue;
+    if (name == "error") return PpOnUndecidable::Error;
+    return std::nullopt;
+}
+
 // ─── Preprocessor ───────────────────────────────────────────────────
 
 Preprocessor::Preprocessor(const Grammar& pp_grammar, PpOptions opts)
@@ -2149,13 +2165,33 @@ void Preprocessor::handle_if(const DictValue& d, std::string& out,
                         {"`if encountered without expr_eval callback; "
                          "treating branch as false",
                          state_.current_file, state_.current_line});
-                } else if (auto v = opts_.expr_eval(cond)) {
-                    take = *v;
                 } else {
-                    state_.warnings.push_back(
-                        {"expr_eval could not evaluate `if condition; "
-                         "treating as false",
-                         state_.current_file, state_.current_line});
+                    ValuePtr v = opts_.expr_eval(cond);
+                    if (v && v->type() == ValueType::Bool) {
+                        take = static_cast<const BoolValue*>(v.get())->data();
+                    } else {
+                        // Undecidable: expr_eval returned Undefined (or null).
+                        // Apply the host's on_undecidable policy.
+                        switch (opts_.on_undecidable) {
+                        case PpOnUndecidable::TreatAsFalse:
+                            state_.warnings.push_back(
+                                {"`if condition is undecidable; treating as "
+                                 "false", state_.current_file,
+                                 state_.current_line});
+                            take = false;
+                            break;
+                        case PpOnUndecidable::TreatAsTrue:
+                            state_.warnings.push_back(
+                                {"`if condition is undecidable; treating as "
+                                 "true", state_.current_file,
+                                 state_.current_line});
+                            take = true;
+                            break;
+                        case PpOnUndecidable::Error:
+                            throw std::runtime_error(
+                                "undecidable `if condition");
+                        }
+                    }
                 }
                 // Position past `\`elsif` line for branches beyond the
                 // first — only walks if the first branch hasn't

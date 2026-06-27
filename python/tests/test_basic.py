@@ -395,3 +395,34 @@ def test_undefined_is_return_only():
     for arg in [U, {"k": U}, [1, U], {"k": [U]}]:
         with pytest.raises(TypeError, match="return-only sentinel"):
             sv.save(arg)
+
+
+def test_preprocessor_expr_eval_property_and_undecidable_policy():
+    """The expr_eval property (set after construction) + the on_undecidable
+    engine policy. Uses direct callbacks returning rawast.Undefined, so it
+    exercises the binding without the Python evaluator layer."""
+    g = rawast.Grammar("sv_preprocessor")
+
+    def run(policy, cb):
+        pp = rawast.Preprocessor(g, on_undecidable=policy)
+        pp.expr_eval = cb
+        pp.process("`if ANY\n`define TOOK 1\n`endif\n")
+        return pp.is_defined("TOOK")
+
+    assert run("false", lambda c: rawast.Undefined) is False
+    assert run("true", lambda c: rawast.Undefined) is True
+    with pytest.raises(Exception):
+        run("error", lambda c: rawast.Undefined)
+    assert run("false", lambda c: True) is True
+    assert run("false", lambda c: False) is False
+
+    # property get / set (unset reads as None)
+    pp = rawast.Preprocessor(g)
+    assert pp.expr_eval is None
+    cb = lambda c: True
+    pp.expr_eval = cb
+    assert pp.expr_eval is cb
+
+    # bad on_undecidable policy is rejected
+    with pytest.raises(Exception):
+        rawast.Preprocessor(g, on_undecidable="maybe")

@@ -22,6 +22,17 @@ using namespace rawast;
 
 namespace {
 
+// Tri-state predicates over the ValuePtr result of default_pp_expr_eval.
+bool is_true(const ValuePtr& v) {
+    return v && v->type() == ValueType::Bool &&
+           static_cast<const BoolValue*>(v.get())->data();
+}
+bool is_false(const ValuePtr& v) {
+    return v && v->type() == ValueType::Bool &&
+           !static_cast<const BoolValue*>(v.get())->data();
+}
+bool is_undef(const ValuePtr& v) { return v && v->type() == ValueType::Undefined; }
+
 // ─── Synthesized-AST builders ──────────────────────────────────────
 // Same conventions as in test_preprocessor.cpp — kept local here so
 // this file stands alone.
@@ -83,59 +94,59 @@ auto resolver_const(std::initializer_list<std::pair<std::string, std::string>> e
 
 TEST_CASE("default_pp_expr_eval: int(0) → false, int(non-zero) → true") {
     auto r = resolver_empty();
-    CHECK(default_pp_expr_eval(int_(0), r)  == std::optional<bool>{false});
-    CHECK(default_pp_expr_eval(int_(1), r)  == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(int_(-5), r) == std::optional<bool>{true});
+    CHECK(is_false(default_pp_expr_eval(int_(0), r)));
+    CHECK(is_true(default_pp_expr_eval(int_(1), r)));
+    CHECK(is_true(default_pp_expr_eval(int_(-5), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: ref(undefined) → false") {
     auto r = resolver_empty();
-    CHECK(default_pp_expr_eval(ref_("FOO"), r) == std::optional<bool>{false});
+    CHECK(is_false(default_pp_expr_eval(ref_("FOO"), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: ref(defined, body=\"0\") → false") {
     auto r = resolver_const({{"FOO", "0"}});
-    CHECK(default_pp_expr_eval(ref_("FOO"), r) == std::optional<bool>{false});
+    CHECK(is_false(default_pp_expr_eval(ref_("FOO"), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: ref(defined, body=\"1\") → true") {
     auto r = resolver_const({{"FOO", "1"}});
-    CHECK(default_pp_expr_eval(ref_("FOO"), r) == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(ref_("FOO"), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: ref(defined, non-int body) → true (defined-is-truthy)") {
     auto r = resolver_const({{"FOO", "abc"}});
-    CHECK(default_pp_expr_eval(ref_("FOO"), r) == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(ref_("FOO"), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: paren passes through") {
     auto r = resolver_empty();
-    CHECK(default_pp_expr_eval(paren_(int_(7)), r) == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(paren_(int_(0)), r) == std::optional<bool>{false});
+    CHECK(is_true(default_pp_expr_eval(paren_(int_(7)), r)));
+    CHECK(is_false(default_pp_expr_eval(paren_(int_(0)), r)));
 }
 
 // ─── defined() ─────────────────────────────────────────────────────
 
 TEST_CASE("default_pp_expr_eval: defined(FOO) reflects resolver state") {
     auto r1 = resolver_empty();
-    CHECK(default_pp_expr_eval(defined_("FOO"), r1) == std::optional<bool>{false});
+    CHECK(is_false(default_pp_expr_eval(defined_("FOO"), r1)));
 
     auto r2 = resolver_const({{"FOO", ""}});
-    CHECK(default_pp_expr_eval(defined_("FOO"), r2) == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(defined_("FOO"), r2)));
 }
 
 TEST_CASE("default_pp_expr_eval: unknown call name → nullopt") {
     auto r = resolver_empty();
     auto v = call_("custom_pred", {int_(1)});
-    CHECK(default_pp_expr_eval(v, r) == std::nullopt);
+    CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
 // ─── Operators: boolean ────────────────────────────────────────────
 
 TEST_CASE("default_pp_expr_eval: ! flips truthiness") {
     auto r = resolver_empty();
-    CHECK(default_pp_expr_eval(op_("!", {int_(0)}), r) == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(op_("!", {int_(1)}), r) == std::optional<bool>{false});
+    CHECK(is_true(default_pp_expr_eval(op_("!", {int_(0)}), r)));
+    CHECK(is_false(default_pp_expr_eval(op_("!", {int_(1)}), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: || short-circuits on first true") {
@@ -144,25 +155,25 @@ TEST_CASE("default_pp_expr_eval: || short-circuits on first true") {
     // undecidable. We can't observe lazy-vs-eager directly, but the
     // overall result must be `true` regardless.
     auto v = op_("||", {int_(1), call_("unknown", {})});
-    CHECK(default_pp_expr_eval(v, r) == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(v, r)));
 }
 
 TEST_CASE("default_pp_expr_eval: || returns nullopt when no true + any undecidable") {
     auto r = resolver_empty();
     auto v = op_("||", {int_(0), call_("unknown", {})});
-    CHECK(default_pp_expr_eval(v, r) == std::nullopt);
+    CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
 TEST_CASE("default_pp_expr_eval: && short-circuits on first false") {
     auto r = resolver_empty();
     auto v = op_("&&", {int_(0), call_("unknown", {})});
-    CHECK(default_pp_expr_eval(v, r) == std::optional<bool>{false});
+    CHECK(is_false(default_pp_expr_eval(v, r)));
 }
 
 TEST_CASE("default_pp_expr_eval: && returns nullopt when no false + any undecidable") {
     auto r = resolver_empty();
     auto v = op_("&&", {int_(1), call_("unknown", {})});
-    CHECK(default_pp_expr_eval(v, r) == std::nullopt);
+    CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
 TEST_CASE("default_pp_expr_eval: defined(FOO) && (WIDTH == 32 || WIDTH == 64)") {
@@ -174,37 +185,30 @@ TEST_CASE("default_pp_expr_eval: defined(FOO) && (WIDTH == 32 || WIDTH == 64)") 
             op_("==", {ref_("WIDTH"), int_(64)})
         }))
     });
-    CHECK(default_pp_expr_eval(v, r) == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(v, r)));
 }
 
 // ─── Operators: comparisons ────────────────────────────────────────
 
 TEST_CASE("default_pp_expr_eval: == compares ints") {
     auto r = resolver_const({{"WIDTH", "32"}});
-    CHECK(default_pp_expr_eval(op_("==", {ref_("WIDTH"), int_(32)}), r)
-          == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(op_("==", {ref_("WIDTH"), int_(64)}), r)
-          == std::optional<bool>{false});
+    CHECK(is_true(default_pp_expr_eval(op_("==", {ref_("WIDTH"), int_(32)}), r)));
+    CHECK(is_false(default_pp_expr_eval(op_("==", {ref_("WIDTH"), int_(64)}), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: !=, <, >, <=, >=") {
     auto r = resolver_empty();
-    CHECK(default_pp_expr_eval(op_("!=", {int_(1), int_(2)}), r)
-          == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(op_("<",  {int_(1), int_(2)}), r)
-          == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(op_(">",  {int_(1), int_(2)}), r)
-          == std::optional<bool>{false});
-    CHECK(default_pp_expr_eval(op_("<=", {int_(2), int_(2)}), r)
-          == std::optional<bool>{true});
-    CHECK(default_pp_expr_eval(op_(">=", {int_(2), int_(2)}), r)
-          == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(op_("!=", {int_(1), int_(2)}), r)));
+    CHECK(is_true(default_pp_expr_eval(op_("<",  {int_(1), int_(2)}), r)));
+    CHECK(is_false(default_pp_expr_eval(op_(">",  {int_(1), int_(2)}), r)));
+    CHECK(is_true(default_pp_expr_eval(op_("<=", {int_(2), int_(2)}), r)));
+    CHECK(is_true(default_pp_expr_eval(op_(">=", {int_(2), int_(2)}), r)));
 }
 
 TEST_CASE("default_pp_expr_eval: undefined ref in comparison → nullopt") {
     auto r = resolver_empty();
     auto v = op_("==", {ref_("UNKNOWN"), int_(0)});
-    CHECK(default_pp_expr_eval(v, r) == std::nullopt);
+    CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
 // ─── Operators: arithmetic ─────────────────────────────────────────
@@ -215,13 +219,13 @@ TEST_CASE("default_pp_expr_eval: arithmetic feeds comparison: A + 1 == 33") {
         op_("+", {ref_("A"), int_(1)}),
         int_(33)
     });
-    CHECK(default_pp_expr_eval(v, r) == std::optional<bool>{true});
+    CHECK(is_true(default_pp_expr_eval(v, r)));
 }
 
 TEST_CASE("default_pp_expr_eval: division by zero → nullopt") {
     auto r = resolver_empty();
     auto v = op_("/", {int_(10), int_(0)});
-    CHECK(default_pp_expr_eval(v, r) == std::nullopt);
+    CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
 // Integration tests that exercise `use_default_expr_eval` end-to-end

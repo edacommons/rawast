@@ -967,10 +967,10 @@ namespace {
 // Stub expr_eval: cond text equals "TRUE" → true, else false.
 // Real callers will compose sv_pp_expr parsing + default_pp_expr_eval.
 auto stub_truthy_eval() {
-    return [](const ValuePtr& cond) -> std::optional<bool> {
+    return [](const ValuePtr& cond) -> ValuePtr {
         auto s = as_string(cond);
-        if (!s) return std::nullopt;
-        return s->data() == "TRUE";
+        if (!s) return undefined_value();
+        return s->data() == "TRUE" ? true_value() : false_value();
     };
 }
 
