@@ -852,6 +852,45 @@ TEST_CASE("Preprocessor::process: ifdef taken when macro defined") {
     CHECK(pp.is_defined("INSIDE"));
 }
 
+TEST_CASE("sv_pp ifdef: `ifdef/`elsif chain parses as ifdef, not `if") {
+    // Regression: `ifdef ... `elsif ... `endif was mis-parsed as an `if
+    // (cond "def A") because IFDEF lacked elsif support and PEG backtracked
+    // into IF, which matches the `if prefix of `ifdef.
+    auto g = load_grammar();
+    auto ast = parse(g, "`ifdef A\n`define X 1\n`elsif B\n`define Y 1\n`endif\n");
+    CHECK(str_field(ast, "type") == "ifdef");
+    CHECK(str_field(ast, "cond") == "A");
+}
+
+TEST_CASE("Preprocessor::process: `ifdef/`elsif selects by definedness") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`define B 1\n"
+        "`ifdef A\n"
+        "`define X 1\n"
+        "`elsif B\n"
+        "`define Y 1\n"
+        "`else\n"
+        "`define Z 1\n"
+        "`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("X"));  // A undefined -> ifdef body skipped
+    CHECK(pp.is_defined("Y"));        // B defined   -> elsif taken
+    CHECK_FALSE(pp.is_defined("Z"));  // else not taken
+}
+
+TEST_CASE("Preprocessor::process: `ifdef/`elsif falls to else when none defined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process(
+        "`ifdef A\n`define X 1\n`elsif B\n`define Y 1\n`else\n`define Z 1\n`endif\n"
+    );
+    CHECK_FALSE(pp.is_defined("X"));
+    CHECK_FALSE(pp.is_defined("Y"));
+    CHECK(pp.is_defined("Z"));
+}
+
 TEST_CASE("Preprocessor::process: ifdef skipped when macro undefined") {
     auto g = load_grammar();
     Preprocessor pp(g);

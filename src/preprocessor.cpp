@@ -2091,12 +2091,34 @@ void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
     };
 
     walk_or_discard(dict_value_or_null(d, "body"), take_body);
+    bool any_taken = take_body;
+
+    // `\`elsif` chain. Unlike `\`if`/`\`elsif` (expr_eval), `\`ifdef`/
+    // `\`elsif` selects by DEFINEDNESS — each elsif takes its branch iff
+    // its macro is defined and no earlier branch was taken. The grammar's
+    // IFDEF_ELSIF captures cond as a clean identifier (no trimming needed).
+    if (auto ev = dict_value_or_null(d, "elsif_branches")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(ev)) {
+            for (const auto& b : arr->data()) {
+                auto bd = std::dynamic_pointer_cast<DictValue>(b);
+                if (!bd) continue;
+                src_cursor = locate_item(source, src_cursor, "`elsif");
+                src_cursor = scan_past_directive_line(source, src_cursor);
+                std::string ec = dict_string_or_empty(*bd, "cond");
+                bool edef = !ec.empty() &&
+                            state_.macros.find(ec) != state_.macros.end();
+                bool etake = edef && !any_taken;
+                walk_or_discard(dict_value_or_null(*bd, "body"), etake);
+                if (edef) any_taken = true;
+            }
+        }
+    }
 
     if (auto eb = dict_value_or_null(d, "else_branch")) {
         // Position past the `\`else` line.
         src_cursor = locate_item(source, src_cursor, "`else");
         src_cursor = scan_past_directive_line(source, src_cursor);
-        walk_or_discard(eb, !take_body);
+        walk_or_discard(eb, !any_taken);
     }
 
     // Position past `\`endif`.
