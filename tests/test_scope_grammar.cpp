@@ -384,7 +384,7 @@ TEST_CASE("scope: multi-stop via JSON-form grammar load") {
 // start. The re-entry uses `parse_from(...)` with default args —
 // `require_full_consume=true`, `initial_ignore=nullptr` — by design.
 // Each `#subparse` rule is its own self-contained mini-language
-// (Tcl SCRIPT, sv_pp_expr PP_EXPR, etc.) that declares its own
+// (Tcl SCRIPT, SV COND_EXPR, etc.) that declares its own
 // ignore policy and doesn't inherit from the surrounding context.
 //
 // The symmetric-inheritance fix (0017380) only modifies behaviour

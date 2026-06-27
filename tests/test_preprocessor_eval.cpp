@@ -3,9 +3,9 @@
 // dependency — so we can exercise every AST shape and the
 // ref_resolver contract in isolation.
 //
-// An integration test using sv_pp_expr.rawast to parse real input
-// and feed the resulting AST through the same evaluator lives in
-// tests/test_sv_pp_expr_eval.cpp.
+// Integration tests that parse real `\`if conditions through the SV
+// COND_EXPR and feed the resulting AST through the same evaluator live
+// in tests/test_sv_preprocessor.cpp (the "built-in eval" cases).
 
 #include <doctest/doctest.h>
 #include <rawast/grammar.hpp>
@@ -228,8 +228,8 @@ TEST_CASE("default_pp_expr_eval: division by zero → nullopt") {
     CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
-// Integration tests that exercise `use_default_expr_eval` end-to-end
-// (parser → AST → walker → evaluator → emitted text) live in
-// tests/test_sv_pp_expr_eval.cpp, which can compose a real grammar
-// instead of synthesizing a walker-compatible AST by hand.
+// Integration tests that exercise the built-in eval end-to-end
+// (parse → AST → walker → evaluator → branch selection) live in
+// tests/test_sv_preprocessor.cpp, which composes the real merged
+// grammar instead of synthesizing a walker-compatible AST by hand.
 

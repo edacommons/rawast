@@ -190,7 +190,7 @@ public:
 // on the small set of preprocessor terminator keywords that must
 // NOT be matched as macro names — currently `endif` and `else`.
 //
-// Used by `PP_MACRO_USE` in `sv_preprocessor.rawast`: a `\``
+// Used by `PP_MACRO_USE` in `systemverilog.rawast`: a `\``
 // followed by an identifier is a macro use unless the identifier
 // is one of those terminators (in which case the surrounding
 // `\`ifdef`/`\`ifndef` rule needs to claim it). Returns the

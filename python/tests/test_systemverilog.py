@@ -277,7 +277,7 @@ def test_module_with_comments(sv_grammar):
 
 # Preprocessor directives (`define / `undef / `include / `ifdef / `ifndef)
 # are no longer parsed by the SV grammar — they're handled by the
-# `sv_preprocessor` grammar before the source reaches systemverilog.
+# preprocessor (PP_FILE rule of the merged grammar) before SV parse.
 # Coverage for those lives in tests/test_preprocessor.cpp and
 # python/tests/test_preprocessor.py.
 

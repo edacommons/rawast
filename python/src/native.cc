@@ -501,7 +501,7 @@ NB_MODULE(_rawast, m) {
     // --- Preprocessor binding ------------------------------------------
     //
     // Construction takes a Grammar (the preprocessor grammar — typically
-    // sv_preprocessor) and keyword-only behavior options. The class
+    // systemverilog) and keyword-only behavior options. The class
     // holds policy + accumulating state; reuse one instance across many
     // process_file calls so macros, included_files, and warnings carry
     // through naturally.

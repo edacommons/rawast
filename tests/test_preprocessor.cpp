@@ -12,7 +12,7 @@ namespace {
 
 // Minimal preprocessor-style grammar built directly in code — a
 // pass-through that just consumes any input as one chunk. Lets the
-// Preprocessor skeleton be exercised without a full sv_preprocessor
+// Preprocessor skeleton be exercised without a full systemverilog
 // grammar in place (that lands in a later commit).
 //
 // The walker isn't wired yet, so process() returns input verbatim;

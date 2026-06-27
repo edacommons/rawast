@@ -60,14 +60,13 @@ ast    = gdsii.parse_stream(stream)
 The `Preprocessor` exposes the same pipeline at three independent joints:
 
 ```python
-pp_g = rawast.Grammar("sv_preprocessor")
-pp   = rawast.Preprocessor(pp_g)
-sv_g = rawast.Grammar("systemverilog")   # any host grammar
+g    = rawast.Grammar("systemverilog")   # one grammar: SV + preprocessor
+pp   = rawast.Preprocessor(g)            # enters at the PP_FILE rule
 
 src  = open("design.sv").read()
 ast  = pp.parse(src)                     # Mode 1: directives as AST, no expansion
 stream = pp.preprocess(ast, src)         # Mode 2: expand macros, returns Stream
-top  = sv_g.parse_stream(stream)         # Mode 3: host parse on the expanded bytes
+top  = g.parse_stream(stream)            # Mode 3: host parse on the expanded bytes
 ```
 
 Useful when you want to inspect macro / `\`include` / `\`ifdef` structure (Mode 1) without paying expansion cost, or when one stage of a build pipeline expands and another consumes. `pp.process(src)` still works as the one-call "give me the expanded bytes" shortcut.

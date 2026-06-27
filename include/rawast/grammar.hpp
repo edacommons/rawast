@@ -26,7 +26,7 @@ namespace rawast {
 // operator set. Used by the save direction to re-nest a compacted
 // `{op,args}` expression back into the full per-tier `{lhs,tail}` shape
 // the always-wrap rules emit. `valid` is false for non-cascade opchain
-// roots (e.g. sv_pp_expr's Choice form, which round-trips via its own
+// roots (e.g. a Choice-form root, which round-trips via its own
 // passthrough alts and doesn't need re-nesting).
 struct OpchainLadder {
     std::unordered_map<std::string, int> op_tier;  // operator → tier index

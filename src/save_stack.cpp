@@ -1989,7 +1989,7 @@ bool start_binds_lhs_helper(const Grammar& g, NodeId rule_id) {
 // outer chain op are part of the same chain (absorb) or separate
 // sub-expressions at different precedence levels (don't absorb).
 //
-// Example for sv_pp_expr:
+// Example (a precedence ladder's tails, illustrative):
 //   OR_TAIL    {"||"}              → group 0
 //   AND_TAIL   {"&&"}              → group 1
 //   EQ_TAIL    {"==", "!="}        → group 2
@@ -2324,7 +2324,7 @@ const OpchainLadder& Grammar::opchain_ladder() const {
     OpchainLadder L;
     // If the opchain is reachable from the start rule's Ref-chain, the
     // global save-entry expand (and parse-entry compact) own it — that's
-    // the expression-first case (sv_pp_expr, test_opchain). Leave the
+    // the expression-first case (SV COND_EXPR, test_opchain). Leave the
     // per-dispatch ladder invalid so the two paths never double-process.
     // The per-dispatch path is only for an opchain embedded below a
     // structural start rule (SystemVerilog's BIN_EXPR under source-text).
@@ -2341,7 +2341,7 @@ const OpchainLadder& Grammar::opchain_ladder() const {
         }
     }
     // Valid only for an always-wrap (Sequence-dict) cascade. A Choice root
-    // (sv_pp_expr's passthrough form) round-trips on its own — leave invalid.
+    // (a Choice-root opchain's passthrough form) round-trips on its own — leave invalid.
     if (root.valid() && root.value() < nodes_.size()
         && node(root).kind == NodeKind::Sequence) {
         NodeId cur = root;

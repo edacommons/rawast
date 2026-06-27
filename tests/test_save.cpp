@@ -291,7 +291,7 @@ TEST_CASE("save: separator-discriminator — two chains with different ops dispa
 TEST_CASE("save: inline-Choice discriminator — rule with inner op-Choice rejects non-matching dicts") {
     Grammar g;
     register_std_parser_group();
-    // Reproduces the sv_pp_expr round-trip failure shape: a unary
+    // Reproduces an opchain round-trip failure shape: a unary
     // rule (NOT_EXPR with op="!") whose AST has the SAME args-list
     // shape as EQ_BINOP, but a different op constant. The dict has
     // `args` so the field-presence check on EQ_BINOP passes; only
@@ -341,7 +341,7 @@ TEST_CASE("save: inline-Choice discriminator — rule with inner op-Choice rejec
 // where UNARY is meant to dispatch each element of dict.args, not
 // the outer dict itself.
 //
-// Reproduces sv_pp_expr.rawast's remaining round-trip failures
+// Reproduces remaining opchain round-trip failures
 // (== / != chain and the realistic mixed expression) using a
 // minimal precedence ladder with the same shape.
 
@@ -409,7 +409,7 @@ TEST_CASE("save: scope-aware recursion through `:args[]=@` bindings") {
 // dispatcher returns invalid at the outer OR_EXPR Choice and the
 // save aborts with "no matching grammar alternative".
 //
-// Reproduces sv_pp_expr's `defined() && (A == 32 || A == 64)`
+// Reproduces a `defined() && (A == 32 || A == 64)`
 // failure shape without depending on #opchain or scope.paren —
 // pure choice+repeat+ always-wrap pattern surfaced by parsing the
 // natural input.
@@ -417,7 +417,7 @@ TEST_CASE("save: scope-aware recursion through `:args[]=@` bindings") {
 TEST_CASE("save: nested always-wrap chain round-trips through catch-all Refs") {
     Grammar g;
     register_std_parser_group();
-    // 4 precedence levels — OR, AND, EQ, ADD — to match sv_pp_expr's
+    // 4 precedence levels — OR, AND, EQ, ADD — to match the SV if-cond opchain's
     // ladder depth more closely. EQ_TAIL uses an inline `choice {...}`
     // for ==/!= so the `collect_child_discriminators` inline-Choice
     // extension also fires. ADD_TAIL same shape for +/-.
@@ -476,7 +476,7 @@ TEST_CASE("save: nested always-wrap chain round-trips through catch-all Refs") {
         CHECK(save_to_string(g, ast) == "A||B");
     }
 
-    // The failing case (mirrors sv_pp_expr): outer || chain whose
+    // The failing case (mirrors the if-cond opchain): outer || chain whose
     // lhs and rhs are themselves == chains, and those == chains'
     // operands cascade down to LEAF via the catch-all ADD_EXPR Ref.
     {

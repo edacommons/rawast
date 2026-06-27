@@ -1,5 +1,6 @@
 // Generic preprocessor expression evaluator. Walks the documented
-// expression-AST shape (see grammars/sv_pp_expr.rawast) without any
+// expression-AST shape (the `\`if-cond rules in systemverilog.rawast)
+// without any
 // SV- or grammar-specific knowledge — any preprocessor whose `\`if`
 // condition rule emits this shape can plug in by setting
 // PpOptions::expr_eval to a binding of default_pp_expr_eval(...).

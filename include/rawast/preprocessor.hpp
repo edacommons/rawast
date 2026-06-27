@@ -87,7 +87,7 @@ struct MacroDef {
 
     // Convenience: text representation of the body's flat text
     // segments. For legacy bodies that wrap a single StringValue
-    // this is the original captured text; for sv_preprocessor.rawast
+    // this is the original captured text; for systemverilog.rawast
     // bodies with typed segments, this only renders the bare text
     // runs (typed segments like `{type:"ref"}` are skipped). Used
     // by tests and the default expr-eval ref resolver — not by the
@@ -335,7 +335,9 @@ struct PpOptions {
 };
 
 // Generic AST evaluator for preprocessor `\`if` conditions. Walks
-// the documented expression-AST shape (see grammars/sv_pp_expr.rawast)
+// the documented expression-AST shape (the `\`if-cond rules in
+// grammars/systemverilog.rawast; SV's COND_EXPR variant uses `name`,
+// `integer`, and `func_call`, which the evaluator also accepts)
 // and returns a ValuePtr tri-state:
 //
 //   true_value()      — condition holds
@@ -356,7 +358,7 @@ struct PpOptions {
 //                               // nullopt (host extension point).
 //   {op: "&&"/"||"/"!"/"=="/"!="/"<"/">"/"<="/">="/"+"/"-"/"*"/"/"/"%",
 //    args: [<expr>, ...]}        // operators evaluated as documented
-//                               // in grammars/sv_pp_expr.rawast
+//                               // in grammars/systemverilog.rawast
 //
 // `ref_resolver`: callback that returns the macro body for a name,
 // or nullopt if not defined. Decouples the evaluator from any specific
@@ -374,7 +376,7 @@ ValuePtr default_pp_expr_eval(
 
 // The user-facing entry point for preprocessing. Owns the active
 // PreprocessorState; orchestrates parse + walk for the configured
-// preprocessor grammar (e.g. `sv_preprocessor`).
+// preprocessor grammar (e.g. `systemverilog`, entered at PP_FILE).
 //
 // Lifetimes: the Grammar reference must outlive the Preprocessor.
 // Typical pattern is to construct the Preprocessor with a Grammar
@@ -384,7 +386,7 @@ ValuePtr default_pp_expr_eval(
 class Preprocessor {
 public:
     // The grammar provides the preprocessor's directive syntax
-    // (e.g. loaded from `grammars/sv_preprocessor.rawast`). The
+    // (e.g. loaded from `grammars/systemverilog.rawast`). The
     // options bundle controls runtime behavior; see PpOptions for
     // documentation of each field.
     Preprocessor(const Grammar& pp_grammar, PpOptions opts = {});

@@ -12,8 +12,7 @@ This document is the quick reference. The five idioms below cover ~90% of gramma
    - `json.json` — minimal first example
    - `tcl.rawast` — `subparse` for embedded sub-languages
    - `lefdef.rawast` — full-scale grammar with multi-top entries
-   - `sv_pp_expr.rawast` — precedence ladder with `#opchain`
-   - `sv_preprocessor.rawast` — scope-array for segmented bodies
+   - `systemverilog.rawast` — precedence ladder with `#opchain` (COND_EXPR), scope-array for segmented macro bodies, and the merged preprocessor (PP_FILE)
 
 ## The five idioms
 

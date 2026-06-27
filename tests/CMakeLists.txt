@@ -31,7 +31,6 @@ add_executable(rawast_tests
     test_scope_grammar.cpp
     test_opchain.cpp
     test_parsers_sv.cpp
-    test_sv_pp_expr.cpp
     test_sv_preprocessor.cpp
 )
 

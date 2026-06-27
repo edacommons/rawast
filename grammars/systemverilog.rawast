@@ -2192,8 +2192,8 @@ WAIT_STMT: sequence dict {
 // the design-choice comment at the top of this file. The grammar
 // emits `{op, args:[lhs, rhs]}` only for exactly two operands.
 
-// Each precedence level uses the `choice { CHAIN, NEXT }` pattern from
-// PP_EXPR (grammars/sv_pp_expr.rawast). CHAIN matches an always-wrap
+// Each precedence level uses the `choice { CHAIN, NEXT }` always-wrap
+// pattern. CHAIN matches an always-wrap
 // `{lhs, tail:[…]}` shape with at least one tail entry (`repeat+`);
 // a bare atom falls through to <NEXT> with no wrapper. The top of the
 // binary chain is tagged `#opchain`, so the engine post-parse compacts
@@ -4841,12 +4841,3 @@ STRING: sequence dict {
 PARAM_REF: sequence dict {
   identifier:type="ref":value=@
 }
-
-
-// ─── `\`if` / `\`elsif` condition expressions ───────────────────
-// Inlined from the former sv_pp_expr.rawast so the preprocessor
-// grammar self-describes its condition syntax and the engine can
-// evaluate `\`if` by default (no separate grammar to pass). These
-// rules inherit PP_FILE's `ignore linespace line_comment`, so a
-// condition parses to the end of its line. AST: {type:ref/int/
-// call/paren} leaves + {op, args[]} ops (compacted via #opchain).
