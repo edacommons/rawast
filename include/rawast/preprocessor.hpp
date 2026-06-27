@@ -502,45 +502,15 @@ public:
     // The undecidable-condition policy, settable after construction.
     void set_on_undecidable(PpOnUndecidable v) { opts_.on_undecidable = v; }
 
-    // Bind opts_.expr_eval to the generic AST evaluator above,
-    // resolving refs through this Preprocessor's macro table. Use
-    // when the preprocessor grammar produces the documented
-    // expression-AST shape and you don't need custom evaluation
-    // semantics on top of it.
-    //
-    //   Preprocessor pp(grammar);
-    //   pp.use_default_expr_eval();
-    //   auto out = pp.process(text);
-    //
-    // Overwrites any previously-set expr_eval callback. To extend
-    // the default (e.g. add custom `call` handlers), wire your own
-    // expr_eval that delegates to default_pp_expr_eval for the
-    // shapes it doesn't handle.
-    void use_default_expr_eval();
-
-    // Same as use_default_expr_eval() but for preprocessor grammars
-    // that capture `\`if` conditions as raw text (the
-    // sv_preprocessor.rawast shape). When the walker hands cond in as
-    // a StringValue, the callback parses it with `expr_grammar` first
-    // (typically loaded from grammars/sv_pp_expr.rawast), then feeds
-    // the resulting AST through default_pp_expr_eval.
-    //
-    //   Grammar pp = load("grammars/sv_preprocessor.rawast");
-    //   Grammar ex = load("grammars/sv_pp_expr.rawast");
-    //   Preprocessor p(pp);
-    //   p.use_default_expr_eval(ex);
-    //
-    // Cond values that are already structured (DictValue/ArrayValue)
-    // bypass the parse step and go straight to default_pp_expr_eval —
-    // so the same Preprocessor handles both grammar-captured text and
-    // process_ast-supplied synthesized ASTs.
-    //
-    // `expr_grammar` is captured by reference and must outlive the
-    // Preprocessor. A parse failure is recorded as a warning and the
-    // branch is treated as false (std::nullopt return).
-    void use_default_expr_eval(const Grammar& expr_grammar);
-
 private:
+    // The engine's BUILT-IN `\`if`/`\`elsif` evaluator: runs the structured
+    // condition AST through default_pp_expr_eval with C `#if` semantics,
+    // resolving macro refs against this Preprocessor's own table. Used at
+    // the `\`if` site whenever no custom opts_.expr_eval is set — so the
+    // preprocessor grammar (which parses the condition into an AST) gets
+    // standard evaluation with no host wiring.
+    ValuePtr eval_cond_default(const ValuePtr& cond);
+
     // Walk the value tree produced by parsing through pp_grammar_,
     // dispatching on the `type` field that role-bearing rules emit.
     // Appends emitted text to `out`. Tracks the cursor into the

@@ -923,33 +923,32 @@ TEST_CASE("Preprocessor::process: nested ifdef inside skipped body is skipped") 
 
 // ─── `\`if` / `\`elsif` / `\`else` / `\`endif` ───────────────────────
 //
-// Cond is captured as raw text (StringValue). The host's
-// PpOptions::expr_eval callback is responsible for parsing the cond
-// text into an AST and evaluating it — typically by composing
-// sv_pp_expr.rawast with default_pp_expr_eval. The tests below stub
-// expr_eval with a trivial truthiness check ("TRUE"/"FALSE") so
-// they exercise the walker's branch-selection logic in isolation.
+// IF_HEAD/ELSIF capture cond as RAW TEXT (robust — any condition
+// preprocesses). The engine evaluates it on demand with the BUILT-IN
+// default (C `#if` semantics, parsing the cond text through PP_EXPR and
+// resolving macros against its own table) — on by default, no host
+// wiring. A cond outside the PP_EXPR subset is undecidable, not a parse
+// failure. The tests below drive that built-in path with real conditions.
 
-TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`endif`") {
+TEST_CASE("sv_pp if: grammar captures cond as raw text") {
     auto g = load_grammar();
     auto ast = parse(g, "`if FOO\n`endif\n");
     CHECK(str_field(ast, "type") == "if");
     auto d = std::dynamic_pointer_cast<DictValue>(ast);
     REQUIRE(d);
-    auto br_it = d->data().find("branches");
-    REQUIRE(br_it != d->data().end());
-    auto branches = std::dynamic_pointer_cast<ArrayValue>(br_it->second);
+    auto branches = std::dynamic_pointer_cast<ArrayValue>(
+        d->data().find("branches")->second);
     REQUIRE(branches);
     REQUIRE(branches->data().size() == 1);
     CHECK(trim_ws(str_field(branches->data()[0], "cond")) == "FOO");
 }
 
-TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`elsif EXPR ... \\`endif`") {
+TEST_CASE("sv_pp if: grammar parses `\\`if ... \\`elsif ... \\`endif` conds") {
     auto g = load_grammar();
     auto ast = parse(g,
         "`if FOO\n"
-        "`elsif BAR\n"
-        "`elsif BAZ\n"
+        "`elsif defined(BAR)\n"
+        "`elsif BAZ > 1\n"
         "`endif\n");
     auto d = std::dynamic_pointer_cast<DictValue>(ast);
     REQUIRE(d);
@@ -958,44 +957,27 @@ TEST_CASE("sv_pp if: grammar parses `\\`if EXPR ... \\`elsif EXPR ... \\`endif`"
     REQUIRE(branches);
     REQUIRE(branches->data().size() == 3);
     CHECK(trim_ws(str_field(branches->data()[0], "cond")) == "FOO");
-    CHECK(trim_ws(str_field(branches->data()[1], "cond")) == "BAR");
-    CHECK(trim_ws(str_field(branches->data()[2], "cond")) == "BAZ");
+    CHECK(trim_ws(str_field(branches->data()[1], "cond")) == "defined(BAR)");
+    CHECK(trim_ws(str_field(branches->data()[2], "cond")) == "BAZ > 1");
 }
 
-namespace {
-
-// Stub expr_eval: cond text equals "TRUE" → true, else false.
-// Real callers will compose sv_pp_expr parsing + default_pp_expr_eval.
-auto stub_truthy_eval() {
-    return [](const ValuePtr& cond) -> ValuePtr {
-        auto s = as_string(cond);
-        if (!s) return undefined_value();
-        return s->data() == "TRUE" ? true_value() : false_value();
-    };
-}
-
-} // namespace
-
-TEST_CASE("Preprocessor::process: `if takes first branch when expr is true") {
+TEST_CASE("Preprocessor::process: `if takes first branch when cond true") {
     auto g = load_grammar();
-    PpOptions opts;
-    opts.expr_eval = stub_truthy_eval();
-    Preprocessor pp(g, opts);
+    Preprocessor pp(g);   // built-in default evaluator
     pp.process(
-        "`if TRUE\n"
+        "`define COND 1\n"
+        "`if COND\n"
         "`define A 1\n"
         "`endif\n"
     );
     CHECK(pp.is_defined("A"));
 }
 
-TEST_CASE("Preprocessor::process: `if skips body when expr is false") {
+TEST_CASE("Preprocessor::process: `if skips body when cond false") {
     auto g = load_grammar();
-    PpOptions opts;
-    opts.expr_eval = stub_truthy_eval();
-    Preprocessor pp(g, opts);
+    Preprocessor pp(g);
     pp.process(
-        "`if FALSE\n"
+        "`if defined(MISSING)\n"
         "`define A 1\n"
         "`endif\n"
     );
@@ -1004,204 +986,111 @@ TEST_CASE("Preprocessor::process: `if skips body when expr is false") {
 
 TEST_CASE("Preprocessor::process: `elsif taken when `if false") {
     auto g = load_grammar();
-    PpOptions opts;
-    opts.expr_eval = stub_truthy_eval();
-    Preprocessor pp(g, opts);
+    Preprocessor pp(g);
     pp.process(
-        "`if FALSE\n"
-        "`define A 1\n"
-        "`elsif TRUE\n"
         "`define B 1\n"
+        "`if defined(A)\n"
+        "`define X 1\n"
+        "`elsif defined(B)\n"
+        "`define Y 1\n"
         "`endif\n"
     );
-    CHECK_FALSE(pp.is_defined("A"));
-    CHECK(pp.is_defined("B"));
+    CHECK_FALSE(pp.is_defined("X"));
+    CHECK(pp.is_defined("Y"));
 }
 
 TEST_CASE("Preprocessor::process: first matching branch wins, rest skipped") {
     auto g = load_grammar();
-    PpOptions opts;
-    opts.expr_eval = stub_truthy_eval();
-    Preprocessor pp(g, opts);
+    Preprocessor pp(g);
     pp.process(
-        "`if TRUE\n"
         "`define A 1\n"
-        "`elsif TRUE\n"
         "`define B 1\n"
+        "`if defined(A)\n"
+        "`define X 1\n"
+        "`elsif defined(B)\n"
+        "`define Y 1\n"
         "`endif\n"
     );
-    CHECK(pp.is_defined("A"));
-    CHECK_FALSE(pp.is_defined("B"));
+    CHECK(pp.is_defined("X"));
+    CHECK_FALSE(pp.is_defined("Y"));
 }
 
 TEST_CASE("Preprocessor::process: `else taken when all branches false") {
     auto g = load_grammar();
-    PpOptions opts;
-    opts.expr_eval = stub_truthy_eval();
-    Preprocessor pp(g, opts);
-    pp.process(
-        "`if FALSE\n"
-        "`define A 1\n"
-        "`elsif FALSE\n"
-        "`define B 1\n"
-        "`else\n"
-        "`define C 1\n"
-        "`endif\n"
-    );
-    CHECK_FALSE(pp.is_defined("A"));
-    CHECK_FALSE(pp.is_defined("B"));
-    CHECK(pp.is_defined("C"));
-}
-
-TEST_CASE("Preprocessor::process: `if without expr_eval callback warns + skips") {
-    auto g = load_grammar();
-    // No expr_eval set; walker emits a warning and treats branch as false.
     Preprocessor pp(g);
     pp.process(
-        "`if FOO\n"
-        "`define A 1\n"
+        "`if defined(A)\n"
+        "`define X 1\n"
+        "`elsif defined(B)\n"
+        "`define Y 1\n"
+        "`else\n"
+        "`define Z 1\n"
         "`endif\n"
     );
-    CHECK_FALSE(pp.is_defined("A"));
-    CHECK_FALSE(pp.warnings().empty());
+    CHECK_FALSE(pp.is_defined("X"));
+    CHECK_FALSE(pp.is_defined("Y"));
+    CHECK(pp.is_defined("Z"));
 }
 
-// ─── expr_eval composition helper ────────────────────────────────────
+// ─── Built-in default evaluator (C `#if` semantics) ──────────────────
 //
-// use_default_expr_eval(expr_grammar) wires the cond-text → AST →
-// bool pipeline. Exercises the full SV stack: sv_preprocessor.rawast
-// captures cond as raw text, the helper parses it through
-// sv_pp_expr.rawast, then default_pp_expr_eval evaluates against the
-// Preprocessor's macro table.
+// No use_default_expr_eval, no separate grammar: the engine evaluates
+// the structured cond against its own macro table whenever expr_eval is
+// unset.
 
-namespace {
-
-Grammar load_expr_grammar() {
-    register_std_parser_group();
-    Grammar g;
-    auto r = load_rawast_grammar_from_file(g, "grammars/sv_pp_expr.rawast");
-    REQUIRE_MESSAGE(r, "loading sv_pp_expr.rawast failed: "
-                       << (r ? "" : r.error()));
-    return g;
-}
-
-} // namespace
-
-TEST_CASE("use_default_expr_eval(grammar): defined(FOO) — true when defined") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`define FOO 1\n"
-        "`if defined(FOO)\n"
-        "`define TAKEN 1\n"
-        "`endif\n"
-    );
+TEST_CASE("built-in eval: defined(FOO) — true when defined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define FOO 1\n`if defined(FOO)\n`define TAKEN 1\n`endif\n");
     CHECK(pp.is_defined("TAKEN"));
 }
 
-TEST_CASE("use_default_expr_eval(grammar): defined(FOO) — false when undefined") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`if defined(MISSING)\n"
-        "`define TAKEN 1\n"
-        "`endif\n"
-    );
+TEST_CASE("built-in eval: defined(MISSING) — false when undefined") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`if defined(MISSING)\n`define TAKEN 1\n`endif\n");
     CHECK_FALSE(pp.is_defined("TAKEN"));
 }
 
-TEST_CASE("use_default_expr_eval(grammar): !defined(LEGACY) gates a branch") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`if !defined(LEGACY)\n"
-        "`define MODERN 1\n"
-        "`endif\n"
-    );
+TEST_CASE("built-in eval: !defined(LEGACY) gates a branch") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`if !defined(LEGACY)\n`define MODERN 1\n`endif\n");
     CHECK(pp.is_defined("MODERN"));
 }
 
-TEST_CASE("use_default_expr_eval(grammar): defined(A) && defined(B) — both required") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`define A 1\n"
-        "`define B 1\n"
-        "`if defined(A) && defined(B)\n"
-        "`define BOTH 1\n"
-        "`endif\n"
-    );
+TEST_CASE("built-in eval: defined(A) && defined(B) — both required") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define A 1\n`define B 1\n"
+               "`if defined(A) && defined(B)\n`define BOTH 1\n`endif\n");
     CHECK(pp.is_defined("BOTH"));
 }
 
-TEST_CASE("use_default_expr_eval(grammar): defined(A) && defined(B) — false when B missing") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`define A 1\n"
-        "`if defined(A) && defined(B)\n"
-        "`define BOTH 1\n"
-        "`endif\n"
-    );
+TEST_CASE("built-in eval: defined(A) && defined(B) — false when B missing") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define A 1\n"
+               "`if defined(A) && defined(B)\n`define BOTH 1\n`endif\n");
     CHECK_FALSE(pp.is_defined("BOTH"));
 }
 
-TEST_CASE("use_default_expr_eval(grammar): elsif chain — only first true branch wins") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`define B 1\n"
-        "`if defined(A)\n"
-        "`define A_BRANCH 1\n"
-        "`elsif defined(B)\n"
-        "`define B_BRANCH 1\n"
-        "`elsif defined(C)\n"
-        "`define C_BRANCH 1\n"
-        "`endif\n"
-    );
-    CHECK_FALSE(pp.is_defined("A_BRANCH"));
-    CHECK(pp.is_defined("B_BRANCH"));
-    CHECK_FALSE(pp.is_defined("C_BRANCH"));
-}
-
-TEST_CASE("use_default_expr_eval(grammar): bare ref FOO — true when macro defined") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`define FOO 1\n"
-        "`if FOO\n"
-        "`define TAKEN 1\n"
-        "`endif\n"
-    );
+TEST_CASE("built-in eval: bare ref FOO — true when defined, false when not") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define FOO 1\n`if FOO\n`define TAKEN 1\n`endif\n");
     CHECK(pp.is_defined("TAKEN"));
+
+    Preprocessor pp2(g);
+    pp2.process("`if BAR\n`define TAKEN 1\n`endif\n");   // BAR undefined → 0
+    CHECK_FALSE(pp2.is_defined("TAKEN"));
 }
 
-TEST_CASE("use_default_expr_eval(grammar): unparseable cond warns + skips") {
-    auto pp_g = load_grammar();
-    auto ex_g = load_expr_grammar();
-    Preprocessor pp(pp_g);
-    pp.use_default_expr_eval(ex_g);
-    pp.process(
-        "`if ===\n"     // syntactically invalid
-        "`define TAKEN 1\n"
-        "`endif\n"
-    );
-    CHECK_FALSE(pp.is_defined("TAKEN"));
-    CHECK_FALSE(pp.warnings().empty());
+TEST_CASE("built-in eval: integer comparison `\\`if W > 16`") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    pp.process("`define W 32\n`if W > 16\n`define BIG 1\n`endif\n");
+    CHECK(pp.is_defined("BIG"));
 }
 
 // ─── Top-level macro expansion ──────────────────────────────────────

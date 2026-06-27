@@ -734,9 +734,11 @@ TEST_CASE("process_ast: `if/`elsif chain picks the first true branch") {
     CHECK(out.find("C_BODY") == std::string::npos);
 }
 
-TEST_CASE("process_ast: `if without expr_eval records warning, skips body") {
+TEST_CASE("process_ast: `if with an undefined ref is false (built-in eval)") {
     Grammar g = make_passthrough_grammar();
-    Preprocessor pp(g);   // no expr_eval set
+    Preprocessor pp(g);   // built-in eval on by default
+    // cond "X" parses as a bare ref; X is undefined -> 0 -> false, so the
+    // branch is skipped. Decidable, so no warning.
     auto ast = program({
         dict({{"type", str("if")},
               {"branches", arr({
@@ -749,8 +751,6 @@ TEST_CASE("process_ast: `if without expr_eval records warning, skips body") {
     });
     auto out = pp.process_ast(ast, "`if X\nSHOULD_NOT_APPEAR\n`endif\n");
     CHECK(out.find("SHOULD_NOT_APPEAR") == std::string::npos);
-    REQUIRE_FALSE(pp.warnings().empty());
-    CHECK(pp.warnings()[0].message.find("expr_eval") != std::string::npos);
 }
 
 TEST_CASE("process_ast: expr_eval returning nullopt warns and skips") {
