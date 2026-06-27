@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import os
 
-from ._rawast import Grammar as _Grammar, Preprocessor, Stream, __version__
+from ._rawast import Grammar as _Grammar, Preprocessor, Stream, Undefined, __version__
 
 
 # Path to bundled grammar files. The wheel ships these under
@@ -103,6 +103,7 @@ __all__ = [
     "Grammar",
     "Preprocessor",
     "Stream",
+    "Undefined",
     "GRAMMAR_DIR",
     "grammar_path",
     "__version__",

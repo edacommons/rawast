@@ -736,6 +736,7 @@ bool values_equal_v2(const ValuePtr& a, const Value* b) {
     if (a->type() != b->type()) return false;
     switch (a->type()) {
     case ValueType::Null:    return true;
+    case ValueType::Undefined: return true;
     case ValueType::Bool:    return std::static_pointer_cast<BoolValue>(a)->data()
                                    == static_cast<const BoolValue*>(b)->data();
     case ValueType::Int:     return std::static_pointer_cast<IntValue>(a)->data()

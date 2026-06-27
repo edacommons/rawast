@@ -9,8 +9,10 @@ ValuePtr ValuePool::intern(ValuePtr v) {
 
     switch (v->type()) {
     case ValueType::Null:
+    case ValueType::Undefined:
     case ValueType::Bool:
-        // Already singletons (null_value / true_value / false_value).
+        // Already singletons (null_value / undefined_value / true_value /
+        // false_value).
         return v;
 
     case ValueType::Int: {
