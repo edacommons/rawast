@@ -384,3 +384,14 @@ def test_undefined_singleton():
     d = {"a": U, "b": None}               # usable as a sentinel; identity holds
     assert d["a"] is U and d["b"] is None
     assert d["a"] is not d["b"]
+
+
+def test_undefined_is_return_only():
+    """Undefined is a RETURN-only sentinel: it may be handed back, but it
+    cannot be assigned / fed in as an input value. The conversion path
+    (used by save) rejects it at any nesting depth."""
+    sv = rawast.Grammar("systemverilog")
+    U = rawast.Undefined
+    for arg in [U, {"k": U}, [1, U], {"k": [U]}]:
+        with pytest.raises(TypeError, match="return-only sentinel"):
+            sv.save(arg)

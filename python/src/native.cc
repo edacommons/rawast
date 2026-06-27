@@ -89,7 +89,15 @@ nb::object value_to_python(const rawast::ValuePtr& v) {
 
 rawast::ValuePtr python_to_value(nb::handle obj) {
     using namespace rawast;
-    if (obj.is(undefined_py())) return undefined_value();
+    // Undefined is a RETURN-ONLY sentinel: the engine may hand it back, but
+    // it must not be fed back in as an input value. Reject it here (the one
+    // path that turns Python values into the C++ tree) rather than silently
+    // accepting it.
+    if (obj.is(undefined_py())) {
+        throw nb::type_error(
+            "Undefined is a return-only sentinel; it cannot be assigned or "
+            "used as an input value");
+    }
     if (obj.is_none()) return null_value();
     if (nb::isinstance<nb::bool_>(obj)) {
         return nb::cast<bool>(obj) ? true_value() : false_value();
