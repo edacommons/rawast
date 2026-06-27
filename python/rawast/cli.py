@@ -558,7 +558,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_pp.add_argument(
         "--grammar", required=True,
-        help="Preprocessor grammar file (e.g. grammars/sv_preprocessor.rawast)",
+        help="Preprocessor grammar file (e.g. grammars/systemverilog.rawast)",
     )
     p_pp.add_argument(
         "input",

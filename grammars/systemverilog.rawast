@@ -4639,16 +4639,25 @@ IF: sequence dict {
 // (Grammar::parse_from start="PP_EXPR") on demand; a cond it can't parse
 // is undecidable, never a hard parse failure. The walker trims the
 // leading space (Raw bypasses `ignore`) before evaluating.
+// `if/`elsif conditions subparse to the SV expression grammar via PP_COND.
+// COND_EXPR can't be the subparse target directly: the SV whitespace policy
+// is declared on the SOURCE_TEXT start rule, so COND_EXPR doesn't inherit it
+// in a parse_from entry — and the raw `*` cond capture keeps a leading space.
+// PP_COND declares the ignore (skips that space + inter-token whitespace,
+// which propagates into COND_EXPR's children since none override) and is
+// transparent, so the cond AST is exactly COND_EXPR's.
+PP_COND ignore whitespace line_comment block_comment: choice { <COND_EXPR> }
+
 IF_HEAD: sequence dict {
   "`if" space,
-  *:cond=@:#subparse="COND_EXPR",
+  *:cond=@:#subparse="PP_COND",
   "\n",
   <BODY>:body=@
 }
 
 ELSIF: sequence dict {
   "`elsif" space,
-  *:cond=@:#subparse="COND_EXPR",
+  *:cond=@:#subparse="PP_COND",
   "\n",
   <BODY>:body=@
 }

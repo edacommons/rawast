@@ -42,7 +42,7 @@ EXPAND_PREDEF = ('`include "uvm_macros.svh"\n`include "dv_macros.svh"\n'
                  '`include "prim_assert_standard_macros.svh"\n'
                  '`define __FILE__ "f"\n`define __LINE__ 0\n')
 
-sv_pp = rawast.Grammar("sv_preprocessor")
+sv_pp = rawast.Grammar("systemverilog")
 sv = rawast.Grammar("systemverilog")
 
 

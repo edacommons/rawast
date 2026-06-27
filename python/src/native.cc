@@ -558,7 +558,7 @@ NB_MODULE(_rawast, m) {
             nb::arg("trace") = false,
             nb::keep_alive<1, 2>(),
             "Construct a Preprocessor. The grammar should be a loaded "
-            "preprocessor grammar (e.g. sv_preprocessor.rawast). All "
+            "preprocessor grammar (e.g. systemverilog.rawast). All "
             "behavior options are keyword-only; defaults match the "
             "documented spec.")
 

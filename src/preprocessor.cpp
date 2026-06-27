@@ -166,7 +166,7 @@ std::string Preprocessor::process(const std::string& text_in) {
     // Guard against a grammar with no top rule set — the parse
     // engine derefs the top NodeId and would segfault. A no-rule
     // grammar is a degenerate but legitimate construction (e.g. in
-    // skeleton tests before sv_preprocessor.rawast lands); pass
+    // skeleton tests before systemverilog.rawast lands); pass
     // text through unchanged in that case.
     if (!pp_grammar_.top().valid()) return text_in;
 
@@ -176,7 +176,7 @@ std::string Preprocessor::process(const std::string& text_in) {
     const std::string text = normalize_inline_conditionals(text_in);
 
     auto stream = Stream::from_string(text);
-    auto parsed = pp_grammar_.parse(stream);
+    auto parsed = (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(stream, "PP_FILE") : pp_grammar_.parse(stream));
     if (!parsed) {
         state_.warnings.push_back(
             {"preprocessor parse failed: " + parsed.error().message,
@@ -197,7 +197,7 @@ Preprocessor::parse(const std::string& source) {
             {}, "Preprocessor::parse: pp_grammar has no top rule"});
     }
     auto stream = Stream::from_string(source);
-    return pp_grammar_.parse(stream);
+    return (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(stream, "PP_FILE") : pp_grammar_.parse(stream));
 }
 
 Stream Preprocessor::preprocess(const ValuePtr& ast,
@@ -454,7 +454,7 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
             return;
         }
         if (type == "text_line") {
-            // sv_preprocessor.rawast TEXT_LINE produces
+            // systemverilog.rawast TEXT_LINE produces
             //   { type:"text_line", segments:[ ...mixed... ] }
             // where each segment is either a bare StringValue (a
             // run of literal text) or a DictValue for an embedded
@@ -1361,7 +1361,7 @@ std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
 }
 
 // Render a segmented macro body (ArrayValue produced by
-// sv_preprocessor.rawast's scope-array INNERs) back to text.
+// systemverilog.rawast's scope-array INNERs) back to text.
 // Used by handle_define to convert the structured body shape into
 // the legacy string form macros expansion machinery already
 // consumes. Lossy in one direction (segment-type info is dropped on
@@ -1429,7 +1429,7 @@ void Preprocessor::handle_define(const DictValue& d) {
 
     MacroDef m;
 
-    // sv_preprocessor.rawast nests name + params under a `decl` field
+    // systemverilog.rawast nests name + params under a `decl` field
     // (DECL sub-rule with `ignore:` empty enforces LRM adjacency).
     // Older grammars use flat top-level `name`/`params` — pick whichever
     // shape is present.
@@ -1451,7 +1451,7 @@ void Preprocessor::handle_define(const DictValue& d) {
                 if (auto pa = as_array(params_it->second)) {
                     for (const auto& p : pa->data()) {
                         MacroParam mp;
-                        // sv_preprocessor.rawast captures PARAM_FORMAL
+                        // systemverilog.rawast captures PARAM_FORMAL
                         // as `{name: "…", default: {value: "…"}}`.
                         // Older / synthesized shapes pass a bare
                         // string — read both.
@@ -1781,7 +1781,7 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
     // Line-based callers (mini_preprocessor, top-level PP_FILE) want
     // `\`MACRO` to own the trailing newline so handle_macro_use leaves
     // the cursor on the next line. For mid-text use surfaced by the
-    // sv_preprocessor.rawast text_line iterator, the macro call sits
+    // systemverilog.rawast text_line iterator, the macro call sits
     // inside surrounding bytes — consuming the newline would lose any
     // text after the macro on the same line.
     std::size_t use_src_end = consume_line
@@ -2005,7 +2005,7 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
     // Parse the included file with the same preprocessor grammar.
     // (No depth-of-includes check yet — Phase 3 polish.)
     auto include_stream = Stream::from_string(include_text);
-    auto parsed = pp_grammar_.parse(include_stream);
+    auto parsed = (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(include_stream, "PP_FILE") : pp_grammar_.parse(include_stream));
     if (!parsed) {
         state_.warnings.push_back(
             {"`include: parse failed in '" + canonical + "': " +
@@ -2167,7 +2167,7 @@ void Preprocessor::handle_if(const DictValue& d, std::string& out,
                 auto bd = std::dynamic_pointer_cast<DictValue>(b);
                 if (!bd) continue;
                 auto cond = dict_value_or_null(*bd, "cond");
-                // sv_preprocessor.rawast captures cond with `*:cond=@`
+                // systemverilog.rawast captures cond with `*:cond=@`
                 // (Raw). Raw bypasses the ignore-set, so the leading
                 // space between the keyword and the expression lands
                 // inside cond. Trim before handing to expr_eval.

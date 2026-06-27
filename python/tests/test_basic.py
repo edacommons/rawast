@@ -330,7 +330,7 @@ def test_preprocessor_three_mode_pipeline():
     """Mode 1 (pp.parse → AST), Mode 2 (pp.preprocess(ast, src) →
     Stream), Mode 3 (g.parse_stream(stream) → host value) compose
     end-to-end."""
-    pp_g = rawast.Grammar("sv_preprocessor")
+    pp_g = rawast.Grammar("systemverilog")
     pp = rawast.Preprocessor(pp_g)
 
     src = "`define X 7\n`X\n"
@@ -401,7 +401,7 @@ def test_preprocessor_expr_eval_property_and_undecidable_policy():
     """The expr_eval property (set after construction) + the on_undecidable
     engine policy. Uses direct callbacks returning rawast.Undefined, so it
     exercises the binding without the Python evaluator layer."""
-    g = rawast.Grammar("sv_preprocessor")
+    g = rawast.Grammar("systemverilog")
 
     def run(policy, cb):
         pp = rawast.Preprocessor(g, on_undecidable=policy)
