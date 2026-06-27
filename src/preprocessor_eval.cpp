@@ -257,14 +257,18 @@ eval_bool(const ValuePtr& v, const RefResolver& resolver) {
 
 } // namespace
 
-std::optional<bool> default_pp_expr_eval(
+ValuePtr default_pp_expr_eval(
     const ValuePtr& cond,
     const std::function<std::optional<std::string>(const std::string&)>& ref_resolver) {
-    return eval_bool(cond, ref_resolver);
+    // Internal evaluation stays a tri-state optional<bool>; lift it to the
+    // public ValuePtr tri-state at this boundary (nullopt -> Undefined).
+    auto b = eval_bool(cond, ref_resolver);
+    if (!b) return undefined_value();
+    return *b ? true_value() : false_value();
 }
 
 void Preprocessor::use_default_expr_eval() {
-    opts_.expr_eval = [this](const ValuePtr& cond) -> std::optional<bool> {
+    opts_.expr_eval = [this](const ValuePtr& cond) -> ValuePtr {
         return default_pp_expr_eval(cond,
             [this](const std::string& name) -> std::optional<std::string> {
                 if (auto m = get_macro(name)) {
@@ -289,7 +293,7 @@ void Preprocessor::use_default_expr_eval() {
 
 void Preprocessor::use_default_expr_eval(const Grammar& expr_grammar) {
     opts_.expr_eval = [this, &expr_grammar](const ValuePtr& cond)
-        -> std::optional<bool> {
+        -> ValuePtr {
         auto resolver =
             [this](const std::string& name) -> std::optional<std::string> {
                 if (auto m = get_macro(name)) {
@@ -323,7 +327,7 @@ void Preprocessor::use_default_expr_eval(const Grammar& expr_grammar) {
                 {"failed to parse `if condition '" +
                      as_string(cond)->data() + "': " + r.error().message,
                  state_.current_file, state_.current_line});
-            return std::nullopt;
+            return undefined_value();
         }
         return default_pp_expr_eval(*r, resolver);
     };

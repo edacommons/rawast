@@ -135,6 +135,37 @@ std::string format_parse_error(const rawast::ParseError& e) {
     return out.str();
 }
 
+// Convert the RESULT a Python `expr_eval` callback hands back into the
+// engine's ValuePtr tri-state. Unlike python_to_value (the input/save
+// path, which rejects Undefined), this is a return TO the engine, so
+// Undefined is allowed: True/False -> bool, Undefined/None -> undefined,
+// anything else -> Python truthiness.
+rawast::ValuePtr expr_eval_result_to_value(nb::handle r) {
+    if (r.is(undefined_py()) || r.is_none()) return rawast::undefined_value();
+    if (nb::isinstance<nb::bool_>(r)) {
+        return nb::cast<bool>(r) ? rawast::true_value() : rawast::false_value();
+    }
+    return nb::cast<bool>(nb::bool_(r)) ? rawast::true_value()
+                                        : rawast::false_value();
+}
+
+// Install a Python `expr_eval` callback (or clear it, given None) onto a
+// Preprocessor, wrapping it in the C++ adapter: the condition AST is handed
+// over as a native Python value and the result is mapped back to the
+// engine's ValuePtr tri-state. The callback is captured strongly here; the
+// host breaks any pp<->callback cycle with a weakref on its side.
+void install_py_expr_eval(rawast::Preprocessor& pp, nb::object cb) {
+    if (cb.is_none()) {
+        pp.set_expr_eval(nullptr);
+        return;
+    }
+    auto held = nb::borrow<nb::object>(cb);
+    pp.set_expr_eval([held](const rawast::ValuePtr& cond) -> rawast::ValuePtr {
+        nb::gil_scoped_acquire gil;
+        return expr_eval_result_to_value(held(value_to_python(cond)));
+    });
+}
+
 } // namespace
 
 NB_MODULE(_rawast, m) {
@@ -480,13 +511,16 @@ NB_MODULE(_rawast, m) {
     // class stores a const Grammar&).
     nb::class_<rawast::Preprocessor>(m, "Preprocessor",
         "Apply preprocessor semantics (macro expansion, conditional "
-        "compilation, includes) to source text before parsing.")
+        "compilation, includes) to source text before parsing.",
+        nb::dynamic_attr(),          // holds the expr_eval callable in __dict__
+        nb::is_weak_referenceable()) // so a host can weakref it (cycle break)
         .def("__init__",
             [](rawast::Preprocessor* self, rawast::Grammar& g,
                const std::string& predefined,
                const std::vector<std::string>& include_paths,
                bool splice,
                const std::string& on_undefined,
+               const std::string& on_undecidable,
                int max_expansion_depth,
                bool trace) {
                 rawast::PpOptions opts;
@@ -500,8 +534,18 @@ NB_MODULE(_rawast, m) {
                         on_undefined + "' (valid: leave, error, warn, empty)");
                 }
                 opts.on_undefined = *ou;
+                auto od = rawast::parse_pp_on_undecidable(on_undecidable);
+                if (!od) {
+                    throw std::runtime_error(
+                        "Preprocessor: unknown on_undecidable '" +
+                        on_undecidable + "' (valid: false, true, error)");
+                }
+                opts.on_undecidable = *od;
                 opts.max_expansion_depth = max_expansion_depth;
                 opts.trace = trace;
+                // expr_eval is wired AFTER construction via the `expr_eval`
+                // property so the callback can refer back to this instance
+                // (with a weakref) without a construct-time chicken-and-egg.
                 new (self) rawast::Preprocessor(g, std::move(opts));
             },
             nb::arg("grammar"),
@@ -509,6 +553,7 @@ NB_MODULE(_rawast, m) {
             nb::arg("include_paths") = std::vector<std::string>{},
             nb::arg("splice") = false,
             nb::arg("on_undefined") = std::string{"leave"},
+            nb::arg("on_undecidable") = std::string{"false"},
             nb::arg("max_expansion_depth") = 200,
             nb::arg("trace") = false,
             nb::keep_alive<1, 2>(),
@@ -516,6 +561,22 @@ NB_MODULE(_rawast, m) {
             "preprocessor grammar (e.g. sv_preprocessor.rawast). All "
             "behavior options are keyword-only; defaults match the "
             "documented spec.")
+
+        // The `\`if`/`\`elsif` condition evaluator. Settable AFTER
+        // construction so the callback can refer back to this Preprocessor
+        // (use a weakref to avoid a pp<->callback reference cycle). The
+        // callable receives the condition AST as a Python value and returns
+        // bool | rawast.Undefined | None (None == undecidable). Stored in
+        // the instance __dict__ so the cyclic GC can see it.
+        .def_prop_rw("expr_eval",
+            [](nb::handle self) -> nb::object {
+                return nb::hasattr(self, "_expr_eval_cb")
+                           ? self.attr("_expr_eval_cb") : nb::none();
+            },
+            [](nb::handle self, nb::object cb) {
+                self.attr("_expr_eval_cb") = cb;
+                install_py_expr_eval(nb::cast<rawast::Preprocessor&>(self), cb);
+            })
 
         .def("process",
             [](rawast::Preprocessor& pp, const std::string& text) {

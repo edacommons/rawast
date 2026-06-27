@@ -647,9 +647,9 @@ TEST_CASE("process_ast: undefined_handler receives raw args") {
 TEST_CASE("process_ast: `if takes first branch when expr_eval returns true") {
     Grammar g = make_passthrough_grammar();
     PpOptions opts;
-    opts.expr_eval = [](const ValuePtr& cond) -> std::optional<bool> {
+    opts.expr_eval = [](const ValuePtr& cond) -> ValuePtr {
         auto s = as_string(cond);
-        return s && s->data() == "ALPHA";
+        return (s && s->data() == "ALPHA") ? true_value() : false_value();
     };
     Preprocessor pp(g, std::move(opts));
     auto ast = program({
@@ -675,8 +675,8 @@ TEST_CASE("process_ast: `if takes first branch when expr_eval returns true") {
 TEST_CASE("process_ast: `if falls to else_branch when no branch true") {
     Grammar g = make_passthrough_grammar();
     PpOptions opts;
-    opts.expr_eval = [](const ValuePtr&) -> std::optional<bool> {
-        return false;
+    opts.expr_eval = [](const ValuePtr&) -> ValuePtr {
+        return false_value();
     };
     Preprocessor pp(g, std::move(opts));
     auto ast = program({
@@ -702,9 +702,9 @@ TEST_CASE("process_ast: `if falls to else_branch when no branch true") {
 TEST_CASE("process_ast: `if/`elsif chain picks the first true branch") {
     Grammar g = make_passthrough_grammar();
     PpOptions opts;
-    opts.expr_eval = [](const ValuePtr& cond) -> std::optional<bool> {
+    opts.expr_eval = [](const ValuePtr& cond) -> ValuePtr {
         auto s = as_string(cond);
-        return s && s->data() == "B";
+        return (s && s->data() == "B") ? true_value() : false_value();
     };
     Preprocessor pp(g, std::move(opts));
     auto ast = program({
@@ -756,8 +756,8 @@ TEST_CASE("process_ast: `if without expr_eval records warning, skips body") {
 TEST_CASE("process_ast: expr_eval returning nullopt warns and skips") {
     Grammar g = make_passthrough_grammar();
     PpOptions opts;
-    opts.expr_eval = [](const ValuePtr&) -> std::optional<bool> {
-        return std::nullopt;
+    opts.expr_eval = [](const ValuePtr&) -> ValuePtr {
+        return undefined_value();
     };
     Preprocessor pp(g, std::move(opts));
     auto ast = program({
@@ -790,15 +790,15 @@ TEST_CASE("process_ast: expr_eval receives structured AST, not raw text") {
     PpOptions opts;
     bool saw_dict = false;
     std::string seen_op;
-    opts.expr_eval = [&](const ValuePtr& cond) -> std::optional<bool> {
+    opts.expr_eval = [&](const ValuePtr& cond) -> ValuePtr {
         auto d = as_dict(cond);
-        if (!d) return std::nullopt;
+        if (!d) return undefined_value();
         saw_dict = true;
         auto it = d->data().find("op");
         if (it != d->data().end()) {
             if (auto s = as_string(it->second)) seen_op = s->data();
         }
-        return true;
+        return true_value();
     };
     Preprocessor pp(g, std::move(opts));
     auto ast = program({

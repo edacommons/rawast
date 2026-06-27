@@ -40,6 +40,20 @@ enum class PpOnUndefined {
 std::string_view to_string(PpOnUndefined v) noexcept;
 std::optional<PpOnUndefined> parse_pp_on_undefined(std::string_view name) noexcept;
 
+// Policy for an UNDECIDABLE `\`if` / `\`elsif` condition — one whose
+// `expr_eval` evaluated to `Undefined` (e.g. it references a macro the
+// host can't resolve). Distinct from PpOnUndefined, which is about
+// undefined macro *uses*. Default reproduces the historical behavior:
+// an undecidable branch is simply not taken.
+enum class PpOnUndecidable {
+    TreatAsFalse,  // branch not taken (default; warns)
+    TreatAsTrue,   // branch taken (warns)
+    Error,         // stop processing with a PpError
+};
+
+std::string_view to_string(PpOnUndecidable v) noexcept;
+std::optional<PpOnUndecidable> parse_pp_on_undecidable(std::string_view name) noexcept;
+
 // One macro definition. Function-like macros carry a non-empty
 // `params` list AND `is_function_like = true`; an empty `params`
 // list with `is_function_like = false` is the object-like form.
@@ -228,6 +242,10 @@ struct PpOptions {
     // letting the host parser handle the token.
     PpOnUndefined on_undefined = PpOnUndefined::Leave;
 
+    // Policy applied when a `\`if` / `\`elsif` condition is undecidable
+    // (expr_eval returned `Undefined`). Default: treat as not-taken.
+    PpOnUndecidable on_undecidable = PpOnUndecidable::TreatAsFalse;
+
     // Host-supplied evaluator for `\`if` / `\`elsif` expressions.
     // Called with the AST node the grammar produced for the
     // expression — typically a structured dict tree (e.g.
@@ -251,7 +269,11 @@ struct PpOptions {
     // as the only parser in the system — the host walks the tree
     // the same way the preprocessor walker does, rather than
     // re-parsing the expression by hand.
-    std::function<std::optional<bool>(const ValuePtr& cond)> expr_eval;
+    // Returns a ValuePtr: a Bool value (true/false) when the condition is
+    // decidable, or `Undefined` (undefined_value()) when it can't be
+    // decided — the engine then applies `on_undecidable`. A null return is
+    // treated the same as Undefined.
+    std::function<ValuePtr(const ValuePtr& cond)> expr_eval;
 
     // Host-supplied source resolver for `\`include`. When set, called
     // instead of (well, before — see fallback) the built-in
@@ -314,14 +336,13 @@ struct PpOptions {
 
 // Generic AST evaluator for preprocessor `\`if` conditions. Walks
 // the documented expression-AST shape (see grammars/sv_pp_expr.rawast)
-// and returns a tri-state result:
+// and returns a ValuePtr tri-state:
 //
-//   true   — condition holds
-//   false  — condition does not hold
-//   nullopt — undecidable (unknown call name, non-int operand of an
-//            arithmetic op, ref without a resolver) — the walker
-//            records a warning and treats it as false; hosts can
-//            elevate via their own policy.
+//   true_value()      — condition holds
+//   false_value()     — condition does not hold
+//   undefined_value() — undecidable (unknown call name, non-int operand
+//            of an arithmetic op, ref without a resolver). The engine
+//            then applies its `on_undecidable` policy.
 //
 // The AST shape (uniform across any grammar emitting it):
 //
@@ -346,7 +367,7 @@ struct PpOptions {
 // drives boolean context (`\`if FOO` is true iff FOO is defined and
 // resolves to a non-zero integer or to a string that doesn't parse as
 // an integer — defined-and-non-empty is truthy).
-std::optional<bool> default_pp_expr_eval(
+ValuePtr default_pp_expr_eval(
     const ValuePtr& cond,
     const std::function<std::optional<std::string>(
         const std::string& name)>& ref_resolver);
@@ -469,6 +490,17 @@ public:
     void reset() { state_ = {}; }
 
     // ─── Convenience wiring ────────────────────────────────────────
+
+    // Install (or clear, with an empty function) the `\`if` condition
+    // evaluator after construction. Mirrors PpOptions::expr_eval; lets a
+    // host wire a callback that refers back to this Preprocessor without
+    // the construct-time chicken-and-egg.
+    void set_expr_eval(std::function<ValuePtr(const ValuePtr&)> fn) {
+        opts_.expr_eval = std::move(fn);
+    }
+
+    // The undecidable-condition policy, settable after construction.
+    void set_on_undecidable(PpOnUndecidable v) { opts_.on_undecidable = v; }
 
     // Bind opts_.expr_eval to the generic AST evaluator above,
     // resolving refs through this Preprocessor's macro table. Use
