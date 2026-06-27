@@ -2110,3 +2110,28 @@ def test_sv_attr_on_statement_and_usertype_nonansi_port(sv_grammar):
     for src in cases:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_sampled_value_func_clocking_arg(sv_grammar):
+    """Sampled value functions take an optional clocking-event argument
+    (§16.9.3): `$fell(a, @(posedge clk))`. Plain forms still work."""
+    M = "module m; %s endmodule"
+    for stmt in [
+        "assign f = $fell(a, @(posedge clk));",
+        "assign s = $stable(y, @(negedge c));",
+        "assign r = $rose(b);",
+        "assign p = $past(x, 2);",
+    ]:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_multi_dim_user_typed_decl(sv_grammar):
+    """A user-typed declaration with multiple unpacked dimensions per name —
+    `my_t a[3:0][1:0], b[3:0][1:0];` (CVA6 btb). NET_NAME took only one
+    array suffix."""
+    M = "module m; %s endmodule"
+    for stmt in ["my_t a[3:0][1:0], b[3:0][1:0];", "my_t a[3:0][1:0];",
+                 "wire w[2][3];", "my_t a;"]:
+        ast = sv_grammar.parse_string(M % stmt)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast

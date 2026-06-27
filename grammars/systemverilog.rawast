@@ -825,7 +825,7 @@ NET_SIGNING: choice { 'signed':@, 'unsigned':@ }
 
 NET_NAME: sequence dict {
   <IDENT_OR_MACRO>:name=@,
-  ?<ARRAY_KIND_SUFFIX>:array_kind=@,
+  repeat <ARRAY_KIND_SUFFIX>:array_kind[]=@,
   ?<NET_INIT>
 }
 
@@ -2964,7 +2964,15 @@ SYSTEM_FUNC_CALL: sequence dict {
 SYSTEM_FUNC_ARGS: sequence dict {
   "(",
   repeat <EXPR>:args[]=@ separator ",",
+  ?<SYSTEM_FUNC_CLOCK>:clocking=@,
   ")"
+}
+
+// Trailing `, @(event)` clocking-event argument of the sampled value
+// functions `$fell`/`$rose`/`$stable`/`$changed`/`$past` (§16.9.3). Kept
+// separate from the expression args (an EVENT_CONTROL isn't an EXPR).
+SYSTEM_FUNC_CLOCK: sequence dict {
+  "" space, ?",", "" space, <EVENT_CONTROL>:event=@
 }
 
 // Hierarchical reference: identifier, optionally with `.subident`
