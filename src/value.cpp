@@ -7,6 +7,11 @@ ValuePtr null_value() {
     return instance;
 }
 
+ValuePtr undefined_value() {
+    static const ValuePtr instance = std::make_shared<UndefinedValue>();
+    return instance;
+}
+
 ValuePtr true_value() {
     static const ValuePtr instance = std::make_shared<BoolValue>(true);
     return instance;

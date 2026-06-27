@@ -77,3 +77,14 @@ TEST_CASE("Dict can hold keyed children") {
     CHECK(d->data().at("answer")->type()   == ValueType::Int);
     CHECK(d->data().at("greeting")->type() == ValueType::String);
 }
+
+TEST_CASE("Undefined is a distinct singleton value") {
+    auto u = undefined_value();
+    REQUIRE(u);
+    CHECK(u->type() == ValueType::Undefined);
+    // Singleton: same pointer every time...
+    CHECK(undefined_value().get() == u.get());
+    // ...and distinct from null (different type and identity).
+    CHECK(undefined_value().get() != null_value().get());
+    CHECK(u->type() != ValueType::Null);
+}

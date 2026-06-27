@@ -13,6 +13,7 @@ namespace rawast {
 // Type tag carried by every Value.
 enum class ValueType {
     Null,
+    Undefined,
     Bool,
     Int,
     UInt,
@@ -42,6 +43,14 @@ public:
 class NullValue final : public Value {
 public:
     ValueType type() const noexcept override { return ValueType::Null; }
+};
+
+// Distinct from Null: a sentinel for "undefined" (vs an explicit null).
+// Like Null it carries no payload and is a shared singleton; in Python it
+// binds to the `Undefined` singleton so `val is Undefined` works.
+class UndefinedValue final : public Value {
+public:
+    ValueType type() const noexcept override { return ValueType::Undefined; }
 };
 
 class BoolValue final : public Value {
@@ -107,6 +116,7 @@ public:
 // Shared singletons. Identity comparison is meaningful: null_value().get()
 // is the same pointer everywhere null appears in any tree.
 ValuePtr null_value();
+ValuePtr undefined_value();
 ValuePtr true_value();
 ValuePtr false_value();
 

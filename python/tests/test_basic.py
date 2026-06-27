@@ -365,3 +365,22 @@ def test_tcl_grammar_accepts_utf8_in_quoted_strings():
     quoted = cmd["words"][1]
     assert quoted["type"] == "quoted"
     assert quoted["value"] == [{"type": "literal", "value": "中國的漢字"}]
+
+
+def test_undefined_singleton():
+    """`rawast.Undefined` is a distinct, falsy singleton — like None but a
+    separate identity, for projects that need an 'undefined' sentinel."""
+    import copy
+
+    import rawast
+
+    U = rawast.Undefined
+    assert U is rawast.Undefined          # always the same instance
+    assert U is not None                  # distinct from None
+    assert bool(U) is False               # falsy, like None
+    assert repr(U) == "Undefined"
+    assert copy.copy(U) is U              # copy/deepcopy preserve identity
+    assert copy.deepcopy(U) is U
+    d = {"a": U, "b": None}               # usable as a sentinel; identity holds
+    assert d["a"] is U and d["b"] is None
+    assert d["a"] is not d["b"]

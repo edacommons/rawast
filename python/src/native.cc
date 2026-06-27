@@ -35,6 +35,20 @@ bool ends_with(const std::string& s, const std::string& suffix) {
            s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+// Tag type backing the Python `Undefined` singleton.
+struct UndefinedTag {};
+
+// Non-owning handle to the Python `Undefined` singleton (created in
+// NB_MODULE; kept alive by the module dict's `Undefined` attribute). Every
+// rawast UndefinedValue maps to this exact object, so `x is Undefined`
+// holds — the same identity contract Python's `None` has. A non-owning
+// handle (not a static nb::object) avoids a decref running after the
+// interpreter has finalized.
+nb::handle& undefined_py() {
+    static nb::handle h;
+    return h;
+}
+
 // --- Value <-> Python conversion ----------------------------------------
 
 nb::object value_to_python(const rawast::ValuePtr& v) {
@@ -43,6 +57,8 @@ nb::object value_to_python(const rawast::ValuePtr& v) {
     switch (v->type()) {
     case ValueType::Null:
         return nb::none();
+    case ValueType::Undefined:
+        return nb::borrow(undefined_py());
     case ValueType::Bool:
         return nb::cast(std::dynamic_pointer_cast<BoolValue>(v)->data());
     case ValueType::Int:
@@ -73,6 +89,7 @@ nb::object value_to_python(const rawast::ValuePtr& v) {
 
 rawast::ValuePtr python_to_value(nb::handle obj) {
     using namespace rawast;
+    if (obj.is(undefined_py())) return undefined_value();
     if (obj.is_none()) return null_value();
     if (nb::isinstance<nb::bool_>(obj)) {
         return nb::cast<bool>(obj) ? true_value() : false_value();
@@ -122,6 +139,20 @@ NB_MODULE(_rawast, m) {
     rawast::register_lefdef_parser_group();
     rawast::register_sv_parser_group();
     rawast::register_tcl_parser_group();
+
+    // `Undefined` — a sentinel value distinct from `None`/null that some
+    // projects use to mean "undefined" rather than "explicitly null". One
+    // shared instance, like `None`, so `value is rawast.Undefined` holds.
+    // It maps to/from the C++ UndefinedValue; no grammar produces it.
+    nb::class_<UndefinedTag>(m, "UndefinedType")
+        .def("__repr__", [](const UndefinedTag&) { return "Undefined"; })
+        .def("__bool__", [](const UndefinedTag&) { return false; })
+        .def("__copy__", [](nb::object self) { return self; })
+        .def("__deepcopy__", [](nb::object self, nb::object) { return self; });
+    // The module dict's `Undefined` attribute owns the one instance; the
+    // handle is a non-owning view kept valid by that ownership.
+    m.attr("Undefined") = nb::cast(UndefinedTag{});
+    undefined_py() = m.attr("Undefined");
 
     // Stream — opaque Python type. The canonical Grammar input.
     // Produced by Stream.from_string / Stream.from_file, or by
