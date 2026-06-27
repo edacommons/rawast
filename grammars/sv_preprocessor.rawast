@@ -95,15 +95,15 @@ IF: sequence dict {
 // is undecidable, never a hard parse failure. The walker trims the
 // leading space (Raw bypasses `ignore`) before evaluating.
 IF_HEAD: sequence dict {
-  "`if",
-  *:cond=@,
+  "`if" space,
+  *:cond=@:#subparse="PP_EXPR",
   "\n",
   <BODY>:body=@
 }
 
 ELSIF: sequence dict {
-  "`elsif",
-  *:cond=@,
+  "`elsif" space,
+  *:cond=@:#subparse="PP_EXPR",
   "\n",
   <BODY>:body=@
 }

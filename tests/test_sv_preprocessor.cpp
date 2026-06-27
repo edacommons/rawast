@@ -969,17 +969,23 @@ TEST_CASE("Preprocessor::process: nested ifdef inside skipped body is skipped") 
 // wiring. A cond outside the PP_EXPR subset is undecidable, not a parse
 // failure. The tests below drive that built-in path with real conditions.
 
-TEST_CASE("sv_pp if: grammar captures cond as raw text") {
+// cond ValuePtr of branch i (the `if/`elsif condition, a structured AST).
+static ValuePtr if_cond(const ValuePtr& ast, std::size_t i) {
+    auto d = std::dynamic_pointer_cast<DictValue>(ast);
+    auto branches = std::dynamic_pointer_cast<ArrayValue>(
+        d->data().find("branches")->second);
+    auto br = std::dynamic_pointer_cast<DictValue>(branches->data()[i]);
+    return br->data().find("cond")->second;
+}
+
+TEST_CASE("sv_pp if: grammar parses cond into a structured PP_EXPR AST") {
     auto g = load_grammar();
     auto ast = parse(g, "`if FOO\n`endif\n");
     CHECK(str_field(ast, "type") == "if");
-    auto d = std::dynamic_pointer_cast<DictValue>(ast);
-    REQUIRE(d);
-    auto branches = std::dynamic_pointer_cast<ArrayValue>(
-        d->data().find("branches")->second);
-    REQUIRE(branches);
-    REQUIRE(branches->data().size() == 1);
-    CHECK(trim_ws(str_field(branches->data()[0], "cond")) == "FOO");
+    // cond is no longer raw text — it's parsed through PP_EXPR.
+    auto cond = if_cond(ast, 0);
+    CHECK(str_field(cond, "type") == "ref");
+    CHECK(str_field(cond, "value") == "FOO");
 }
 
 TEST_CASE("sv_pp if: grammar parses `\\`if ... \\`elsif ... \\`endif` conds") {
@@ -995,9 +1001,9 @@ TEST_CASE("sv_pp if: grammar parses `\\`if ... \\`elsif ... \\`endif` conds") {
         d->data().find("branches")->second);
     REQUIRE(branches);
     REQUIRE(branches->data().size() == 3);
-    CHECK(trim_ws(str_field(branches->data()[0], "cond")) == "FOO");
-    CHECK(trim_ws(str_field(branches->data()[1], "cond")) == "defined(BAR)");
-    CHECK(trim_ws(str_field(branches->data()[2], "cond")) == "BAZ > 1");
+    CHECK(str_field(if_cond(ast, 0), "value") == "FOO");    // ref
+    CHECK(str_field(if_cond(ast, 1), "name") == "defined");  // call
+    CHECK(str_field(if_cond(ast, 2), "op") == ">");          // op chain
 }
 
 TEST_CASE("Preprocessor::process: `if takes first branch when cond true") {

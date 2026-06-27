@@ -1499,10 +1499,11 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // Parse terminal's own unparse for any final formatting.
         if (n.subparse_start.valid()) {
             std::ostringstream sub_out;
-            SaveState sub_s;
-            sub_s.push_q({v, false, ""});
-            auto sub_r = do_consume(g, sub_out, n.subparse_start,
-                                    sub_s, 0, pretty);
+            // Re-enter through Grammar::save (not do_consume) so the
+            // subparse rule's own #opchain expand runs — needed when the
+            // grammar's start rule isn't the opchain's (e.g. a PP_EXPR cond
+            // subparsed under sv_preprocessor). Idempotent if already done.
+            auto sub_r = g.save(sub_out, v, pretty, n.subparse_start);
             if (!sub_r) return tl::unexpected(sub_r.error());
             v = make_string(sub_out.str());
         }
@@ -1528,13 +1529,10 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // side re-entry). Serialize it back through the subparse
         // rule first to recover the text, then write that text.
         if (n.subparse_start.valid()) {
-            std::ostringstream sub_out;
-            SaveState sub_s;
-            sub_s.push_q({v, false, ""});
-            auto sub_r = do_consume(g, sub_out, n.subparse_start,
-                                    sub_s, 0, pretty);
+            // Re-enter through Grammar::save so the subparse rule's own
+            // #opchain expand runs (see the Parse-terminal branch above).
+            auto sub_r = g.save(out, v, pretty, n.subparse_start);
             if (!sub_r) return tl::unexpected(sub_r.error());
-            out << sub_out.str();
             return {};
         }
 
@@ -1566,11 +1564,10 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         ValuePtr v = r->value ? r->value : null_value();
 
         if (n.subparse_start.valid()) {
-            // Subparse round-trip — independent of container mode.
-            SaveState sub_s;
-            sub_s.push_q({v, false, ""});
-            auto sub_r = do_consume(g, out, n.subparse_start,
-                                    sub_s, 0, pretty);
+            // Subparse round-trip — independent of container mode. Re-enter
+            // through Grammar::save so the subparse rule's own #opchain
+            // expand runs (see the Parse-terminal branch above).
+            auto sub_r = g.save(out, v, pretty, n.subparse_start);
             if (!sub_r) return tl::unexpected(sub_r.error());
         } else if (n.container == Container::Array) {
             // Array mode: iterate segments, dispatch each.
