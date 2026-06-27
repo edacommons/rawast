@@ -52,6 +52,7 @@ IFDEF: sequence dict {
   identifier:cond=@,
   "\n",
   <BODY>:body=@,
+  repeat <IFDEF_ELSIF>:elsif_branches[]=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif",
   "\n"
@@ -62,6 +63,7 @@ IFNDEF: sequence dict {
   identifier:cond=@,
   "\n",
   <BODY>:body=@,
+  repeat <IFDEF_ELSIF>:elsif_branches[]=@,
   ?<ELSE_BRANCH>:else_branch=@,
   "`endif",
   "\n"
@@ -93,15 +95,26 @@ IF: sequence dict {
 // is undecidable, never a hard parse failure. The walker trims the
 // leading space (Raw bypasses `ignore`) before evaluating.
 IF_HEAD: sequence dict {
-  "`if" space,
+  "`if",
   *:cond=@,
   "\n",
   <BODY>:body=@
 }
 
 ELSIF: sequence dict {
-  "`elsif" space,
+  "`elsif",
   *:cond=@,
+  "\n",
+  <BODY>:body=@
+}
+
+// `\`elsif` in an `\`ifdef`/`\`ifndef` chain tests DEFINEDNESS, so its
+// condition is a macro name. Using `identifier` (not the raw `*` of the
+// expression ELSIF) keeps cond clean — no leading space to trim — and the
+// `space` provides the separator on save.
+IFDEF_ELSIF: sequence dict {
+  "`elsif" space,
+  identifier:cond=@,
   "\n",
   <BODY>:body=@
 }
