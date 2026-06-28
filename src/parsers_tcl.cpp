@@ -52,6 +52,58 @@ SaveResult expect_string(const Value& v, const std::string& who) {
     return sv->data();
 }
 
+// Consume the BODY of a balanced `[...]` command substitution into `accum`,
+// starting just AFTER the opening `[` and ending just after the matching
+// `]` (the closing `]` is consumed but NOT appended). Tracks nested
+// `[]`/`{}`/`""` and Tcl escapes (Dodekalogue rules 8/9), so a `]` or `"`
+// inside a nested string/brace/bracket doesn't terminate early. Returns
+// false on EOF before the matching `]`. Shared by the bracket-substitution
+// parser and the quoted-string parser (command substitution is active
+// inside `"..."`, where an inner `"` must not be read as the closing quote).
+bool consume_bracket_body(StreamReader& sr, std::string& accum) {
+    int bracket_depth = 1;
+    int brace_depth   = 0;
+    bool in_string    = false;
+    while (true) {
+        auto c = sr.peek();
+        if (!c) return false;
+        char ch = *c;
+        if (ch == '\\') {
+            sr.get();
+            accum.push_back('\\');
+            auto next = sr.get();
+            if (!next) return false;
+            accum.push_back(*next);
+            continue;
+        }
+        if (in_string) {
+            accum.push_back(ch);
+            sr.get();
+            if (ch == '"') in_string = false;
+            continue;
+        }
+        if (brace_depth > 0) {
+            accum.push_back(ch);
+            sr.get();
+            if (ch == '{') ++brace_depth;
+            else if (ch == '}') --brace_depth;
+            continue;
+        }
+        if (ch == '"') { in_string = true; accum.push_back(ch); sr.get(); continue; }
+        if (ch == '{') { brace_depth = 1; accum.push_back(ch); sr.get(); continue; }
+        if (ch == '[') { ++bracket_depth; accum.push_back(ch); sr.get(); continue; }
+        if (ch == ']') {
+            --bracket_depth;
+            sr.get();
+            if (bracket_depth == 0) return true;   // matched close, not appended
+            accum.push_back(ch);
+            continue;
+        }
+        accum.push_back(ch);
+        sr.get();
+    }
+}
+
 } // namespace
 
 // --- TclHspaceParser ----------------------------------------------------
@@ -279,6 +331,21 @@ WalkResult TclQuotedStringParser::walk(StreamReader& sr) {
             accum_.push_back(*next);
             continue;
         }
+        if (ch == '[') {
+            // Command substitution is active inside "..." (Tcl rule 8).
+            // Consume the balanced [...] — with its own nested quotes,
+            // braces, and brackets — verbatim, so an inner `"` can't be
+            // mistaken for this string's closing quote.
+            accum_.push_back('[');
+            sr.get();   // consume `[`
+            if (!consume_bracket_body(sr, accum_)) {
+                sr.reject();
+                return tl::unexpected(ParseError{
+                    start, "unterminated [...] in quoted string"});
+            }
+            accum_.push_back(']');
+            continue;
+        }
         if (ch == '"') {
             sr.get();
             sr.accept();
@@ -309,79 +376,13 @@ WalkResult TclBracketSubParser::walk(StreamReader& sr) {
     }
     sr.get();   // consume opening `[`
 
-    int bracket_depth = 1;
-    int brace_depth   = 0;
-    bool in_string    = false;
-
-    while (true) {
-        auto c = sr.peek();
-        if (!c) {
-            sr.reject();
-            return tl::unexpected(ParseError{
-                start, "unterminated [...] command substitution"});
-        }
-        char ch = *c;
-
-        // Escapes apply in all sub-contexts (Tcl rule 9).
-        if (ch == '\\') {
-            sr.get();
-            accum_.push_back('\\');
-            auto next = sr.get();
-            if (!next) {
-                sr.reject();
-                return tl::unexpected(ParseError{
-                    start, "unterminated escape in bracket-sub"});
-            }
-            accum_.push_back(*next);
-            continue;
-        }
-
-        if (in_string) {
-            accum_.push_back(ch);
-            sr.get();
-            if (ch == '"') in_string = false;
-            continue;
-        }
-        if (brace_depth > 0) {
-            accum_.push_back(ch);
-            sr.get();
-            if (ch == '{') ++brace_depth;
-            else if (ch == '}') --brace_depth;
-            continue;
-        }
-
-        // Normal bracket-sub context.
-        if (ch == '"') {
-            in_string = true;
-            accum_.push_back(ch);
-            sr.get();
-            continue;
-        }
-        if (ch == '{') {
-            brace_depth = 1;
-            accum_.push_back(ch);
-            sr.get();
-            continue;
-        }
-        if (ch == '[') {
-            ++bracket_depth;
-            accum_.push_back(ch);
-            sr.get();
-            continue;
-        }
-        if (ch == ']') {
-            --bracket_depth;
-            sr.get();
-            if (bracket_depth == 0) {
-                sr.accept();
-                return {};
-            }
-            accum_.push_back(ch);
-            continue;
-        }
-        accum_.push_back(ch);
-        sr.get();
+    if (!consume_bracket_body(sr, accum_)) {
+        sr.reject();
+        return tl::unexpected(ParseError{
+            start, "unterminated [...] command substitution"});
     }
+    sr.accept();
+    return {};
 }
 
 SaveResult TclBracketSubParser::unparse(const Value& v) const {
