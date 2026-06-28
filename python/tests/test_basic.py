@@ -367,6 +367,24 @@ def test_tcl_grammar_accepts_utf8_in_quoted_strings():
     assert quoted["value"] == [{"type": "literal", "value": "中國的漢字"}]
 
 
+def test_tcl_subparse_save_preserves_significant_trailing_whitespace():
+    """Regression: routing #subparse save through Grammar::save applied its
+    pretty trailing-whitespace trim to the subparsed content. A quoted word's
+    SEGMENTS body keeps whitespace literal, so trailing spaces before the
+    closing quote — which sit MID-LINE in the final output, where the
+    top-level trim correctly leaves them — were wrongly stripped by the
+    nested save, breaking round-trip. Fix: consume non-#opchain subparses
+    directly (do_consume), only routing through Grammar::save when the
+    subparse rule carries an #opchain (which needs its expand pre-pass).
+    Found by the local_tests TCL corpus (137 -> 206 -> 137 round-trip fails)."""
+    g = rawast.Grammar("tcl")
+    src = 'puts "hello   "\n'
+    ast = g.parse_string(src)
+    saved = g.save(ast).decode("utf-8")
+    assert '"hello   "' in saved          # trailing spaces survive the save
+    assert g.parse_string(saved) == ast   # and the round-trip holds
+
+
 def test_undefined_singleton():
     """`rawast.Undefined` is a distinct, falsy singleton — like None but a
     separate identity, for projects that need an 'undefined' sentinel."""

@@ -1397,6 +1397,27 @@ NodeId choose_alternative_v2(const Grammar& g, const Node& choice_node,
 // do_consume — emission + state advance
 // ---------------------------------------------------------------------------
 
+// Serialize a `#subparse` sub-tree back to text. Routes through
+// Grammar::save ONLY when the subparse rule carries an `#opchain` — that
+// entry's expand pre-pass is what compacted `{op,args}` expression ASTs
+// need to round-trip when the subparse rule isn't the grammar's start
+// (e.g. the SV `if-cond COND_EXPR). For every other subparse, going
+// through Grammar::save would ALSO apply its pretty trailing-whitespace
+// trim to the captured content — but a subparse body is raw captured text
+// where trailing space can be significant (e.g. a TCL braced script), so
+// trimming it corrupts the round-trip. Those consume directly via
+// do_consume, preserving the bytes. (Fixes a TCL subparse-save regression.)
+tl::expected<void, SaveError>
+save_subparse(const Grammar& g, std::ostream& out, ValuePtr v,
+              NodeId start, bool pretty) {
+    if (g.has_opchain_in_chain(start)) {
+        return g.save(out, std::move(v), pretty, start);
+    }
+    SaveState s;
+    s.push_q({std::move(v), false, ""});
+    return do_consume(g, out, start, s, 0, pretty);
+}
+
 // Body without pretty-print wrapping (head/tail/indent applied by caller).
 tl::expected<void, SaveError>
 do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
@@ -1499,11 +1520,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // Parse terminal's own unparse for any final formatting.
         if (n.subparse_start.valid()) {
             std::ostringstream sub_out;
-            // Re-enter through Grammar::save (not do_consume) so the
-            // subparse rule's own #opchain expand runs — needed when the
-            // grammar's start rule isn't the opchain's (e.g. a PP_EXPR cond
-            // subparsed under sv_preprocessor). Idempotent if already done.
-            auto sub_r = g.save(sub_out, v, pretty, n.subparse_start);
+            auto sub_r = save_subparse(g, sub_out, v, n.subparse_start, pretty);
             if (!sub_r) return tl::unexpected(sub_r.error());
             v = make_string(sub_out.str());
         }
@@ -1529,9 +1546,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // side re-entry). Serialize it back through the subparse
         // rule first to recover the text, then write that text.
         if (n.subparse_start.valid()) {
-            // Re-enter through Grammar::save so the subparse rule's own
-            // #opchain expand runs (see the Parse-terminal branch above).
-            auto sub_r = g.save(out, v, pretty, n.subparse_start);
+            auto sub_r = save_subparse(g, out, v, n.subparse_start, pretty);
             if (!sub_r) return tl::unexpected(sub_r.error());
             return {};
         }
@@ -1564,10 +1579,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         ValuePtr v = r->value ? r->value : null_value();
 
         if (n.subparse_start.valid()) {
-            // Subparse round-trip — independent of container mode. Re-enter
-            // through Grammar::save so the subparse rule's own #opchain
-            // expand runs (see the Parse-terminal branch above).
-            auto sub_r = g.save(out, v, pretty, n.subparse_start);
+            // Subparse round-trip — independent of container mode.
+            auto sub_r = save_subparse(g, out, v, n.subparse_start, pretty);
             if (!sub_r) return tl::unexpected(sub_r.error());
         } else if (n.container == Container::Array) {
             // Array mode: iterate segments, dispatch each.
