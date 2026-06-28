@@ -764,6 +764,7 @@ MODULE_ITEM: choice {
   <INTERFACE_DECL>,
   <IMPORT_STMT>,
   <EXPORT_STMT>,
+  <GATE_INSTANTIATION>,
   <MODULE_INSTANTIATION>,
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
@@ -1328,6 +1329,35 @@ EVENT_SEP: choice {
 EVENT_SEP_OR: sequence { "" space, 'or':@ space }
 
 // ─── Module instantiation ───────────────────────────────────────────────
+
+// Gate-level primitive instantiation — IEEE 1800-2017 §28. The gate type
+// is a reserved keyword (so this can't shadow a real module instance), the
+// instance name is OPTIONAL (`buf (Y, A);` and `nand g1 (Y, A, B);` are both
+// valid), and terminals are positional expressions — output(s) first, then
+// inputs; an input may be any expression (e.g. `~POCB`). Tried before
+// MODULE_INSTANTIATION, which would otherwise read the gate keyword as a
+// module type and then require an instance name. Drive strength / delay
+// (`buf (strong1, weak0) #2 (...)`) are not yet handled — rare in practice.
+GATE_INSTANTIATION: sequence dict {
+  <GATE_TYPE>:gate=@:type="gate" space,
+  repeat+ <GATE_INSTANCE>:instances[]=@ separator "," space,
+  ";"
+}
+
+GATE_TYPE: choice {
+  'nand':@, 'nor':@, 'and':@, 'or':@, 'xnor':@, 'xor':@,
+  'bufif0':@, 'bufif1':@, 'buf':@, 'notif0':@, 'notif1':@, 'not':@,
+  'rnmos':@, 'rpmos':@, 'rcmos':@, 'nmos':@, 'pmos':@, 'cmos':@,
+  'rtranif0':@, 'rtranif1':@, 'tranif0':@, 'tranif1':@, 'rtran':@, 'tran':@,
+  'pulldown':@, 'pullup':@
+}
+
+// `[name] ( terminal {, terminal} )` — the instance name is optional;
+// terminals are positional expressions.
+GATE_INSTANCE: sequence dict {
+  ?sv_identifier:name=@ space,
+  "(", repeat+ <EXPR>:terminals[]=@ separator "," space, ")"
+}
 
 MODULE_INSTANTIATION: sequence dict {
   <IDENT_OR_MACRO>:module_name=@:type="instance" space,

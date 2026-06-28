@@ -2154,3 +2154,23 @@ def test_sv_attribute_instances_on_ports(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_unnamed_gate_primitives(sv_grammar):
+    """Verilog gate-level primitives — IEEE 1800-2017 §28. The instance name
+    is optional, so `buf (Y, A);` / `and (Y, A, B);` / `notif1 (en, out,
+    ~in);` are valid; the grammar previously only accepted NAMED gates
+    (`nand g1 (…)`, which parsed as a generic module instance). Terminals are
+    positional expressions (an input may be `~POCB`). Found in std-cell
+    library models via the broad SV corpus."""
+    for src in [
+        "module m; buf (Y, A); endmodule",
+        "module m; and (Y, A, B); endmodule",
+        "module m; not (Y, A); endmodule",
+        "module m; notif1 (en_poc, POC, ~POCB); endmodule",
+        "module m; nand g1 (Y, A, B); endmodule",            # named
+        "module m; buf b1 (Y1, A1), b2 (Y2, A2); endmodule",  # multi-instance
+        "module m; sub u (.a(x)); endmodule",                 # real inst unaffected
+    ]:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
