@@ -483,11 +483,26 @@ PORT_LIST_ANSI: sequence dict {
 // unmatched). PORT_DECL_ANSI_USERTYPE then handles the bare
 // usertype form, and PORT_DECL_ANSI is the catchall.
 PORT_BODY_FIRST: choice {
+  <ATTRIBUTED_PORT_FIRST>,
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
   <PORT_DECL_NODIR_TYPED>,
   <PORT_DECL_INTERFACE>,
   <PORT_MACRO>
+}
+
+// A port declaration preceded by an attribute instance — IEEE 1800-2017
+// §23.2.2.1 allows `{ attribute_instance } ansi_port_declaration`. Common
+// in synthesis/PDK libraries: `(* iopad_external_pin *) input a`,
+// `(* init = 1'b0 *) output q`. Recurses on the port-body choice so the
+// attribute prefixes any port form (and stacks for `(* a *) (* b *) port`).
+ATTRIBUTED_PORT_FIRST: sequence dict {
+  <SV_ATTRIBUTE>:attribute=@:type="attributed_port" space,
+  <PORT_BODY_FIRST>:port=@
+}
+ATTRIBUTED_PORT_ANY: sequence dict {
+  <SV_ATTRIBUTE>:attribute=@:type="attributed_port" space,
+  <PORT_BODY_ANY>:port=@
 }
 
 // Subsequent ports: comma + port-body. The port-body Choice
@@ -498,6 +513,7 @@ PORT_BODY_FIRST: choice {
 PORT_BODY_NEXT: sequence { ",", "" newline, <PORT_BODY_ANY> indent tab }
 
 PORT_BODY_ANY: choice {
+  <ATTRIBUTED_PORT_ANY>,
   <PORT_DECL_ANSI_USERTYPE>,
   <PORT_DECL_ANSI>,
   <PORT_DECL_NODIR_TYPED>,

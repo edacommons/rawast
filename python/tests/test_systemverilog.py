@@ -2135,3 +2135,22 @@ def test_sv_multi_dim_user_typed_decl(sv_grammar):
                  "wire w[2][3];", "my_t a;"]:
         ast = sv_grammar.parse_string(M % stmt)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_attribute_instances_on_ports(sv_grammar):
+    """Attribute instances on ANSI ports — IEEE 1800-2017 §23.2.2.1 allows
+    `{ attribute_instance } ansi_port_declaration`. Common in synthesis/PDK
+    libraries (`(* iopad_external_pin *) input a`, `(* init = 1'b0 *) output
+    q`). The grammar handled attrs on items/instances but not in port lists;
+    found via the broad SV corpus (Yosys std-cell models). Attributes may
+    prefix the first or any later port, carry values, and stack."""
+    for src in [
+        "module m((* iopad_external_pin *) input a); endmodule",
+        "module m(input a, (* abc9_carry *) output b); endmodule",
+        "module m((* init = 1'b0 *) output q); endmodule",
+        "module m((* clkbuf_sink *) input clk, input rst, (* keep *) output o); endmodule",
+        "module m((* a *) (* b *) input x); endmodule",
+        "module m(input a, output b); endmodule",  # baseline unaffected
+    ]:
+        ast = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
