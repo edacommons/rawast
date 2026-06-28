@@ -402,6 +402,26 @@ def test_pretty_save_trims_only_structural_spaces_not_literal_content():
     assert g.parse_string(saved) == ast
 
 
+def test_tcl_quoted_string_with_nested_quotes_in_command_substitution():
+    """Regression: a double-quoted string may contain a [...] command
+    substitution (Dodekalogue rule 8), and inside the brackets quotes are
+    balanced — `"... [string repeat "x" 3] ..."`. The quoted-string parser
+    scanned only for `\\` escapes and the next `"`, so it read the inner `"`
+    (inside the bracket) as the closing quote and the rest failed to parse.
+    Found in OpenROAD STA test scripts (util_parallel_misc / network_advanced)
+    via the local_tests TCL corpus. Fix: the quoted parser consumes a
+    balanced [...] (shared consume_bracket_body) so inner quotes can't close
+    the string."""
+    g = rawast.Grammar("tcl")
+    for src in ['set y "a: [string repeat "x" 3]"\n',
+                'puts "v: [expr {$z ne ""}]"\n']:
+        ast = g.parse_string(src)
+        cmd = ast["commands"][0]
+        # the quoted word kept the whole bracket-sub (with its inner quotes)
+        assert cmd["words"][-1]["type"] == "quoted"
+        assert g.parse_string(g.save(ast).decode("utf-8")) == ast
+
+
 def test_undefined_singleton():
     """`rawast.Undefined` is a distinct, falsy singleton — like None but a
     separate identity, for projects that need an 'undefined' sentinel."""
