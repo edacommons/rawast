@@ -385,6 +385,23 @@ def test_tcl_subparse_save_preserves_significant_trailing_whitespace():
     assert g.parse_string(saved) == ast   # and the round-trip holds
 
 
+def test_pretty_save_trims_only_structural_spaces_not_literal_content():
+    """Regression: the pretty trailing-whitespace trim did a blanket
+    end-of-line rstrip on the rendered buffer, so it ate LITERAL whitespace
+    captured inside a body (here a multi-line quoted string) when those
+    spaces sat at end-of-line. The trim must only remove the STRUCTURAL
+    spaces that `space` save-attrs emit, never captured content. This blanket
+    rstrip silently corrupted round-trip across the whole EDA corpus
+    (TCL 137, LEF 173, GDSII 52 failures); the fix records structural-space
+    offsets and trims only those, restoring all four grammars to 100%."""
+    g = rawast.Grammar("tcl")
+    src = 'puts "hello   \nworld"\n'   # literal trailing spaces before a \n
+    ast = g.parse_string(src)
+    saved = g.save(ast).decode("utf-8")
+    assert '"hello   \n' in saved       # literal end-of-line spaces survive
+    assert g.parse_string(saved) == ast
+
+
 def test_undefined_singleton():
     """`rawast.Undefined` is a distinct, falsy singleton — like None but a
     separate identity, for projects that need an 'undefined' sentinel."""

@@ -38,6 +38,16 @@ namespace rawast {
 
 namespace {
 
+// Pretty-save trailing-whitespace trim: record the byte offsets of the
+// STRUCTURAL spaces that `space` attrs emit (emit_post), so Grammar::save
+// can strip only those at end-of-line — never literal whitespace captured
+// inside a Raw/scope/terminal body (e.g. a TCL brace group or quoted
+// string, where trailing spaces are significant). Set for the duration of
+// the top-level pretty render only; `g_trim_buf` pins the one stream whose
+// offsets count, so spaces emitted into a sub-render buffer aren't recorded.
+thread_local std::ostream* g_trim_buf = nullptr;
+thread_local std::vector<std::streamoff>* g_trim_pos = nullptr;
+
 // ---------------------------------------------------------------------------
 // SaveState
 // ---------------------------------------------------------------------------
@@ -1946,7 +1956,14 @@ do_consume(const Grammar& g, std::ostream& out, NodeId node_id,
     };
     auto emit_post = [&](const Node& node) {
         if (!node.tail.empty())            out << node.tail;
-        if (node.space_after)              out << ' ';
+        if (node.space_after) {
+            // Record this structural space's offset so the pretty trim can
+            // strip it at end-of-line without touching literal whitespace.
+            if (pretty && g_trim_pos && &out == g_trim_buf) {
+                g_trim_pos->push_back(out.tellp());
+            }
+            out << ' ';
+        }
         if (pretty && node.newline_after)  out << '\n';
     };
 
@@ -2446,15 +2463,23 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     if (!pretty) {
         return do_consume(*this, out, start, s, 0, pretty);
     }
-    // Pretty: render to a buffer, then strip trailing spaces/tabs from
-    // each line. The save grammar carries `space` attrs for token
-    // separation (round-trip), which leak as trailing whitespace before
-    // a newline / `;` / closer in the indented form. Trailing whitespace
-    // is insignificant on re-parse, so trimming it is round-trip-safe.
+    // Pretty: render to a buffer, then strip the STRUCTURAL spaces that
+    // `space` attrs leak as trailing whitespace before a newline / closer.
+    // Only spaces recorded by emit_post (g_trim_pos) are removed — literal
+    // whitespace captured inside a Raw/scope/terminal body (e.g. a TCL brace
+    // group or quoted string) carries no recorded offset and is preserved,
+    // so the round-trip holds for whitespace-significant grammars.
     std::ostringstream buf;
+    std::vector<std::streamoff> struct_spaces;
+    g_trim_buf = &buf;
+    g_trim_pos = &struct_spaces;
     auto r = do_consume(*this, buf, start, s, 0, pretty);
+    g_trim_buf = nullptr;
+    g_trim_pos = nullptr;
     if (!r) return r;
     const std::string text = buf.str();
+    std::unordered_set<std::streamoff> structpos(struct_spaces.begin(),
+                                                 struct_spaces.end());
     std::string trimmed;
     trimmed.reserve(text.size());
     std::size_t line_start = 0;
@@ -2462,7 +2487,9 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
         if (i == text.size() || text[i] == '\n') {
             std::size_t end = i;
             while (end > line_start
-                   && (text[end - 1] == ' ' || text[end - 1] == '\t')) {
+                   && (text[end - 1] == ' ' || text[end - 1] == '\t')
+                   && structpos.count(
+                          static_cast<std::streamoff>(end - 1))) {
                 --end;
             }
             trimmed.append(text, line_start, end - line_start);
