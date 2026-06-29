@@ -50,6 +50,7 @@ add_library(rawast STATIC
     src/parsers.cpp
     src/pool.cpp
     src/frame.cpp
+    src/builder.cpp
     src/grammar.cpp
     src/save_stack.cpp
     src/loader.cpp

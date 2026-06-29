@@ -19,6 +19,7 @@ add_executable(rawast_tests
     test_grammar.cpp
     test_json.cpp
     test_pool.cpp
+    test_builder.cpp
     test_save.cpp
     test_loader.cpp
     test_to_value.cpp
