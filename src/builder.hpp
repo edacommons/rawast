@@ -37,12 +37,24 @@ public:
         std::size_t size;    // emitted count at the top level
     };
 
+    // A snapshot of the values a completed subtree contributed to its parent —
+    // used by the sequence-success cache to replay a frame's emissions on a hit
+    // instead of re-parsing. ValuePtr-based for now (SharedPtrBuilder); a future
+    // arena builder would make Recording opaque/builder-defined.
+    struct EmittedValue { ValuePtr value; bool is_name; };
+    using Recording = std::vector<EmittedValue>;
+
     virtual void value(ValuePtr v, bool is_name) = 0;
     virtual void begin(Container kind) = 0;
     virtual void end() = 0;
 
     virtual Checkpoint checkpoint() const = 0;
     virtual void       rollback(Checkpoint) = 0;
+
+    // Cache support: capture what was emitted to `cp`'s level since `cp`, and
+    // replay it into the current level (the cache-hit path).
+    virtual Recording record_from(Checkpoint cp) const = 0;
+    virtual void       replay(const Recording&) = 0;
 };
 
 // The default builder: reproduces today's shared_ptr<Value> AST exactly. The
@@ -57,13 +69,14 @@ public:
     void end() override;
     Checkpoint checkpoint() const override;
     void       rollback(Checkpoint) override;
+    Recording  record_from(Checkpoint cp) const override;
+    void       replay(const Recording&) override;
 
     // The single accumulated top-level value (after the parse completes).
     ValuePtr result() const;
 
 private:
-    struct EV    { ValuePtr value; bool is_name; };
-    struct Level { Container kind; std::vector<EV> emitted; };
+    struct Level { Container kind; std::vector<EmittedValue> emitted; };
 
     ValuePool&         pool_;
     std::vector<Level> levels_;   // levels_[0] is the root (Container::None)

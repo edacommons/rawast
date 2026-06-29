@@ -90,6 +90,16 @@ void SharedPtrBuilder::rollback(Checkpoint cp) {
     levels_.back().emitted.resize(cp.size);
 }
 
+SharedPtrBuilder::Recording
+SharedPtrBuilder::record_from(Checkpoint cp) const {
+    const auto& lvl = levels_[cp.depth - 1].emitted;
+    return Recording(lvl.begin() + cp.size, lvl.end());
+}
+
+void SharedPtrBuilder::replay(const Recording& rec) {
+    for (const auto& ev : rec) levels_.back().emitted.push_back(ev);
+}
+
 ValuePtr SharedPtrBuilder::result() const {
     if (levels_.front().emitted.empty()) return nullptr;
     return levels_.front().emitted.front().value;

@@ -136,3 +136,25 @@ TEST_CASE("SharedPtrBuilder: Container::None passes children through") {
     CHECK(pick_int(arr->data()[1]) == 2);
     CHECK(pick_int(arr->data()[3]) == 4);
 }
+
+TEST_CASE("SharedPtrBuilder: record/replay reproduces a completed subtree (cache)") {
+    ValuePool pool;
+    SharedPtrBuilder b(pool);
+    b.begin(Container::Array);             // outer array will hold two copies
+    auto cp = b.checkpoint();              // before the subtree
+    b.begin(Container::Dict);              // build a subtree
+    b.value(make_string("k"), true);
+    b.value(make_int(7), false);
+    b.end();                               // dict added to the outer array
+    auto rec = b.record_from(cp);          // cache: snapshot the dict emission
+    b.replay(rec);                         // cache hit: replay -> second copy
+    b.end();
+
+    auto arr = pick_arr(b.result());
+    REQUIRE(arr->data().size() == 2);
+    CHECK(pick_int(pick_dict(arr->data()[0])->data().at("k")) == 7);
+    CHECK(pick_int(pick_dict(arr->data()[1])->data().at("k")) == 7);
+    // replay re-emits the same materialised value (matches the cache, which
+    // replays the recorded ValuePtrs rather than rebuilding).
+    CHECK(arr->data()[0].get() == arr->data()[1].get());
+}
