@@ -1,4 +1,5 @@
 #include "frame.hpp"
+#include "builder.hpp"
 #include <rawast/grammar.hpp>
 #include <rawast/pool.hpp>
 
@@ -86,67 +87,17 @@ bool Frame::step_next() {
 }
 
 void Frame::finish(ValuePool& pool) {
-    switch (container_) {
-    case Container::None:
-        return;
-
-    case Container::Array: {
-        auto arr = std::make_shared<ArrayValue>();
-        auto& data = arr->data();
-        data.reserve(emitted_.size());
-        ValuePtr container_ptr = arr;
-        for (auto& ev : emitted_) {
-            data.push_back(ev.value);
-            pool.register_usage(ev.value, container_ptr);
-        }
-        emitted_.clear();
-        emitted_.push_back({arr, false});
-        return;
-    }
-
-    case Container::Dict: {
-        auto dict = std::make_shared<DictValue>();
-        auto& map = dict->data();
-        ValuePtr container_ptr = dict;
-        std::string current_name;
-        bool have_name = false;
-        for (auto& ev : emitted_) {
-            if (ev.is_name) {
-                auto sv = std::dynamic_pointer_cast<StringValue>(ev.value);
-                if (sv) {
-                    current_name = sv->data();
-                    have_name = true;
-                }
-            } else if (have_name) {
-                // List-append marker: a binding whose name ends in `[]`
-                // is captured into a list at the stripped-name key.
-                // First match creates the list; subsequent matches
-                // append. The `[]` suffix never appears in the output
-                // dict — it's purely a grammar-author signal.
-                if (current_name.size() >= 2
-                    && current_name.compare(current_name.size() - 2, 2, "[]") == 0) {
-                    std::string base = current_name.substr(0, current_name.size() - 2);
-                    auto& slot = map[base];
-                    auto arr = std::dynamic_pointer_cast<ArrayValue>(slot);
-                    if (!arr) {
-                        arr = std::make_shared<ArrayValue>();
-                        slot = arr;
-                        pool.register_usage(arr, container_ptr);
-                    }
-                    arr->data().push_back(ev.value);
-                    pool.register_usage(ev.value, arr);
-                } else {
-                    map[current_name] = ev.value;
-                    pool.register_usage(ev.value, container_ptr);
-                }
-                have_name = false;
-            }
-        }
-        emitted_.clear();
-        emitted_.push_back({dict, false});
-        return;
-    }
-    }
+    if (container_ == Container::None) return;
+    // Materialise the container through the generic Builder seam. The
+    // SharedPtrBuilder reproduces this frame's former inline logic exactly
+    // (array/dict assembly, the `name[]` list-append marker, ValuePool
+    // back-references) — first live use of the builder in the parse path.
+    SharedPtrBuilder b(pool);
+    b.begin(container_);
+    for (auto& ev : emitted_) b.value(ev.value, ev.is_name);
+    b.end();
+    emitted_.clear();
+    emitted_.push_back({b.result(), false});
 }
 
 void Frame::pass_values_to(Frame& parent) {
