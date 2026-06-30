@@ -155,4 +155,8 @@ inline std::shared_ptr<IntValue> as_int(const ValuePtr& v) {
         ? std::static_pointer_cast<IntValue>(v) : nullptr;
 }
 
+// Structural deep equality (type + payload; arrays elementwise; dicts
+// key-ordered). Order-independent for dicts since DictValue is a std::map.
+bool value_equal(const ValuePtr& a, const ValuePtr& b);
+
 } // namespace rawast
