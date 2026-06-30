@@ -75,6 +75,9 @@ public:
     // The single accumulated top-level value (after the parse completes).
     ValuePtr result() const;
 
+    // Open-level count (1 == only the root; >1 means unclosed begins).
+    std::size_t depth() const { return levels_.size(); }
+
 private:
     struct Level { Container kind; std::vector<EmittedValue> emitted; };
 

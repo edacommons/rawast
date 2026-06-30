@@ -1,5 +1,6 @@
 #pragma once
 
+#include "builder.hpp"
 #include <rawast/node.hpp>
 #include <rawast/value.hpp>
 
@@ -58,6 +59,12 @@ public:
     // marks serve different purposes and target different positions.
     bool has_neg_mark() const noexcept { return has_neg_mark_; }
     void set_has_neg_mark(bool v) noexcept { has_neg_mark_ = v; }
+
+    // Shadow-builder checkpoint, taken just before this frame's begin() —
+    // used to record the frame's contribution into the cache (record_from)
+    // and to roll the builder back when the frame is unwound on failure.
+    Builder::Checkpoint builder_cp() const noexcept { return builder_cp_; }
+    void set_builder_cp(Builder::Checkpoint cp) noexcept { builder_cp_ = cp; }
 
     // Force the Frame's is_optional flag on. Used by push_node when a
     // Ref in the resolution chain carried is_optional=true that the
@@ -128,6 +135,7 @@ private:
     std::vector<EmittedValue> emitted_;
     std::size_t cache_size_at_push_ = 0;
     std::size_t start_offset_ = 0;
+    Builder::Checkpoint builder_cp_{};
 };
 
 } // namespace rawast

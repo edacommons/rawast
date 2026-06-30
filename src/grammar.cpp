@@ -1193,6 +1193,21 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // instrumentation site. See docs/debugging.md.
     const bool trace_enabled = std::getenv("RAWAST_TRACE") != nullptr;
 
+    // Shadow-builder validation: when RAWAST_SHADOW_CHECK is set, a parallel
+    // SharedPtrBuilder is driven alongside the authoritative Frame logic and
+    // its result compared to the Frame result at parse end. Off by default
+    // (one env read; no shadow work). The Frame tree stays the real AST.
+    const bool shadow_check = std::getenv("RAWAST_SHADOW_CHECK") != nullptr;
+    // Own throwaway pool: the shadow's register_usage must NOT pollute the
+    // real pool's container back-ref index (which post-parse value search uses).
+    ValuePool shadow_pool;
+    SharedPtrBuilder shadow(shadow_pool);
+    auto shadow_begin = [&](Frame& f) {
+        if (!shadow_check) return;
+        f.set_builder_cp(shadow.checkpoint());
+        shadow.begin(f.container());
+    };
+
     // Profiling mode: enabled via Grammar::profile_enable(). When on,
     // the loop tracks per-Node entry counts, fail counts, wall-clock
     // time spent on the parse stack, and max depth. Results land on
@@ -1313,6 +1328,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         std::size_t start_offset;
         std::size_t end_offset;
         std::vector<Frame::EmittedValue> emitted;
+        Builder::Recording shadow_rec;
     };
     std::vector<CacheEntry> cache;
 
@@ -1447,6 +1463,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!stack.empty()) {
             stack.back().set_cache_size_at_push(cache.size());
             stack.back().set_start_offset(entry_offset);
+            shadow_begin(stack.back());
         }
         if (trace_enabled && !stack.empty()) {
             const auto& f = stack.back();
@@ -1509,6 +1526,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         entry.start_offset = popped.start_offset();
         entry.end_offset = end_offset;
         entry.emitted = popped.emitted();
+        if (shadow_check) entry.shadow_rec = shadow.record_from(popped.builder_cp());
         cache.push_back(std::move(entry));
     };
 
@@ -1590,7 +1608,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 sr.accept();
                 popped.set_has_mark(false);
             }
-            popped.finish(pool);
+            popped.finish(pool); if (shadow_check) shadow.end();
             record_cache_entry(popped);
             if (stack.empty()) {
                 result_value = popped.result();
@@ -1624,6 +1642,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         Frame& parent = stack.back();
         for (const auto& ev : top.emitted) {
             parent.add_value(ev.value, ev.is_name);
+            if (shadow_check) shadow.value(ev.value, ev.is_name);
         }
         // Advance the cursor to where the cached frame ended.
         while (sr.position().bytes < top.end_offset && !sr.eof()) sr.get();
@@ -1666,6 +1685,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             Frame popped = std::move(stack.back());
             stack.pop_back();
+            // Discard the popped frame's shadow contribution — EXCEPT a Repeat,
+            // which terminates gracefully and commits its prior iterations via
+            // finish()+end() below (rolling it back would erase them).
+            if (shadow_check && popped.kind() != NodeKind::Repeat)
+                shadow.rollback(popped.builder_cp());
             if (trace_enabled) {
                 trace("  unwind " + node_label(popped.node_id()));
             }
@@ -1684,6 +1708,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         trace("  retry " + node_label(popped.node_id())
                               + " next-alt");
                     }
+                    shadow_begin(popped);
                     stack.push_back(std::move(popped));
                     return;
                 }
@@ -1747,10 +1772,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // few iterations matched. Propagate the failure further up
                 // so an enclosing Choice/optional can react.
                 if (popped.iter_count() < popped.min()) {
+                    if (shadow_check) shadow.rollback(popped.builder_cp());
                     continue;
                 }
                 // Iteration ended -- accept what we collected so far.
-                popped.finish(pool);
+                popped.finish(pool); if (shadow_check) shadow.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
@@ -1857,6 +1883,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             produced = pool.intern(produced);
             top.add_value(produced, top.is_name());
+            if (shadow_check) shadow.value(produced, top.is_name());
             if (top.has_current()) {
                 push_or_skip_optional(top.current_child());
             } else {
@@ -1871,7 +1898,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     sr.accept();
                     popped.set_has_mark(false);
                 }
-                popped.finish(pool);
+                popped.finish(pool); if (shadow_check) shadow.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
@@ -1958,6 +1985,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             produced = pool.intern(produced);
             top.add_value(produced, top.is_name());
+            if (shadow_check) shadow.value(produced, top.is_name());
             // Scope is a terminal in the Frame model — its start /
             // INNER / stop are consumed atomically by walk_scan,
             // never as Frame-iteration children. Always pop here
@@ -1970,7 +1998,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     sr.accept();
                     popped.set_has_mark(false);
                 }
-                popped.finish(pool);
+                popped.finish(pool); if (shadow_check) shadow.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
@@ -2040,7 +2068,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         sr.accept();
                         popped.set_has_mark(false);
                     }
-                    popped.finish(pool);
+                    popped.finish(pool); if (shadow_check) shadow.end();
                     record_cache_entry(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
@@ -2128,6 +2156,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // ValuePtr across the entire parse.
                 ValuePtr canonical = pool.intern(produced);
                 top.add_value(canonical, top.is_name());
+                if (shadow_check) shadow.value(canonical, top.is_name());
                 if (top.has_current()) {
                     push_or_skip_optional(top.current_child());
                 } else {
@@ -2139,7 +2168,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         sr.accept();
                         popped.set_has_mark(false);
                     }
-                    popped.finish(pool);
+                    popped.finish(pool); if (shadow_check) shadow.end();
                     record_cache_entry(popped);
                     if (stack.empty()) {
                         result_value = popped.result();
@@ -2160,7 +2189,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // constant (honouring is_name). Just pop and bubble up.
             Frame popped = std::move(stack.back());
             stack.pop_back();
-            popped.finish(pool);
+            popped.finish(pool); if (shadow_check) shadow.end();
             record_cache_entry(popped);
             if (stack.empty()) {
                 result_value = popped.result();
@@ -2206,7 +2235,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish(pool);
+                popped.finish(pool); if (shadow_check) shadow.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
@@ -2239,7 +2268,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish(pool);
+                popped.finish(pool); if (shadow_check) shadow.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
@@ -2259,7 +2288,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish(pool);
+                popped.finish(pool); if (shadow_check) shadow.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
                     result_value = popped.result();
@@ -2305,6 +2334,28 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
     }
 
+    if (parse_finished && shadow_check) {
+        ValuePtr shadow_result = shadow.result();
+        if (!value_equal(shadow_result, result_value)) {
+            auto shape = [](const ValuePtr& v) -> std::string {
+                if (!v) return "nullptr";
+                switch (v->type()) {
+                case ValueType::Array:
+                    return "arr[" + std::to_string(
+                        static_cast<const ArrayValue&>(*v).data().size()) + "]";
+                case ValueType::Dict:
+                    return "dict{" + std::to_string(
+                        static_cast<const DictValue&>(*v).data().size()) + "}";
+                case ValueType::String: return "str";
+                case ValueType::Int: return "int";
+                default: return "scalar";
+                }
+            };
+            std::fprintf(stderr, "diverged start=%u depth=%zu shadow=%s frame=%s\n",
+                start.value(), shadow.depth(), shape(shadow_result).c_str(),
+                shape(result_value).c_str());
+        }
+    }
     if (parse_finished) {
         // Start rule produced a complete value. For top-level / subparse
         // callers we require the rest of the stream (modulo trailing

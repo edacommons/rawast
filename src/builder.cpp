@@ -2,24 +2,36 @@
 
 #include <rawast/pool.hpp>
 
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
 namespace rawast {
+
+static const bool g_strace = std::getenv("RAWAST_SHADOW_TRACE") != nullptr;
 
 SharedPtrBuilder::SharedPtrBuilder(ValuePool& pool) : pool_(pool) {
     levels_.push_back({Container::None, {}});   // root
 }
 
 void SharedPtrBuilder::value(ValuePtr v, bool is_name) {
+    if (g_strace) std::fprintf(stderr, "  shadow VALUE depth=%zu name=%d\n",
+                               levels_.size(), is_name);
     levels_.back().emitted.push_back({std::move(v), is_name});
 }
 
 void SharedPtrBuilder::begin(Container kind) {
+    if (g_strace) std::fprintf(stderr, "  shadow BEGIN(%d) -> depth=%zu\n",
+                               static_cast<int>(kind), levels_.size() + 1);
     levels_.push_back({kind, {}});
 }
 
 void SharedPtrBuilder::end() {
+    if (g_strace) std::fprintf(stderr, "  shadow END depth=%zu size=%zu\n",
+                               levels_.size(),
+                               levels_.empty() ? 0 : levels_.back().emitted.size());
+    if (levels_.size() < 2) return;   // desync guard (no open container)
     Level lvl = std::move(levels_.back());
     levels_.pop_back();
     auto& parent = levels_.back().emitted;
@@ -86,13 +98,19 @@ Builder::Checkpoint SharedPtrBuilder::checkpoint() const {
 }
 
 void SharedPtrBuilder::rollback(Checkpoint cp) {
-    while (levels_.size() > cp.depth) levels_.pop_back();
-    levels_.back().emitted.resize(cp.size);
+    if (g_strace) std::fprintf(stderr, "  shadow ROLLBACK to depth=%zu size=%zu (from depth=%zu)\n",
+                               cp.depth, cp.size, levels_.size());
+    std::size_t depth = cp.depth < 1 ? 1 : cp.depth;   // never drop the root
+    while (levels_.size() > depth) levels_.pop_back();
+    auto& emitted = levels_.back().emitted;
+    if (cp.size <= emitted.size()) emitted.resize(cp.size);
 }
 
 SharedPtrBuilder::Recording
 SharedPtrBuilder::record_from(Checkpoint cp) const {
+    if (cp.depth < 1 || cp.depth > levels_.size()) return {};   // desync guard
     const auto& lvl = levels_[cp.depth - 1].emitted;
+    if (cp.size > lvl.size()) return {};
     return Recording(lvl.begin() + cp.size, lvl.end());
 }
 
