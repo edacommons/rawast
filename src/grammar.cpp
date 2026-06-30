@@ -25,6 +25,63 @@
 
 namespace rawast {
 
+// Debug aid for RAWAST_SHADOW_CHECK: print the path to the first leaf where the
+// shadow builder's result diverges from the authoritative Frame result.
+static void shadow_first_diff(const ValuePtr& s, const ValuePtr& f,
+                              const std::string& path) {
+    auto kind = [](const ValuePtr& v) -> const char* {
+        if (!v) return "nullptr";
+        switch (v->type()) {
+        case ValueType::Null: return "null"; case ValueType::Undefined: return "undef";
+        case ValueType::Bool: return "bool"; case ValueType::Int: return "int";
+        case ValueType::UInt: return "uint"; case ValueType::Real: return "real";
+        case ValueType::String: return "str"; case ValueType::Array: return "arr";
+        case ValueType::Dict: return "dict";
+        }
+        return "?";
+    };
+    const char* p = path.empty() ? "(root)" : path.c_str();
+    if (!s || !f || s->type() != f->type()) {
+        std::fprintf(stderr, "    DIFF %s: shadow=%s frame=%s\n", p, kind(s), kind(f));
+        return;
+    }
+    if (s->type() == ValueType::Array) {
+        const auto& sa = static_cast<const ArrayValue&>(*s).data();
+        const auto& fa = static_cast<const ArrayValue&>(*f).data();
+        if (sa.size() != fa.size()) {
+            std::fprintf(stderr, "    DIFF %s: arr size shadow=%zu frame=%zu\n",
+                         p, sa.size(), fa.size());
+            return;
+        }
+        for (std::size_t i = 0; i < fa.size(); ++i)
+            if (!value_equal(sa[i], fa[i])) {
+                shadow_first_diff(sa[i], fa[i], path + "[" + std::to_string(i) + "]");
+                return;
+            }
+    } else if (s->type() == ValueType::Dict) {
+        const auto& sm = static_cast<const DictValue&>(*s).data();
+        const auto& fm = static_cast<const DictValue&>(*f).data();
+        for (const auto& kv : fm) {
+            auto it = sm.find(kv.first);
+            if (it == sm.end()) {
+                std::fprintf(stderr, "    DIFF %s.%s: MISSING in shadow\n", p, kv.first.c_str());
+                return;
+            }
+            if (!value_equal(it->second, kv.second)) {
+                shadow_first_diff(it->second, kv.second, path + "." + kv.first);
+                return;
+            }
+        }
+        for (const auto& kv : sm)
+            if (fm.find(kv.first) == fm.end()) {
+                std::fprintf(stderr, "    DIFF %s.%s: EXTRA in shadow\n", p, kv.first.c_str());
+                return;
+            }
+    } else {
+        std::fprintf(stderr, "    DIFF %s: scalar %s differs\n", p, kind(s));
+    }
+}
+
 // -------------------------------------------------------------------------
 // Node allocation and builders
 // -------------------------------------------------------------------------
@@ -1206,6 +1263,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!shadow_check) return;
         f.set_builder_cp(shadow.checkpoint());
         shadow.begin(f.container());
+        // Value-kind frames pre-seed emitted_ with their grammar constant in
+        // the ctor (bypassing add_value); mirror that into the shadow level.
+        for (const auto& ev : f.emitted())
+            shadow.value(ev.value, ev.is_name);
     };
 
     // Profiling mode: enabled via Grammar::profile_enable(). When on,
@@ -1590,6 +1651,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // value to emit because the lookahead's semantic outcome is
             // "no", not "yes with empty payload."
             if (popped.is_negative()) {
+                if (shadow_check) shadow.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -1831,6 +1893,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 if (r) sr.accept(); else sr.reject();
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
+                if (shadow_check) shadow.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -1930,6 +1993,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 if (r) sr.accept(); else sr.reject();
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
+                if (shadow_check) shadow.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -2031,6 +2095,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (top.is_negative()) {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
+                if (shadow_check) shadow.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -2101,6 +2166,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (top.is_negative()) {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
+                if (shadow_check) shadow.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -2354,6 +2420,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             std::fprintf(stderr, "diverged start=%u depth=%zu shadow=%s frame=%s\n",
                 start.value(), shadow.depth(), shape(shadow_result).c_str(),
                 shape(result_value).c_str());
+            shadow_first_diff(shadow_result, result_value, "");
         }
     }
     if (parse_finished) {
