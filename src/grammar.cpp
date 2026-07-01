@@ -2417,9 +2417,9 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 default: return "scalar";
                 }
             };
-            std::fprintf(stderr, "diverged start=%u depth=%zu shadow=%s frame=%s\n",
-                start.value(), shadow.depth(), shape(shadow_result).c_str(),
-                shape(result_value).c_str());
+            std::fprintf(stderr, "diverged start=%zu depth=%zu shadow=%s frame=%s\n",
+                static_cast<std::size_t>(start.value()), shadow.depth(),
+                shape(shadow_result).c_str(), shape(result_value).c_str());
             shadow_first_diff(shadow_result, result_value, "");
         }
     }

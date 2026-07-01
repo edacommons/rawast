@@ -81,7 +81,6 @@ public:
 private:
     struct Level { Container kind; std::vector<EmittedValue> emitted; };
 
-    ValuePool&         pool_;
     std::vector<Level> levels_;   // levels_[0] is the root (Container::None)
 };
 

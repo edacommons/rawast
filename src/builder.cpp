@@ -11,7 +11,7 @@ namespace rawast {
 
 static const bool g_strace = std::getenv("RAWAST_SHADOW_TRACE") != nullptr;
 
-SharedPtrBuilder::SharedPtrBuilder(ValuePool& pool) : pool_(pool) {
+SharedPtrBuilder::SharedPtrBuilder(ValuePool&) {
     levels_.push_back({Container::None, {}});   // root
 }
 
@@ -46,11 +46,7 @@ void SharedPtrBuilder::end() {
         auto arr = std::make_shared<ArrayValue>();
         auto& data = arr->data();
         data.reserve(lvl.emitted.size());
-        ValuePtr container_ptr = arr;
-        for (auto& ev : lvl.emitted) {
-            data.push_back(ev.value);
-            pool_.register_usage(ev.value, container_ptr);
-        }
+        for (auto& ev : lvl.emitted) data.push_back(ev.value);
         parent.push_back({arr, false});
         return;
     }
@@ -58,7 +54,6 @@ void SharedPtrBuilder::end() {
     case Container::Dict: {
         auto dict = std::make_shared<DictValue>();
         auto& map = dict->data();
-        ValuePtr container_ptr = dict;
         std::string current_name;
         bool have_name = false;
         for (auto& ev : lvl.emitted) {
@@ -76,13 +71,10 @@ void SharedPtrBuilder::end() {
                     if (!arr) {
                         arr = std::make_shared<ArrayValue>();
                         slot = arr;
-                        pool_.register_usage(arr, container_ptr);
                     }
                     arr->data().push_back(ev.value);
-                    pool_.register_usage(ev.value, arr);
                 } else {
                     map[current_name] = ev.value;
-                    pool_.register_usage(ev.value, container_ptr);
                 }
                 have_name = false;
             }

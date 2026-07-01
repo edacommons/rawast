@@ -145,21 +145,10 @@ TEST_CASE("Grammar::parse interns repeated int values across an array") {
     CHECK(pool.size() == 3);
 }
 
-TEST_CASE("Grammar::parse populates back-references via the pool") {
-    auto g = make_json_grammar();
-    ValuePool pool;
-    auto stream = Stream::from_string(R"({"a": "clk", "b": "clk"})");
-    auto r = g.parse(stream, pool);
-    REQUIRE(r);
-
-    // Find every container that holds the "clk" string.
-    auto clk = pool.intern_string("clk");
-    auto refs = pool.find_containers_of(clk);
-    // Both "a" and "b" entries refer to the same canonical "clk", and the
-    // top-level dict registered each usage separately, so we expect two
-    // back-refs even though the container is the same dict.
-    CHECK(refs.size() == 2);
-}
+// NOTE: parse no longer auto-populates container back-references —
+// register_usage was removed from Frame::finish (per-child overhead on every
+// parse that nothing read). find_containers_of remains as a manual mechanism,
+// covered by the register_usage TEST_CASEs above.
 
 TEST_CASE("Grammar::parse — pool reports unique primitive count") {
     auto g = make_json_grammar();

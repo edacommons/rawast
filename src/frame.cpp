@@ -86,7 +86,7 @@ bool Frame::step_next() {
     return true;
 }
 
-void Frame::finish(ValuePool& pool) {
+void Frame::finish(ValuePool&) {
     switch (container_) {
     case Container::None:
         return;
@@ -95,11 +95,7 @@ void Frame::finish(ValuePool& pool) {
         auto arr = std::make_shared<ArrayValue>();
         auto& data = arr->data();
         data.reserve(emitted_.size());
-        ValuePtr container_ptr = arr;
-        for (auto& ev : emitted_) {
-            data.push_back(ev.value);
-            pool.register_usage(ev.value, container_ptr);
-        }
+        for (auto& ev : emitted_) data.push_back(ev.value);
         emitted_.clear();
         emitted_.push_back({arr, false});
         return;
@@ -108,7 +104,6 @@ void Frame::finish(ValuePool& pool) {
     case Container::Dict: {
         auto dict = std::make_shared<DictValue>();
         auto& map = dict->data();
-        ValuePtr container_ptr = dict;
         std::string current_name;
         bool have_name = false;
         for (auto& ev : emitted_) {
@@ -127,13 +122,10 @@ void Frame::finish(ValuePool& pool) {
                     if (!arr) {
                         arr = std::make_shared<ArrayValue>();
                         slot = arr;
-                        pool.register_usage(arr, container_ptr);
                     }
                     arr->data().push_back(ev.value);
-                    pool.register_usage(ev.value, arr);
                 } else {
                     map[current_name] = ev.value;
-                    pool.register_usage(ev.value, container_ptr);
                 }
                 have_name = false;
             }
