@@ -2268,3 +2268,34 @@ def test_sv_keywords_never_parse_as_module_names(sv_grammar):
     assert b == a, f"reparse diverged: {out!r}"
     then = a["descriptions"][0]["items"][0]["then"]
     assert then["type"] == "gen_block"
+
+
+def test_sv_class_property_lifetime_spacing_saves(sv_grammar):
+    """`static` lifetime on class properties saved fused (`staticint x`,
+    `staticpkg::reg_t x`). Found via the broad SV round-trip sweep
+    (riscv_csr_instr.sv)."""
+    for src in ["class c;\n  static int x;\nendclass\n",
+                "class c;\n  static pkg::reg_t x;\nendclass\n"]:
+        a = sv_grammar.parse_string(src)
+        out = sv_grammar.save(a).decode("utf-8")
+        assert "staticint" not in out and "staticpkg" not in out, out
+        assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_param_forms_preserve_keyword(sv_grammar):
+    """Bare (`int W = 4`) and keyworded (`parameter int W = 4`) param decls
+    produce distinguishable ASTs (is_kw on the keyworded form) so save
+    re-emits the original surface form. Previously both collapsed to one
+    dict and save always emitted the keyword — for builtin types the
+    keyworded text reparses down the plain-param route (AST shape flip).
+    Found via the broad SV round-trip sweep (mem_model.sv)."""
+    for src, expect in [
+        ("class c #(int W = 4);\nendclass\n", "int W = 4"),
+        ("class c #(parameter int W = 4);\nendclass\n", "parameter int W = 4"),
+        ("class c #(foo_t W = 4);\nendclass\n", "foo_t W = 4"),
+        ("class c #(parameter foo_t W = 4);\nendclass\n", "parameter foo_t W = 4"),
+    ]:
+        a = sv_grammar.parse_string(src)
+        out = sv_grammar.save(a).decode("utf-8")
+        assert expect in out, f"{expect!r} not in {out!r}"
+        assert sv_grammar.parse_string(out) == a

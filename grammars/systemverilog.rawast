@@ -267,9 +267,9 @@ PARAM_DECL_OR_LOCAL: choice {
 //
 // Reference: Verilator verilog.y `paramPortDecl` shape.
 PARAM_DECL_USERTYPE_BARE: sequence dict {
-  sv_qualified_type:type_spec=@:type="param_usertype",
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  sv_qualified_type:type_spec=@:type="param_usertype" space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<UNPACKED_DIMENSIONS>:unpacked=@,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
@@ -337,8 +337,13 @@ PARAM_DECL_UNTYPED: sequence dict {
 // identifiers and package-qualified forms (`pkg::TypeName`) in one
 // match, collapsing what previously needed two parallel grammar
 // rules.
+// `is_kw=true` records the explicit `parameter` keyword: the bare form
+// (`foo_t W = 4`, PARAM_DECL_USERTYPE_BARE below) produces an otherwise
+// IDENTICAL dict, and save must know which surface form to emit — the
+// keyworded emission of a bare-parsed builtin (`parameter int W`)
+// reparses down the builtin-param route and flips the AST shape.
 PARAM_DECL_USERTYPE: sequence dict {
-  'parameter':@:type="param_usertype" space,
+  'parameter':is_kw=true:type="param_usertype" space,
   sv_qualified_type:type_spec=@ space,
   ?<PARAM_OVERRIDE>:type_params=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
@@ -1819,7 +1824,7 @@ LOCAL_VAR_DECL: choice {
 }
 
 LOCAL_VAR_DECL_BUILTIN: sequence dict {
-  ?<LIFETIME>:lifetime=@,
+  ?<LIFETIME>:lifetime=@ space,
   <TYPE_SPEC>:type_spec=@:type="local_var_decl",
   ?<SIGNING_KW>:signing=@,
   ?<PACKED_DIMENSIONS>:range=@,
@@ -1841,7 +1846,7 @@ LOCAL_VAR_DECL_BUILTIN: sequence dict {
 // repeat-over-BLOCK_ITEM would consume the closing `end` instead
 // of bailing out. See SV_RESERVED comment above.
 LOCAL_VAR_DECL_USER: sequence dict {
-  ?<LIFETIME>:lifetime=@,
+  ?<LIFETIME>:lifetime=@ space,
   !<SV_RESERVED>,
   sv_identifier:type_spec=@:type="local_var_decl_user",
   sv_identifier:name=@,
@@ -3249,7 +3254,7 @@ PACKAGE_DECL: sequence dict {
 INTERFACE_CLASS_DECL: sequence dict {
   'interface':type="interface_class" space,
   'class':@ space,
-  ?<LIFETIME>:lifetime=@,
+  ?<LIFETIME>:lifetime=@ space,
   sv_identifier:name=@,
   ?<PARAM_PORT_LIST>:params=@,
   ?<CLASS_EXTENDS>:extends=@,
@@ -3521,7 +3526,7 @@ CLASS_CONSTRAINT_EXTERN: sequence dict {
 // <TYPE> name [array_kind_suffix] [= expr];`
 CLASS_PROPERTY: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@ space,
-  ?<LIFETIME>:lifetime=@,
+  ?<LIFETIME>:lifetime=@ space,
   ?'const':is_const=true space,
   ?'var':is_var=true space,
   ?<RAND_QUAL>:rand=@ space,
@@ -3546,7 +3551,7 @@ CLASS_PROPERTY: sequence dict {
 // list, matching how most production code writes these decls.
 CLASS_USER_PROPERTY: sequence dict {
   ?<CLASS_VISIBILITY>:visibility=@ space,
-  ?<LIFETIME>:lifetime=@,
+  ?<LIFETIME>:lifetime=@ space,
   ?'const':is_const=true space,
   ?'virtual':is_virtual=true space,
   ?<RAND_QUAL>:rand=@ space,
