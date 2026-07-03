@@ -85,10 +85,13 @@ TEST_CASE("sv: identifier — unparse round-trip") {
     auto u1 = p.unparse(*make_string("clk"));
     REQUIRE(u1);
     CHECK(*u1 == "clk");
-    // System task: also round-trips as-is.
+    // `$`-leading: ALWAYS escaped. System task/function names are
+    // sv_system_name's domain; a `$`-leading value at an sv_identifier
+    // position can only be an escaped identifier (`\$display `), and
+    // emitting it bare would re-tokenize as a system name on reparse.
     auto u2 = p.unparse(*make_string("$display"));
     REQUIRE(u2);
-    CHECK(*u2 == "$display");
+    CHECK(*u2 == "\\$display ");
     // A name with chars that aren't simple-id valid → escape form
     // with trailing space.
     auto u3 = p.unparse(*make_string("foo.bar"));
@@ -104,6 +107,12 @@ TEST_CASE("sv: identifier — unparse round-trip") {
     auto u5 = p.unparse(*make_string("$paramod\\reg\\BITS=32"));
     REQUIRE(u5);
     CHECK(*u5 == "\\$paramod\\reg\\BITS=32 ");
+    // System-name SHAPE but at an identifier position (Yosys
+    // `\$signal$263`) — still escaped; bare emit would flip the
+    // surrounding expression's Choice from REF to SYSTEM_FUNC.
+    auto u6 = p.unparse(*make_string("$signal$263"));
+    REQUIRE(u6);
+    CHECK(*u6 == "\\$signal$263 ");
 }
 
 // ============================================================

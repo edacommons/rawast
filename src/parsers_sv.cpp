@@ -134,19 +134,14 @@ SaveResult SvIdentifierParser::unparse(const Value& value) const {
         return tl::unexpected(SaveError{
             "SvIdentifierParser::unparse: empty identifier"});
     }
-    // `$`-prefixed: emit as-is only when it forms a valid system
-    // task/function name (`$` + simple identifier) — the shape walk()
-    // accepts on the `$` path. Escaped identifiers may also begin with
-    // `$` (Yosys netlists emit `\$1`, `\$paramod\...`; the backslash is
-    // stripped at parse) — those must take the escaped form below, or
-    // the emitted text reads as a malformed system name.
-    if (s[0] == '$' && s.size() >= 2 && is_simple_id_start(s[1])) {
-        bool valid_system_name = true;
-        for (std::size_t i = 2; i < s.size(); ++i) {
-            if (!is_simple_id_cont(s[i])) { valid_system_name = false; break; }
-        }
-        if (valid_system_name) return s;
-    }
+    // `$`-leading values always take the escaped form. System task/
+    // function names are the separate sv_system_name parser's domain;
+    // a `$`-leading value at an sv_identifier position can only have
+    // come from an escaped identifier (Yosys emits `\$1`,
+    // `\$paramod\...`, `\$signal$263`; the backslash is stripped at
+    // parse). Emitting it bare re-tokenizes as a system name on
+    // reparse — a Choice in expression position then dispatches to
+    // SYSTEM_FUNC instead of REF and the AST shape changes.
     // Detect whether it needs the escaped form: any char that isn't
     // a simple-id char triggers escape. Simple-id rule: first must be
     // letter/`_`, rest must be alnum/`_`/`$`.
