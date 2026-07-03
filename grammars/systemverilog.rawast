@@ -1359,7 +1359,19 @@ GATE_INSTANCE: sequence dict {
   "(", repeat+ <EXPR>:terminals[]=@ separator "," space, ")"
 }
 
+// Structural keywords that can never be a module name in instantiation
+// position. Without this guard, `begin `A(x,clk); end` misparses as an
+// instantiation of a module literally named `begin` (with the macro as
+// the instance) whenever the block alternative is still in play — seen
+// on reparse of saved macro statements inside generate-if blocks.
+RESERVED_NOT_INSTANCE: choice {
+  'begin', 'end', 'else',
+  'endmodule', 'endinterface', 'endpackage', 'endgenerate',
+  'endcase', 'endtask', 'endfunction'
+}
+
 MODULE_INSTANTIATION: sequence dict {
+  !<RESERVED_NOT_INSTANCE>,
   <IDENT_OR_MACRO>:module_name=@:type="instance" space,
   ?<PARAM_OVERRIDE>:params=@ space,
   repeat+ <INSTANCE>:instances[]=@ separator "," space,

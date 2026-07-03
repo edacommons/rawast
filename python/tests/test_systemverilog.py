@@ -2248,3 +2248,23 @@ def test_sv_const_ref_direction_spacing_saves(sv_grammar):
     out = sv_grammar.save(a).decode("utf-8")
     assert "constref" not in out, f"const/ref fused in: {out!r}"
     assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_keywords_never_parse_as_module_names(sv_grammar):
+    """`begin \`A(x,clk); end` must stay a generate/gen block on reparse —
+    without a keyword guard MODULE_INSTANTIATION accepted `begin`/`end` as
+    module names, flipping a saved macro-in-generate-if into an instance of
+    a module literally named `begin`. Found via the broad SV round-trip
+    sweep (ibex_icache_ram_if.sv)."""
+    src = ("interface i;\n"
+           "if (X) begin\n"
+           "  `A(x, clk)\n"
+           "end\n"
+           "`B(y, clk)\n"
+           "endinterface\n")
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a).decode("utf-8")
+    b = sv_grammar.parse_string(out)
+    assert b == a, f"reparse diverged: {out!r}"
+    then = a["descriptions"][0]["items"][0]["then"]
+    assert then["type"] == "gen_block"
