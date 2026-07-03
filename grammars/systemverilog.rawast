@@ -628,7 +628,7 @@ PORT_DIRECTION: choice {
 }
 
 CONST_REF_DIR: sequence dict {
-  'const':@:type="const_ref",
+  'const':@:type="const_ref" space,
   'ref'
 }
 

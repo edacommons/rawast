@@ -2234,3 +2234,17 @@ def test_sv_delay_and_event_stmt_spacing_saves(sv_grammar):
         out = sv_grammar.save(a).decode("utf-8")
         assert merged not in out, f"control glue {merged!r} in: {out!r}"
         assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_const_ref_direction_spacing_saves(sv_grammar):
+    """`const ref` function-port direction saved fused (`constref`). Found
+    via the broad SV round-trip sweep (lowRISC dv_utils_pkg.sv)."""
+    src = ("package p;\n"
+           "  function automatic int max(const ref int q[$]);\n"
+           "    return q[0];\n"
+           "  endfunction\n"
+           "endpackage\n")
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a).decode("utf-8")
+    assert "constref" not in out, f"const/ref fused in: {out!r}"
+    assert sv_grammar.parse_string(out) == a
