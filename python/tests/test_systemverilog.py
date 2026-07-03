@@ -2218,3 +2218,19 @@ def test_sv_directive_argument_spacing_saves(sv_grammar):
     for merged in ("`ifdefFOO", "`ifndefBAR", "`undefFOO", '`include"'):
         assert merged not in out, f"directive glue {merged!r} in: {out!r}"
     assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_delay_and_event_stmt_spacing_saves(sv_grammar):
+    """A delay/event control must emit a space before its statement:
+    `#T x = 1;` fused to `#Tx = 1;` (identifier delay swallows the LHS) and
+    `@e x = 1;` to `@ex = 1;`. Found via the broad SV round-trip sweep
+    (serv/bench/uart_decoder.v)."""
+    for src, merged in [
+        ("module m;\n  initial #T x = 1;\nendmodule\n", "#Tx"),
+        ("module m;\n  initial #5 x = 1;\nendmodule\n", "#5x"),
+        ("module m;\n  initial @e x = 1;\nendmodule\n", "@ex"),
+    ]:
+        a = sv_grammar.parse_string(src)
+        out = sv_grammar.save(a).decode("utf-8")
+        assert merged not in out, f"control glue {merged!r} in: {out!r}"
+        assert sv_grammar.parse_string(out) == a

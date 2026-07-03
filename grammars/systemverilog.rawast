@@ -2122,12 +2122,12 @@ DELAY_OR_EVENT_STMT: choice {
 }
 
 EVENT_STMT: sequence dict {
-  <EVENT_CONTROL>:control=@:type="event_stmt",
+  <EVENT_CONTROL>:control=@:type="event_stmt" space,
   <STATEMENT>:body=@
 }
 
 DELAY_STMT: sequence dict {
-  <DELAY>:control=@:type="delay_stmt",
+  <DELAY>:control=@:type="delay_stmt" space,
   <STATEMENT>:body=@
 }
 
