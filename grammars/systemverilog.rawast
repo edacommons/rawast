@@ -3186,11 +3186,11 @@ DEFINE ignore: sequence dict {
 }
 
 UNDEF: sequence dict {
-  "`undef", sv_identifier:name=@:type="undef"
+  "`undef" space, sv_identifier:name=@:type="undef"
 }
 
 INCLUDE: sequence dict {
-  "`include",
+  "`include" space,
   string:file=@:type="include"
 }
 
@@ -3200,14 +3200,14 @@ INCLUDE: sequence dict {
 // branch. Nested `` `ifdef `` is opaque — host's preprocessor
 // handles nesting.
 IFDEF: sequence dict {
-  "`ifdef",
+  "`ifdef" space,
   sv_identifier:cond=@:type="ifdef",
   *:body=@,
   "`endif"
 }
 
 IFNDEF: sequence dict {
-  "`ifndef",
+  "`ifndef" space,
   sv_identifier:cond=@:type="ifndef",
   *:body=@,
   "`endif"

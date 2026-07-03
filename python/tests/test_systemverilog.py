@@ -2174,3 +2174,47 @@ def test_sv_unnamed_gate_primitives(sv_grammar):
     ]:
         ast = sv_grammar.parse_string(src)
         assert sv_grammar.parse_string(sv_grammar.save(ast).decode("utf-8")) == ast
+
+
+def test_sv_escaped_identifier_save_round_trips(sv_grammar):
+    """Escaped identifiers (IEEE 1800-2017 §5.6.1) parse with the backslash
+    stripped, so a stored name like `$1` or `$paramod\\reg\\W=8` is NOT a
+    system task name and must save back in escaped form (`\\name `). Yosys
+    gate-level netlists emit such names for every synthesized cell; the
+    save-side `$` fast path previously emitted them bare, producing invalid
+    SV. Found via the broad SV round-trip sweep (register_bank_top.v,
+    multiplier.v)."""
+    src = ("module t;\n"
+           "  wire \\$1 ;\n"
+           "  assign \\$1 = 1;\n"
+           "endmodule\n")
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a).decode("utf-8")
+    assert "\\$1 " in out, f"escaped form lost: {out!r}"
+    assert sv_grammar.parse_string(out) == a
+    # A real system name still saves bare (canonical form for `\$display `
+    # too — both reparse to the identical AST).
+    src2 = 'module t;\n  initial $display("x");\nendmodule\n'
+    a2 = sv_grammar.parse_string(src2)
+    out2 = sv_grammar.save(a2).decode("utf-8")
+    assert "$display" in out2 and "\\$display" not in out2
+    assert sv_grammar.parse_string(out2) == a2
+
+
+def test_sv_directive_argument_spacing_saves(sv_grammar):
+    """`undef/`include/`ifdef/`ifndef must emit a space before their
+    argument. The lenient reparse accepts `ifdefFOO (prefix literal +
+    identifier), so plain round-trip stays green — but the emitted text is
+    a different token stream for a real SV tool. Assert on the saved TEXT.
+    Found via the broad SV round-trip sweep (generate.v)."""
+    src = ("module t;\n"
+           "`ifdef FOO\n  wire y;\n`endif\n"
+           "`ifndef BAR\n  wire z;\n`endif\n"
+           "`undef FOO\n"
+           '`include "foo.svh"\n'
+           "  wire x;\nendmodule\n")
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a).decode("utf-8")
+    for merged in ("`ifdefFOO", "`ifndefBAR", "`undefFOO", '`include"'):
+        assert merged not in out, f"directive glue {merged!r} in: {out!r}"
+    assert sv_grammar.parse_string(out) == a
