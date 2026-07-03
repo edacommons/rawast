@@ -94,6 +94,16 @@ TEST_CASE("sv: identifier — unparse round-trip") {
     auto u3 = p.unparse(*make_string("foo.bar"));
     REQUIRE(u3);
     CHECK(*u3 == "\\foo.bar ");
+    // `$`-prefixed but NOT a valid system name (Yosys emits `\$1`,
+    // `\$paramod\...` escaped identifiers, stored without the
+    // backslash) → must take the escaped form, not the system-name
+    // fast path.
+    auto u4 = p.unparse(*make_string("$1"));
+    REQUIRE(u4);
+    CHECK(*u4 == "\\$1 ");
+    auto u5 = p.unparse(*make_string("$paramod\\reg\\BITS=32"));
+    REQUIRE(u5);
+    CHECK(*u5 == "\\$paramod\\reg\\BITS=32 ");
 }
 
 // ============================================================
