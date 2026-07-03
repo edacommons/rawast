@@ -2299,3 +2299,22 @@ def test_sv_param_forms_preserve_keyword(sv_grammar):
         out = sv_grammar.save(a).decode("utf-8")
         assert expect in out, f"{expect!r} not in {out!r}"
         assert sv_grammar.parse_string(out) == a
+
+
+def test_sv_assert_action_saves_all_shapes(sv_grammar):
+    """ASSERT_ACTION as a Choice of pass-else/else/pass shapes lost the
+    pass statement on save ({pass,fail} dispatched to the else-only alt).
+    Now one sequence with two optionals — field-presence emission. All
+    four shapes + the if/assert dangling-else must round-trip. Found via
+    the broad SV round-trip sweep (slang case.sv)."""
+    for src in [
+        "module m;\nalways @(*) begin\n  assert(x === 0);\nend\nendmodule\n",
+        "module m;\nalways @(*) begin\n  assert(x) y = 1;\nend\nendmodule\n",
+        "module m;\nalways @(*) begin\n  assert(x) else z = 1;\nend\nendmodule\n",
+        "module m;\nalways @(*) begin\n  assert(x) y = 1; else z = 1;\nend\nendmodule\n",
+        ("module m;\nalways @(*) begin\n  if (a)\n    assert(x === 0);\n"
+         "  else\n    assert(x === 1);\nend\nendmodule\n"),
+    ]:
+        a = sv_grammar.parse_string(src)
+        out = sv_grammar.save(a).decode("utf-8")
+        assert sv_grammar.parse_string(out) == a, f"RT broke for: {src!r} -> {out!r}"

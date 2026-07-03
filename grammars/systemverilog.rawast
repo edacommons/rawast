@@ -3868,29 +3868,22 @@ ASSERT_BODY: choice {
   sequence { sv_balanced_arg:body=@, ")" }
 }
 
-// `action_block`. The `pass else fail` alt is tried first to
-// capture the explicit pass-then-fail form; `else fail` matches
-// the common `assert (…) else $error(…);` shape; the bare-stmt
-// alt covers `assert (…);` (NULL_STMT) and `assert (…) stmt;`.
-ASSERT_ACTION: choice {
-  <ASSERT_ACTION_PASS_ELSE>,
-  <ASSERT_ACTION_ELSE>,
-  <ASSERT_ACTION_PASS>
+// `action_block` — ONE sequence with two optionals, not a Choice of
+// pass-else/else/pass shapes. The shapes carry no discriminators, and
+// save-side Choice dispatch picked the else-only alternative for a
+// {pass, fail} dict — silently dropping the pass statement (found via
+// broad-sweep case.sv). With optionals, emission is field-presence-
+// driven and can't lose data. Parse is unchanged: a bare `else …`
+// action can't be claimed by the optional pass STATEMENT ('else'
+// heads no statement form), so it falls through to the else tail.
+ASSERT_ACTION: sequence dict {
+  ?<STATEMENT>:pass=@,
+  ?<ASSERT_ACTION_ELSE_TAIL>
 }
 
-ASSERT_ACTION_PASS_ELSE: sequence dict {
-  <STATEMENT>:pass=@,
+ASSERT_ACTION_ELSE_TAIL: sequence {
   'else' space,
   <STATEMENT>:fail=@
-}
-
-ASSERT_ACTION_ELSE: sequence dict {
-  'else' space,
-  <STATEMENT>:fail=@
-}
-
-ASSERT_ACTION_PASS: sequence dict {
-  <STATEMENT>:pass=@
 }
 
 // `label_name :` — optional name prefix on a concurrent assertion.
