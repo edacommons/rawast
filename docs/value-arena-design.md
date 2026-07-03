@@ -1,6 +1,21 @@
 # Value arena — id-based AST representation (design proposal)
 
-**Status:** proposal, not implemented; the current AST is `shared_ptr<Value>`.
+**Status:** design proposal; the production AST is `shared_ptr<Value>`.
+
+**Implemented so far (branch `explore/builder-seam`):**
+- `Builder` interface + `SharedPtrBuilder` (`src/builder.{hpp,cpp}`) — value/
+  begin/end + checkpoint/rollback + record/replay, unit-tested.
+- **Shadow validation harness** (`RAWAST_SHADOW_CHECK`, off by default): drives a
+  parallel `SharedPtrBuilder` through the whole driver and compares to the
+  authoritative `Frame` result. **0 divergences** across the C++ suite (440
+  cases), Python suite (194), the full ~11.4k-file LEF/DEF/TCL/GDSII corpus, and
+  Ibex SV (RTL 30/30 + dv/uvm 109/109). Four cutover bugs were found+fixed via
+  the harness (Repeat rollback, repeat+ min, ctor-pre-seeded constants,
+  negative-lookahead leaks). The event placement is *proven*; the cutover
+  (builder authoritative, Frame value logic removed, cache on record/replay) is
+  unblocked but not yet done.
+- `register_usage` dropped from the parse hot path (per-child back-ref index
+  nothing read; ~5% on Ibex).
 
 Two refinements from later in the design discussion are reflected in the roadmap
 (§0) and the builder seam (§5) but are **not yet rewritten into the encoding
@@ -12,6 +27,10 @@ design. The pending foundation revision:
   joins dagland's shared arena framework rather than owning a private arena.
 - (b) **Construction is via the builder seam (§5)**, which supersedes
   build-then-freeze.
+- (c) **An intermediate model is the recommended near-term step** (§0.5): an
+  arena-allocated `Value` tree — same class hierarchy, region-arena allocation,
+  raw non-owning pointers, flat dicts — delivered as an `ArenaValueBuilder`
+  through the seam. Most of the speed/memory win, a fraction of the rewrite.
 
 These narrow the §10 open decisions (spans become persistent + per-node).
 
@@ -49,6 +68,39 @@ no peak-memory spike.
    and **host builders** (dagland builds its L0 columns directly).
 4. *(measure-gated)* template-specialize the hot built-in builders if the
    per-event virtual cost shows up in a profile.
+
+---
+
+## 0.5 The intermediate model — arena-allocated `Value` tree (recommended first)
+
+Between today's `shared_ptr<Value>` and the id-columnar arena there is a step
+that captures most of the win at a fraction of the risk: **keep the exact
+`Value` hierarchy and tree shape, change only allocation, ownership, and the
+dict container.**
+
+| today | intermediate | removes |
+|---|---|---|
+| `make_shared<Value>()` per node | bump-allocate from one region arena | per-node `malloc` + control block |
+| `shared_ptr<Value>` edges | raw `Value*` into the arena (non-owning) | atomic refcount traffic |
+| `DictValue` = `std::map` | flat sorted `vector<pair>` | a red-black-tree node **per dict entry** |
+| node-by-node teardown | whole-arena free | destructor storm |
+
+Why this is the sweet spot:
+- The measured large-file cost is **node count × per-node overhead** (the 42 MB
+  gate netlist doesn't parse in minutes on the current model). Primitives are
+  already interned — non-reuse is *not* the problem; allocator and refcount
+  overhead are. This removes exactly those without touching `type()`/`data()`,
+  vtable dispatch, save, or any tree-walking consumer.
+- **Lifetime**: the arena owns every node; Python holds the arena wrapper
+  alive, accessors borrow raw pointers. Interning still works (one arena node,
+  many raw pointers to it). Constraint: no per-node free — parse→use→drop, and
+  the edit toolkit must allocate into the arena too.
+- **Delivery = `ArenaValueBuilder`** through the §5 seam (no parser changes),
+  shadow-validated against `SharedPtrBuilder` for free (0 divergences ⇒ the
+  arena tree is identical, just cheaper memory).
+- The id-columnar arena (§1–§3) stays the *final* target for dagland-L0
+  (compactness, mmap, cross-level ids); this step doesn't block it — same seam,
+  a later builder.
 
 ---
 
