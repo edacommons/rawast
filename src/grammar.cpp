@@ -25,63 +25,6 @@
 
 namespace rawast {
 
-// Debug aid for RAWAST_SHADOW_CHECK: print the path to the first leaf where the
-// shadow builder's result diverges from the authoritative Frame result.
-static void shadow_first_diff(const ValuePtr& s, const ValuePtr& f,
-                              const std::string& path) {
-    auto kind = [](const ValuePtr& v) -> const char* {
-        if (!v) return "nullptr";
-        switch (v->type()) {
-        case ValueType::Null: return "null"; case ValueType::Undefined: return "undef";
-        case ValueType::Bool: return "bool"; case ValueType::Int: return "int";
-        case ValueType::UInt: return "uint"; case ValueType::Real: return "real";
-        case ValueType::String: return "str"; case ValueType::Array: return "arr";
-        case ValueType::Dict: return "dict";
-        }
-        return "?";
-    };
-    const char* p = path.empty() ? "(root)" : path.c_str();
-    if (!s || !f || s->type() != f->type()) {
-        std::fprintf(stderr, "    DIFF %s: shadow=%s frame=%s\n", p, kind(s), kind(f));
-        return;
-    }
-    if (s->type() == ValueType::Array) {
-        const auto& sa = static_cast<const ArrayValue&>(*s).data();
-        const auto& fa = static_cast<const ArrayValue&>(*f).data();
-        if (sa.size() != fa.size()) {
-            std::fprintf(stderr, "    DIFF %s: arr size shadow=%zu frame=%zu\n",
-                         p, sa.size(), fa.size());
-            return;
-        }
-        for (std::size_t i = 0; i < fa.size(); ++i)
-            if (!value_equal(sa[i], fa[i])) {
-                shadow_first_diff(sa[i], fa[i], path + "[" + std::to_string(i) + "]");
-                return;
-            }
-    } else if (s->type() == ValueType::Dict) {
-        const auto& sm = static_cast<const DictValue&>(*s).data();
-        const auto& fm = static_cast<const DictValue&>(*f).data();
-        for (const auto& kv : fm) {
-            auto it = sm.find(kv.first);
-            if (it == sm.end()) {
-                std::fprintf(stderr, "    DIFF %s.%s: MISSING in shadow\n", p, kv.first.c_str());
-                return;
-            }
-            if (!value_equal(it->second, kv.second)) {
-                shadow_first_diff(it->second, kv.second, path + "." + kv.first);
-                return;
-            }
-        }
-        for (const auto& kv : sm)
-            if (fm.find(kv.first) == fm.end()) {
-                std::fprintf(stderr, "    DIFF %s.%s: EXTRA in shadow\n", p, kv.first.c_str());
-                return;
-            }
-    } else {
-        std::fprintf(stderr, "    DIFF %s: scalar %s differs\n", p, kind(s));
-    }
-}
-
 // -------------------------------------------------------------------------
 // Node allocation and builders
 // -------------------------------------------------------------------------
@@ -1250,23 +1193,26 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // instrumentation site. See docs/debugging.md.
     const bool trace_enabled = std::getenv("RAWAST_TRACE") != nullptr;
 
-    // Shadow-builder validation: when RAWAST_SHADOW_CHECK is set, a parallel
-    // SharedPtrBuilder is driven alongside the authoritative Frame logic and
-    // its result compared to the Frame result at parse end. Off by default
-    // (one env read; no shadow work). The Frame tree stays the real AST.
-    const bool shadow_check = std::getenv("RAWAST_SHADOW_CHECK") != nullptr;
-    // Own throwaway pool: the shadow's register_usage must NOT pollute the
-    // real pool's container back-ref index (which post-parse value search uses).
-    ValuePool shadow_pool;
-    SharedPtrBuilder shadow(shadow_pool);
-    auto shadow_begin = [&](Frame& f) {
-        if (!shadow_check) return;
-        f.set_builder_cp(shadow.checkpoint());
-        shadow.begin(f.container());
-        // Value-kind frames pre-seed emitted_ with their grammar constant in
-        // the ctor (bypassing add_value); mirror that into the shadow level.
-        for (const auto& ev : f.emitted())
-            shadow.value(ev.value, ev.is_name);
+    // The Builder is the authoritative value sink. The driver emits
+    // construction events (value / begin / end / checkpoint / rollback /
+    // record / replay); the builder materialises the AST. Frame carries
+    // structure only (kind, container, child iteration, marks) — values
+    // never touch it. Event placement was proven byte-identical to the
+    // former Frame accumulation by the shadow harness (0 divergences
+    // across the full corpus, Ibex SV, and the broad SV sweep) before
+    // this cutover.
+    SharedPtrBuilder builder(pool);
+    auto begin_frame = [&](Frame& f) {
+        f.set_builder_cp(builder.checkpoint());
+        builder.begin(f.container());
+        // Value-kind nodes carry a grammar constant (name markers,
+        // `type="..."` discriminators); emit it at frame entry — the
+        // frame pops immediately after, flowing it to the parent at the
+        // correct positional moment in child-iteration order.
+        if (f.kind() == NodeKind::Value) {
+            const Node& vn = nodes_[f.node_id().value()];
+            if (vn.value) builder.value(vn.value, f.is_name());
+        }
     };
 
     // Profiling mode: enabled via Grammar::profile_enable(). When on,
@@ -1388,8 +1334,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         NodeId      node;
         std::size_t start_offset;
         std::size_t end_offset;
-        std::vector<Frame::EmittedValue> emitted;
-        Builder::Recording shadow_rec;
+        Builder::Recording rec;
     };
     std::vector<CacheEntry> cache;
 
@@ -1524,7 +1469,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         if (!stack.empty()) {
             stack.back().set_cache_size_at_push(cache.size());
             stack.back().set_start_offset(entry_offset);
-            shadow_begin(stack.back());
+            begin_frame(stack.back());
         }
         if (trace_enabled && !stack.empty()) {
             const auto& f = stack.back();
@@ -1586,8 +1531,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         entry.node = popped.node_id();
         entry.start_offset = popped.start_offset();
         entry.end_offset = end_offset;
-        entry.emitted = popped.emitted();
-        if (shadow_check) entry.shadow_rec = shadow.record_from(popped.builder_cp());
+        entry.rec = builder.record_from(popped.builder_cp());
         cache.push_back(std::move(entry));
     };
 
@@ -1651,7 +1595,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // value to emit because the lookahead's semantic outcome is
             // "no", not "yes with empty payload."
             if (popped.is_negative()) {
-                if (shadow_check) shadow.rollback(popped.builder_cp());
+                builder.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -1670,14 +1614,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 sr.accept();
                 popped.set_has_mark(false);
             }
-            popped.finish(pool); if (shadow_check) shadow.end();
+            builder.end();
             record_cache_entry(popped);
             if (stack.empty()) {
-                result_value = popped.result();
+                result_value = builder.result();
                 parse_finished = true;
                 return;
             }
-            popped.pass_values_to(stack.back());
             // Loop to advance the new top frame.
         }
     };
@@ -1700,12 +1643,9 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         const CacheEntry& top = cache.back();
         if (top.node.value() != resolved.value()) return false;
         if (top.start_offset != offset) return false;
-        // Replay emissions into the parent frame.
-        Frame& parent = stack.back();
-        for (const auto& ev : top.emitted) {
-            parent.add_value(ev.value, ev.is_name);
-            if (shadow_check) shadow.value(ev.value, ev.is_name);
-        }
+        // Replay the cached frame's recorded emissions into the current
+        // builder level (what the skipped frame would have contributed).
+        builder.replay(top.rec);
         // Advance the cursor to where the cached frame ended.
         while (sr.position().bytes < top.end_offset && !sr.eof()) sr.get();
         advance_after_child();
@@ -1747,11 +1687,11 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             }
             Frame popped = std::move(stack.back());
             stack.pop_back();
-            // Discard the popped frame's shadow contribution — EXCEPT a Repeat,
+            // Discard the popped frame's builder contribution — EXCEPT a Repeat,
             // which terminates gracefully and commits its prior iterations via
             // finish()+end() below (rolling it back would erase them).
-            if (shadow_check && popped.kind() != NodeKind::Repeat)
-                shadow.rollback(popped.builder_cp());
+            if (popped.kind() != NodeKind::Repeat)
+                builder.rollback(popped.builder_cp());
             if (trace_enabled) {
                 trace("  unwind " + node_label(popped.node_id()));
             }
@@ -1770,7 +1710,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         trace("  retry " + node_label(popped.node_id())
                               + " next-alt");
                     }
-                    shadow_begin(popped);
+                    begin_frame(popped);
                     stack.push_back(std::move(popped));
                     return;
                 }
@@ -1834,18 +1774,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // few iterations matched. Propagate the failure further up
                 // so an enclosing Choice/optional can react.
                 if (popped.iter_count() < popped.min()) {
-                    if (shadow_check) shadow.rollback(popped.builder_cp());
+                    builder.rollback(popped.builder_cp());
                     continue;
                 }
                 // Iteration ended -- accept what we collected so far.
-                popped.finish(pool); if (shadow_check) shadow.end();
+                builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = popped.result();
+                    result_value = builder.result();
                     parse_finished = true;
                     return;
                 }
-                popped.pass_values_to(stack.back());
                 advance_after_child();
                 return;
             }
@@ -1893,7 +1832,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 if (r) sr.accept(); else sr.reject();
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                if (shadow_check) shadow.rollback(popped.builder_cp());
+                builder.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -1945,8 +1884,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 produced = *sub_r;
             }
             produced = pool.intern(produced);
-            top.add_value(produced, top.is_name());
-            if (shadow_check) shadow.value(produced, top.is_name());
+            builder.value(produced, top.is_name());
             if (top.has_current()) {
                 push_or_skip_optional(top.current_child());
             } else {
@@ -1961,14 +1899,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     sr.accept();
                     popped.set_has_mark(false);
                 }
-                popped.finish(pool); if (shadow_check) shadow.end();
+                builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = popped.result();
+                    result_value = builder.result();
                     parse_finished = true;
                     break;
                 }
-                popped.pass_values_to(stack.back());
                 advance_after_child();
             }
             break;
@@ -1993,7 +1930,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 if (r) sr.accept(); else sr.reject();
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                if (shadow_check) shadow.rollback(popped.builder_cp());
+                builder.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -2048,8 +1985,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 produced = *sub_r;
             }
             produced = pool.intern(produced);
-            top.add_value(produced, top.is_name());
-            if (shadow_check) shadow.value(produced, top.is_name());
+            builder.value(produced, top.is_name());
             // Scope is a terminal in the Frame model — its start /
             // INNER / stop are consumed atomically by walk_scan,
             // never as Frame-iteration children. Always pop here
@@ -2062,14 +1998,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     sr.accept();
                     popped.set_has_mark(false);
                 }
-                popped.finish(pool); if (shadow_check) shadow.end();
+                builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = popped.result();
+                    result_value = builder.result();
                     parse_finished = true;
                     break;
                 }
-                popped.pass_values_to(stack.back());
                 advance_after_child();
             }
             break;
@@ -2095,7 +2030,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (top.is_negative()) {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                if (shadow_check) shadow.rollback(popped.builder_cp());
+                builder.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -2133,14 +2068,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         sr.accept();
                         popped.set_has_mark(false);
                     }
-                    popped.finish(pool); if (shadow_check) shadow.end();
+                    builder.end();
                     record_cache_entry(popped);
                     if (stack.empty()) {
-                        result_value = popped.result();
+                        result_value = builder.result();
                         parse_finished = true;
                         break;
                     }
-                    popped.pass_values_to(stack.back());
                     advance_after_child();
                 }
             } else {
@@ -2166,7 +2100,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             if (top.is_negative()) {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                if (shadow_check) shadow.rollback(popped.builder_cp());
+                builder.rollback(popped.builder_cp());
                 if (popped.has_neg_mark()) {
                     sr.reject();
                     popped.set_has_neg_mark(false);
@@ -2221,8 +2155,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // (same string, same int, etc.) shares a canonical
                 // ValuePtr across the entire parse.
                 ValuePtr canonical = pool.intern(produced);
-                top.add_value(canonical, top.is_name());
-                if (shadow_check) shadow.value(canonical, top.is_name());
+                builder.value(canonical, top.is_name());
                 if (top.has_current()) {
                     push_or_skip_optional(top.current_child());
                 } else {
@@ -2234,14 +2167,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         sr.accept();
                         popped.set_has_mark(false);
                     }
-                    popped.finish(pool); if (shadow_check) shadow.end();
+                    builder.end();
                     record_cache_entry(popped);
                     if (stack.empty()) {
-                        result_value = popped.result();
+                        result_value = builder.result();
                         parse_finished = true;
                         break;
                     }
-                    popped.pass_values_to(stack.back());
                     advance_after_child();
                 }
             } else {
@@ -2255,14 +2187,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // constant (honouring is_name). Just pop and bubble up.
             Frame popped = std::move(stack.back());
             stack.pop_back();
-            popped.finish(pool); if (shadow_check) shadow.end();
+            builder.end();
             record_cache_entry(popped);
             if (stack.empty()) {
-                result_value = popped.result();
+                result_value = builder.result();
                 parse_finished = true;
                 break;
             }
-            popped.pass_values_to(stack.back());
             advance_after_child();
             break;
         }
@@ -2301,14 +2232,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish(pool); if (shadow_check) shadow.end();
+                builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = popped.result();
+                    result_value = builder.result();
                     parse_finished = true;
                     break;
                 }
-                popped.pass_values_to(stack.back());
                 advance_after_child();
             }
             break;
@@ -2334,14 +2264,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish(pool); if (shadow_check) shadow.end();
+                builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = popped.result();
+                    result_value = builder.result();
                     parse_finished = true;
                     break;
                 }
-                popped.pass_values_to(stack.back());
                 advance_after_child();
             }
             break;
@@ -2354,14 +2283,13 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                popped.finish(pool); if (shadow_check) shadow.end();
+                builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = popped.result();
+                    result_value = builder.result();
                     parse_finished = true;
                     break;
                 }
-                popped.pass_values_to(stack.back());
                 advance_after_child();
             }
             break;
@@ -2400,29 +2328,6 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         }
     }
 
-    if (parse_finished && shadow_check) {
-        ValuePtr shadow_result = shadow.result();
-        if (!value_equal(shadow_result, result_value)) {
-            auto shape = [](const ValuePtr& v) -> std::string {
-                if (!v) return "nullptr";
-                switch (v->type()) {
-                case ValueType::Array:
-                    return "arr[" + std::to_string(
-                        static_cast<const ArrayValue&>(*v).data().size()) + "]";
-                case ValueType::Dict:
-                    return "dict{" + std::to_string(
-                        static_cast<const DictValue&>(*v).data().size()) + "}";
-                case ValueType::String: return "str";
-                case ValueType::Int: return "int";
-                default: return "scalar";
-                }
-            };
-            std::fprintf(stderr, "diverged start=%zu depth=%zu shadow=%s frame=%s\n",
-                static_cast<std::size_t>(start.value()), shadow.depth(),
-                shape(shadow_result).c_str(), shape(result_value).c_str());
-            shadow_first_diff(shadow_result, result_value, "");
-        }
-    }
     if (parse_finished) {
         // Start rule produced a complete value. For top-level / subparse
         // callers we require the rest of the stream (modulo trailing

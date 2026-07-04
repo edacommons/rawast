@@ -14,17 +14,13 @@ class Grammar;
 class ValuePool;
 
 // Internal per-level state for the trampolined load driver. Snapshots the
-// configuration of one Node and accumulates emitted values from descendant
-// levels (the "catcher" pattern described in §3.4 of the proposal).
+// configuration of one Node: kind, container, child iteration, stream-mark
+// bookkeeping. Values do NOT live here — the driver emits construction
+// events to the Builder, which owns all value accumulation/materialisation.
 //
 // Not part of the public API. Lives in src/.
 class Frame {
 public:
-    struct EmittedValue {
-        ValuePtr value;
-        bool is_name = false;
-    };
-
     Frame(const Grammar& g, NodeId node_id);
 
     NodeId node_id() const noexcept { return node_id_; }
@@ -77,8 +73,6 @@ public:
     // resolved body's frame negative without mutating the rule itself.
     void force_negative() noexcept { is_negative_ = true; }
 
-    void add_value(ValuePtr v, bool is_name);
-
     bool has_current() const noexcept;
     NodeId current_child() const;
 
@@ -86,19 +80,6 @@ public:
     // to process; for Repeat, wraps back to the first item (after the
     // separator) on overflow.
     bool step_next();
-
-    // Materialise array/dict container from accumulated values; no-op for
-    // Container::None. Registers container→child back-references on the
-    // pool so post-parse value search can resolve "which containers hold
-    // this value?" in O(1) lookup time.
-    void finish(ValuePool& pool);
-
-    // Move accumulated values into the parent frame's accumulator.
-    void pass_values_to(Frame& parent);
-
-    // For the top-level frame after finish(): return the single
-    // accumulated value, or nullptr if none.
-    ValuePtr result();
 
     // Sequence-success cache support. Set when the frame is pushed so
     // the driver can (a) retire interior cache entries appended while
@@ -108,14 +89,6 @@ public:
     void set_cache_size_at_push(std::size_t s) noexcept { cache_size_at_push_ = s; }
     std::size_t start_offset() const noexcept { return start_offset_; }
     void set_start_offset(std::size_t o) noexcept { start_offset_ = o; }
-
-    // Read-only view of the frame's emitted values. Used by the cache
-    // to snapshot what would be passed to the parent before the frame
-    // is popped, so a future cache hit can replay the same emissions.
-    const std::vector<EmittedValue>& emitted() const noexcept { return emitted_; }
-    void append_emitted(const std::vector<EmittedValue>& evs) {
-        for (const auto& ev : evs) emitted_.push_back(ev);
-    }
 
 private:
     NodeId node_id_;
@@ -132,7 +105,6 @@ private:
     std::size_t child_idx_ = 0;
     std::uint32_t iter_count_ = 0;
     std::uint32_t min_ = 0;
-    std::vector<EmittedValue> emitted_;
     std::size_t cache_size_at_push_ = 0;
     std::size_t start_offset_ = 0;
     Builder::Checkpoint builder_cp_{};
