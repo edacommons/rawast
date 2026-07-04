@@ -1799,6 +1799,55 @@ tl::expected<void, ParseError> Grammar::parse_events(
         // Stack drained without recovery -- top-level parse fails.
     };
 
+    // Emit a terminal's product into the builder. With a `#subparse` hook
+    // and a non-name binding, the sub-parse STREAMS its events into the
+    // SAME builder — the sub-tree lands in place, no intermediate
+    // materialisation (`#opchain` compaction happens once, at the
+    // reference wrapper's whole-tree pass; parse_into applies none by
+    // contract). A checkpoint guards the sub-call: subparse failure is
+    // recoverable (an enclosing Choice may retry), and the sub-parse's
+    // own unwind deliberately COMMITS Repeat iterations — without the
+    // rollback a retried alternative would see ghost events.
+    // Returns false when failure was signalled (caller breaks).
+    auto emit_terminal = [&](NodeId subparse_start, ValuePtr produced,
+                             bool is_name, const char* bad_type_msg,
+                             const char* fail_prefix) -> bool {
+        if (subparse_start.valid()) {
+            auto produced_sv = as_string(produced);
+            if (!produced_sv) {
+                handle_failure(ParseError{sr.position(), bad_type_msg});
+                return false;
+            }
+            std::istringstream sub_is(produced_sv->data());
+            StreamReader sub_sr(sub_is);
+            if (!is_name) {
+                auto cp = builder.checkpoint();
+                auto sub_r = parse_events(sub_sr, pool, subparse_start,
+                                          builder, true, nullptr);
+                if (!sub_r) {
+                    builder.rollback(cp);
+                    handle_failure(ParseError{
+                        sr.position(),
+                        std::string(fail_prefix) + sub_r.error().message});
+                    return false;
+                }
+                return true;   // sub-tree already in place
+            }
+            // Name-marker binding: the dict key must be a single
+            // adoptable value — materialise through the wrapper.
+            auto sub_r = parse_from(sub_sr, pool, subparse_start);
+            if (!sub_r) {
+                handle_failure(ParseError{
+                    sr.position(),
+                    std::string(fail_prefix) + sub_r.error().message});
+                return false;
+            }
+            produced = *sub_r;
+        }
+        builder.adopt(produced, is_name);
+        return true;
+    };
+
     push_with_optional_mark(start);
     profile_sync();
 
@@ -1870,26 +1919,11 @@ tl::expected<void, ParseError> Grammar::parse_events(
             // Raw node carries a subparse_start, re-enter the engine
             // on the captured string with the named rule as entry.
             // The resulting sub-tree replaces the original string.
-            if (n.subparse_start.valid()) {
-                auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
-                if (!produced_sv) {
-                    handle_failure(ParseError{
-                        sr.position(),
-                        "subparse requires a string-valued terminal"});
-                    break;
-                }
-                std::istringstream sub_is(produced_sv->data());
-                StreamReader sub_sr(sub_is);
-                auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
-                if (!sub_r) {
-                    handle_failure(ParseError{
-                        sr.position(),
-                        "subparse: " + sub_r.error().message});
-                    break;
-                }
-                produced = *sub_r;
+            if (!emit_terminal(n.subparse_start, produced, top.is_name(),
+                               "subparse requires a string-valued terminal",
+                               "subparse: ")) {
+                break;
             }
-            builder.adopt(produced, top.is_name());
             if (top.has_current()) {
                 push_or_skip_optional(top.current_child());
             } else {
@@ -1969,26 +2003,11 @@ tl::expected<void, ParseError> Grammar::parse_events(
             // Subparse hook — same as Raw / Parse: if the scope node
             // carries a subparse_start, re-enter the engine on the
             // captured body with the named rule as entry.
-            if (n.subparse_start.valid()) {
-                auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
-                if (!produced_sv) {
-                    handle_failure(ParseError{
-                        sr.position(),
-                        "scope subparse requires a string-valued body"});
-                    break;
-                }
-                std::istringstream sub_is(produced_sv->data());
-                StreamReader sub_sr(sub_is);
-                auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
-                if (!sub_r) {
-                    handle_failure(ParseError{
-                        sr.position(),
-                        "scope subparse: " + sub_r.error().message});
-                    break;
-                }
-                produced = *sub_r;
+            if (!emit_terminal(n.subparse_start, produced, top.is_name(),
+                               "scope subparse requires a string-valued body",
+                               "scope subparse: ")) {
+                break;
             }
-            builder.adopt(produced, top.is_name());
             // Scope is a terminal in the Frame model — its start /
             // INNER / stop are consumed atomically by walk_scan,
             // never as Frame-iteration children. Always pop here
@@ -2133,26 +2152,11 @@ tl::expected<void, ParseError> Grammar::parse_events(
                 // outer stream's reference frame (best-effort: we
                 // surface the inner message with a prefix and the
                 // outer stream position).
-                if (n.subparse_start.valid()) {
-                    auto produced_sv = std::dynamic_pointer_cast<StringValue>(produced);
-                    if (!produced_sv) {
-                        handle_failure(ParseError{
-                            sr.position(),
-                            "subparse requires a string-valued terminal"});
-                        break;
-                    }
-                    std::istringstream sub_is(produced_sv->data());
-                    StreamReader sub_sr(sub_is);
-                    auto sub_r = parse_from(sub_sr, pool, n.subparse_start);
-                    if (!sub_r) {
-                        handle_failure(ParseError{
-                            sr.position(),
-                            "subparse: " + sub_r.error().message});
-                        break;
-                    }
-                    produced = *sub_r;
+                if (!emit_terminal(n.subparse_start, produced, top.is_name(),
+                                   "subparse requires a string-valued terminal",
+                                   "subparse: ")) {
+                    break;
                 }
-                builder.adopt(produced, top.is_name());
                 if (top.has_current()) {
                     push_or_skip_optional(top.current_child());
                 } else {
