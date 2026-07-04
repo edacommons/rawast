@@ -33,7 +33,12 @@ roadmap step.
 - Save dispatch layer borrows `const Value*` (~3–6% save win, `bd4b18f`).
 - `register_usage` dropped from the parse hot path (~5%, shipped v0.1.11).
 
-**Remaining representation leaks to close (the universal-engine roadmap):**
+**Roadmap status (2026-07-04): №1–№4 DONE, №5 API DONE (streaming-native
+internals pending), №6–№7 open.** parse_into + typed events + pure
+value-model stream + same-builder subparse + Accessor/convert/save_from are
+all landed and gated on feat/builder-cutover.
+
+**The universal-engine roadmap (original list):**
 1. **Typed leaf events** — `Builder::value(ValuePtr)` still passes a concrete
    value; terminals should emit payloads (`string_`, `int_`, `uint_`, `real_`,
    `bool_`, `null_`) and the builder materialises.
