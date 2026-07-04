@@ -41,6 +41,7 @@ struct OpchainLadder {
 // parsers themselves, and the ignore list. Both parse and save direction
 // drive against this object.
 class Builder;
+class Accessor;
 
 class Grammar {
 public:
@@ -309,6 +310,17 @@ public:
     tl::expected<void, SaveError> save(std::ostream& out, ValuePtr value,
                                        bool pretty = true,
                                        NodeId start = {}) const;
+
+    // Universal save: serialise ANY representation through its Accessor.
+    // The reference representation (SharedPtrAccessor) saves directly —
+    // zero overhead; a foreign representation is converted through the
+    // generic Accessor→Builder pipe into the reference model first
+    // (streaming-native save over the Accessor is the planned follow-up;
+    // the API does not change when it lands).
+    tl::expected<void, SaveError> save_from(std::ostream& out,
+                                            const Accessor& accessor,
+                                            bool pretty = true,
+                                            NodeId start = {}) const;
 
     // --- Performance: peek-and-skip optional/choice optimization ------
     //

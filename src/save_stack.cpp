@@ -16,7 +16,10 @@
 
 #include "save_stack.hpp"
 
+#include <rawast/accessor.hpp>
+#include <rawast/builder.hpp>
 #include <rawast/grammar.hpp>
+#include <rawast/pool.hpp>
 #include <rawast/node.hpp>
 #include <rawast/parser.hpp>
 #include <rawast/parsers.hpp>
@@ -2499,6 +2502,24 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     }
     out << trimmed;
     return {};
+}
+
+
+// Universal save entry: serialise any representation via its Accessor.
+// Reference fast path: a SharedPtrAccessor's tree is saved directly.
+// Foreign representations are piped through convert() into the reference
+// model — correct by construction; the streaming-native walk over the
+// Accessor is the planned follow-up and will not change this API.
+tl::expected<void, SaveError>
+Grammar::save_from(std::ostream& out, const Accessor& accessor,
+                   bool pretty, NodeId start) const {
+    if (const auto* sp = dynamic_cast<const SharedPtrAccessor*>(&accessor)) {
+        return save(out, sp->root_value(), pretty, start);
+    }
+    ValuePool pool;
+    SharedPtrBuilder builder(pool);
+    convert(accessor, builder);
+    return save(out, builder.result(), pretty, start);
 }
 
 } // namespace rawast

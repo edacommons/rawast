@@ -213,3 +213,88 @@ TEST_CASE("parse_into: parse failure reaches the caller, builder untouched by co
     auto r = g.parse_into(stream, b);
     CHECK_FALSE(r);
 }
+
+// ---------------------------------------------------------------------------
+// Accessor + convert + save_from — the read half of the representation pair
+// ---------------------------------------------------------------------------
+
+#include <rawast/accessor.hpp>
+#include <sstream>
+
+TEST_CASE("convert: SharedPtrAccessor -> SharedPtrBuilder reproduces the tree") {
+    auto g = make_json_grammar();
+    auto stream = Stream::from_string(R"({"n": 42, "xs": [1, {"k": "v"}], "b": true})");
+    auto ast = g.parse(stream);
+    REQUIRE(ast);
+
+    SharedPtrAccessor acc(*ast);
+    ValuePool pool;
+    SharedPtrBuilder b(pool);
+    convert(acc, b);
+    CHECK(value_equal(b.result(), *ast));
+}
+
+TEST_CASE("convert: Accessor -> plug-in builder delivers the value model") {
+    auto g = make_json_grammar();
+    auto stream = Stream::from_string(R"({"n": 42, "xs": [1, 2]})");
+    auto ast = g.parse(stream);
+    REQUIRE(ast);
+
+    SharedPtrAccessor acc(*ast);
+    EventTraceBuilder b;
+    convert(acc, b);
+    CHECK(b.out == "( n: 42 xs: ( 1 2 ) ) ");
+}
+
+TEST_CASE("save_from: reference fast path == save") {
+    auto g = make_json_grammar();
+    auto stream = Stream::from_string(R"({"a": [1, 2], "s": "hi"})");
+    auto ast = g.parse(stream);
+    REQUIRE(ast);
+
+    std::ostringstream direct, via;
+    REQUIRE(g.save(direct, *ast));
+    SharedPtrAccessor acc(*ast);
+    REQUIRE(g.save_from(via, acc));
+    CHECK(via.str() == direct.str());
+}
+
+namespace {
+// Forwarding accessor that is NOT a SharedPtrAccessor — forces save_from's
+// foreign-representation path (convert into the reference model, then save).
+struct ForeignAccessor final : Accessor {
+    const SharedPtrAccessor inner;
+    explicit ForeignAccessor(ValuePtr r) : inner(std::move(r)) {}
+    Node root() const override { return inner.root(); }
+    ValueType kind(Node n) const override { return inner.kind(n); }
+    bool bool_(Node n) const override { return inner.bool_(n); }
+    std::int64_t int_(Node n) const override { return inner.int_(n); }
+    std::uint64_t uint_(Node n) const override { return inner.uint_(n); }
+    double real_(Node n) const override { return inner.real_(n); }
+    std::string_view string_(Node n) const override { return inner.string_(n); }
+    std::size_t size(Node n) const override { return inner.size(n); }
+    Node at(Node n, std::size_t i) const override { return inner.at(n, i); }
+    Node get(Node n, std::string_view k) const override { return inner.get(n, k); }
+    void each(Node n, const std::function<void(std::string_view, Node)>& f)
+        const override { inner.each(n, f); }
+};
+} // namespace
+
+TEST_CASE("save_from: a foreign representation round-trips through convert") {
+    auto g = make_json_grammar();
+    auto stream = Stream::from_string(R"({"a": [1, 2], "s": "hi", "t": true})");
+    auto ast = g.parse(stream);
+    REQUIRE(ast);
+
+    std::ostringstream direct, via;
+    REQUIRE(g.save(direct, *ast));
+    ForeignAccessor acc(*ast);
+    REQUIRE(g.save_from(via, acc));
+    CHECK(via.str() == direct.str());
+
+    // and the full circle: saved text reparses to the identical AST
+    auto s2 = Stream::from_string(via.str());
+    auto back = g.parse(s2);
+    REQUIRE(back);
+    CHECK(value_equal(*back, *ast));
+}
