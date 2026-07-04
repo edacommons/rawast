@@ -1,38 +1,57 @@
-# Value arena — id-based AST representation (design proposal)
+# The universal engine — representation-agnostic parse + save
 
-**Status:** design proposal; the production AST is `shared_ptr<Value>`.
+**TARGET (decided 2026-07-04): a universal engine, not any single
+representation.** The engine core never touches a concrete value type; it
+speaks exactly two interfaces, and a **representation = a {Builder, Accessor}
+implementation pair**:
 
-**Implemented so far (branch `explore/builder-seam`):**
-- `Builder` interface + `SharedPtrBuilder` (`src/builder.{hpp,cpp}`) — value/
-  begin/end + checkpoint/rollback + record/replay, unit-tested.
-- **Shadow validation harness** (`RAWAST_SHADOW_CHECK`, off by default): drives a
-  parallel `SharedPtrBuilder` through the whole driver and compares to the
-  authoritative `Frame` result. **0 divergences** across the C++ suite (440
-  cases), Python suite (194), the full ~11.4k-file LEF/DEF/TCL/GDSII corpus, and
-  Ibex SV (RTL 30/30 + dv/uvm 109/109). Four cutover bugs were found+fixed via
-  the harness (Repeat rollback, repeat+ min, ctor-pre-seeded constants,
-  negative-lookahead leaks). The event placement is *proven*; the cutover
-  (builder authoritative, Frame value logic removed, cache on record/replay) is
-  unblocked but not yet done.
-- `register_usage` dropped from the parse hot path (per-child back-ref index
-  nothing read; ~5% on Ibex).
+```
+Builder   (write): typed value events, begin/end, checkpoint/rollback, record/replay
+Accessor  (read):  kind, dict_get, items, scalar getters
+```
 
-Two refinements from later in the design discussion are reflected in the roadmap
-(§0) and the builder seam (§5) but are **not yet rewritten into the encoding
-sections (§1–§4)** — those still describe the original standalone tag-in-id
-design. The pending foundation revision:
-- (a) **For use as dagland's L0**, the id model should move from tag-in-id to a
-  **generational-index node schema** with kind/span as columns (drop immediates;
-  every node has its own identity so cross-level links + provenance work). rawast
-  joins dagland's shared arena framework rather than owning a private arena.
-- (b) **Construction is via the builder seam (§5)**, which supersedes
-  build-then-freeze.
-- (c) **An intermediate model is the recommended near-term step** (§0.5): an
-  arena-allocated `Value` tree — same class hierarchy, region-arena allocation,
-  raw non-owning pointers, flat dicts — delivered as an `ArenaValueBuilder`
-  through the seam. Most of the speed/memory win, a fraction of the rewrite.
+Every engine operation composes from the pair:
+- parse                 = grammar walk → Builder
+- save                  = grammar walk reads Accessor
+- transforms (opchain)  = Accessor → Builder pipe
+- equality / round-trip = Accessor × Accessor
+- save's scratch nodes  = the representation's own Builder
 
-These narrow the §10 open decisions (spans become persistent + per-node).
+`shared_ptr<Value>` (the reference pair), an id-columnar arena (dagland L0),
+native Python, host structures — all plug-ins of equal standing. The engine is
+universal over representations of ONE value model (dict/array/scalars — what
+grammars bind to); that fixed contract is what keeps the interfaces small.
+The id-arena sections below (§1–§4) describe ONE future plug-in, not the
+target; the former "intermediate model" (§0.5) is a fallback plug-in, not a
+roadmap step.
+
+**Implemented so far (main + branch `feat/builder-cutover`):**
+- `Builder` + `SharedPtrBuilder`, proven by the shadow harness (0 divergences
+  across suites, the 11.4k corpus, Ibex, the broad SV sweep), then **cutover
+  landed**: the Builder is the authoritative sink; Frame is structure-only;
+  cache on record/replay (`381d7dd`).
+- Save dispatch layer borrows `const Value*` (~3–6% save win, `bd4b18f`).
+- `register_usage` dropped from the parse hot path (~5%, shipped v0.1.11).
+
+**Remaining representation leaks to close (the universal-engine roadmap):**
+1. **Typed leaf events** — `Builder::value(ValuePtr)` still passes a concrete
+   value; terminals should emit payloads (`string_`, `int_`, `uint_`, `real_`,
+   `bool_`, `null_`) and the builder materialises.
+2. **Interning behind the Builder** — `pool.intern` in the driver is a
+   representation concern (sharing strategy), not an engine concern.
+3. **Opaque `Recording`** — the cache token becomes builder-defined.
+4. **Subparse hand-off** — sub-parse product flows builder-to-builder.
+5. **`Accessor` + save routed through it** (`SharedPtrAccessor` first,
+   corpus-gated); the opchain re-nest becomes an Accessor→Builder rewrite.
+6. **`compact_opchain`** as an Accessor→Builder pass (the last ValuePtr-bound
+   transform).
+7. Perf guard: template the hot walks on the interface (compile-time, zero
+   dispatch), virtual form for host plug-ins; measure before assuming cost.
+
+The id-arena plugs in afterwards as just another pair — it validates the
+interfaces rather than defining them. For its schema, the standing decision:
+generational-index node schema with kind/span columns (dagland-native), NOT
+the tag-in-id encoding §1–§4 still describe.
 
 ## Motivation
 
