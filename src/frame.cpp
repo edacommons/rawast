@@ -1,5 +1,5 @@
 #include "frame.hpp"
-#include "builder.hpp"
+#include <rawast/builder.hpp>
 #include <rawast/grammar.hpp>
 #include <rawast/pool.hpp>
 

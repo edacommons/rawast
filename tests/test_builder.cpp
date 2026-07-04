@@ -8,9 +8,11 @@
 
 #include <doctest/doctest.h>
 
-#include "../src/builder.hpp"
+#include <rawast/builder.hpp>
 
+#include <rawast/grammar.hpp>
 #include <rawast/pool.hpp>
+#include <rawast/stream.hpp>
 #include <rawast/value.hpp>
 
 #include <memory>
@@ -190,4 +192,22 @@ TEST_CASE("plug-in builder: typed surface only; default adopt translates") {
     b.adopt(sub, false);
     b.end();
     CHECK(b.out == "( 1 ( k: 9 ) ) ");
+}
+
+TEST_CASE("parse_into: a plug-in representation receives a real parse") {
+    auto g = make_json_grammar();
+    auto stream = Stream::from_string(R"({"n": 42, "xs": [1, 2]})");
+    SexprBuilder b;
+    auto r = g.parse_into(stream, b);
+    REQUIRE(r);
+    // dict + array structure delivered purely through typed events
+    CHECK(b.out == "( n: 42 xs: ( 1 2 ) ) ");
+}
+
+TEST_CASE("parse_into: parse failure reaches the caller, builder untouched by commit") {
+    auto g = make_json_grammar();
+    auto stream = Stream::from_string("{broken");
+    SexprBuilder b;
+    auto r = g.parse_into(stream, b);
+    CHECK_FALSE(r);
 }

@@ -40,6 +40,8 @@ struct OpchainLadder {
 // of Nodes that make up the grammar tree, the named-rule registry, the
 // parsers themselves, and the ignore list. Both parse and save direction
 // drive against this object.
+class Builder;
+
 class Grammar {
 public:
     Grammar() = default;
@@ -263,6 +265,14 @@ public:
             bool require_full_consume = true,
             const std::vector<Parser*>* initial_ignore = nullptr) const;
 
+    // Universal entry: parse into ANY representation. The Builder owns
+    // the product (for host representations, possibly as a side effect
+    // on the app's own store); success/failure is the only result.
+    // No `#opchain` compaction is applied — that transform is
+    // reference-model-bound until it becomes an Accessor→Builder pass.
+    tl::expected<void, ParseError> parse_into(
+            Stream& stream, Builder& builder) const;
+
     // Convenience: parse from a rule name. Looks up the named rule's
     // body NodeId via the registry; fails if the rule doesn't exist.
     // Lets application code re-parse arbitrary strings through any
@@ -365,6 +375,13 @@ private:
     NodeId top_;
     // Lazily-computed opchain ladder cache (see opchain_ladder()).
     mutable std::optional<OpchainLadder> opchain_ladder_cache_;
+
+    // The engine core: drives construction events into ANY Builder.
+    // Representation-agnostic; wrappers materialise/compact.
+    tl::expected<void, ParseError> parse_events(
+            StreamReader& sr, ValuePool& pool, NodeId start, Builder& builder,
+            bool require_full_consume,
+            const std::vector<Parser*>* initial_ignore) const;
 
     // Profiling — mutable so `parse_from(...) const` can write the
     // report back to the Grammar. profile_enabled_ is the runtime

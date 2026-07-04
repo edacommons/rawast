@@ -1,6 +1,6 @@
 #pragma once
 
-#include "builder.hpp"
+#include <rawast/builder.hpp>
 #include <rawast/node.hpp>
 #include <rawast/value.hpp>
 

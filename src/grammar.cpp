@@ -1176,13 +1176,17 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                        require_full_consume, initial_ignore);
 }
 
-tl::expected<ValuePtr, ParseError> Grammar::parse_from(
-        StreamReader& sr, ValuePool& pool, NodeId start,
+// The engine core: drives construction events into ANY Builder. Fully
+// representation-agnostic — no value is materialised here and no
+// post-transform applied; reference-world wrappers (parse_from below)
+// materialise via SharedPtrBuilder::result() and apply the opchain
+// compaction.
+tl::expected<void, ParseError> Grammar::parse_events(
+        StreamReader& sr, ValuePool& pool, NodeId start, Builder& builder,
         bool require_full_consume,
         const std::vector<Parser*>* initial_ignore) const {
     std::vector<Frame> stack;
     ParseError max_progress{sr.position(), "no parse attempted"};
-    ValuePtr result_value;
     bool parse_finished = false;   // true once the top frame pops successfully
 
     // Trace mode: enabled via `RAWAST_TRACE` env var. When set, the
@@ -1201,10 +1205,14 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
     // former Frame accumulation by the shadow harness (0 divergences
     // across the full corpus, Ibex SV, and the broad SV sweep) before
     // this cutover.
-    SharedPtrBuilder builder(pool);
     auto begin_frame = [&](Frame& f) {
         f.set_builder_cp(builder.checkpoint());
-        builder.begin(f.container());
+        // Transparent groups (Container::None) emit no events — their
+        // children flow to the enclosing container by definition, and
+        // checkpoint/rollback/record are (depth,size)-based so they need
+        // no level of their own. Plug-ins therefore see ONLY the value
+        // model: scalars + Array/Dict containers.
+        if (f.container() != Container::None) builder.begin(f.container());
         // Value-kind nodes carry a grammar constant (name markers,
         // `type="..."` discriminators); emit it at frame entry — the
         // frame pops immediately after, flowing it to the parent at the
@@ -1614,11 +1622,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 sr.accept();
                 popped.set_has_mark(false);
             }
-            builder.end();
+            if (popped.container() != Container::None) builder.end();
             record_cache_entry(popped);
             if (stack.empty()) {
-                result_value = builder.result();
-                parse_finished = true;
+                                parse_finished = true;
                 return;
             }
             // Loop to advance the new top frame.
@@ -1778,11 +1785,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     continue;
                 }
                 // Iteration ended -- accept what we collected so far.
-                builder.end();
+                if (popped.container() != Container::None) builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = builder.result();
-                    parse_finished = true;
+                                        parse_finished = true;
                     return;
                 }
                 advance_after_child();
@@ -1898,11 +1904,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     sr.accept();
                     popped.set_has_mark(false);
                 }
-                builder.end();
+                if (popped.container() != Container::None) builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = builder.result();
-                    parse_finished = true;
+                                        parse_finished = true;
                     break;
                 }
                 advance_after_child();
@@ -1996,11 +2001,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     sr.accept();
                     popped.set_has_mark(false);
                 }
-                builder.end();
+                if (popped.container() != Container::None) builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = builder.result();
-                    parse_finished = true;
+                                        parse_finished = true;
                     break;
                 }
                 advance_after_child();
@@ -2066,11 +2070,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         sr.accept();
                         popped.set_has_mark(false);
                     }
-                    builder.end();
+                    if (popped.container() != Container::None) builder.end();
                     record_cache_entry(popped);
                     if (stack.empty()) {
-                        result_value = builder.result();
-                        parse_finished = true;
+                                                parse_finished = true;
                         break;
                     }
                     advance_after_child();
@@ -2161,11 +2164,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                         sr.accept();
                         popped.set_has_mark(false);
                     }
-                    builder.end();
+                    if (popped.container() != Container::None) builder.end();
                     record_cache_entry(popped);
                     if (stack.empty()) {
-                        result_value = builder.result();
-                        parse_finished = true;
+                                                parse_finished = true;
                         break;
                     }
                     advance_after_child();
@@ -2181,11 +2183,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             // constant (honouring is_name). Just pop and bubble up.
             Frame popped = std::move(stack.back());
             stack.pop_back();
-            builder.end();
+            if (popped.container() != Container::None) builder.end();
             record_cache_entry(popped);
             if (stack.empty()) {
-                result_value = builder.result();
-                parse_finished = true;
+                                parse_finished = true;
                 break;
             }
             advance_after_child();
@@ -2226,11 +2227,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
             } else {
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                builder.end();
+                if (popped.container() != Container::None) builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = builder.result();
-                    parse_finished = true;
+                                        parse_finished = true;
                     break;
                 }
                 advance_after_child();
@@ -2258,11 +2258,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                builder.end();
+                if (popped.container() != Container::None) builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = builder.result();
-                    parse_finished = true;
+                                        parse_finished = true;
                     break;
                 }
                 advance_after_child();
@@ -2277,11 +2276,10 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 // No children left to process -- this frame is done.
                 Frame popped = std::move(stack.back());
                 stack.pop_back();
-                builder.end();
+                if (popped.container() != Container::None) builder.end();
                 record_cache_entry(popped);
                 if (stack.empty()) {
-                    result_value = builder.result();
-                    parse_finished = true;
+                                        parse_finished = true;
                     break;
                 }
                 advance_after_child();
@@ -2358,26 +2356,50 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 return tl::unexpected(ParseError{sr.position(), std::move(msg)});
             }
         }
-        // `#opchain` post-process: when the start rule body (or any
-        // Ref along the chain to it) carries the flag, compact any
-        // always-wrap chain shape in the produced AST. See
-        // `compact_opchain` for the transform.
-        if (has_opchain_in_chain(start) || has_any_opchain()) {
-            // When the per-dispatch ladder is valid (opchain below a
-            // structural start rule, e.g. SV's BIN_EXPR), restrict folding
-            // to ops the ladder can rebuild on save. Otherwise (start-chain
-            // case) fold everything — global expand_opchain owns it.
-            const OpchainLadder& L = opchain_ladder();
-            std::unordered_set<std::string> ops;
-            if (L.valid) {
-                for (const auto& [op, _] : L.op_tier) ops.insert(op);
-            }
-            result_value = compact_opchain(result_value,
-                                           L.valid ? &ops : nullptr);
-        }
-        return result_value;
+        return {};
     }
     return tl::unexpected(max_progress);
+}
+
+// Reference-world wrapper: drive a SharedPtrBuilder, materialise the
+// ValuePtr result, and apply the `#opchain` post-compaction (a
+// reference-model transform — becomes an Accessor→Builder pass for
+// other representations; see docs/value-arena-design.md roadmap №6).
+tl::expected<ValuePtr, ParseError> Grammar::parse_from(
+        StreamReader& sr, ValuePool& pool, NodeId start,
+        bool require_full_consume,
+        const std::vector<Parser*>* initial_ignore) const {
+    SharedPtrBuilder builder(pool);
+    auto r = parse_events(sr, pool, start, builder,
+                          require_full_consume, initial_ignore);
+    if (!r) return tl::unexpected(r.error());
+    ValuePtr result_value = builder.result();
+    if (has_opchain_in_chain(start) || has_any_opchain()) {
+        // When the per-dispatch ladder is valid (opchain below a
+        // structural start rule, e.g. SV's BIN_EXPR), restrict folding
+        // to ops the ladder can rebuild on save. Otherwise (start-chain
+        // case) fold everything — global expand_opchain owns it.
+        const OpchainLadder& L = opchain_ladder();
+        std::unordered_set<std::string> ops;
+        if (L.valid) {
+            for (const auto& [op, _] : L.op_tier) ops.insert(op);
+        }
+        result_value = compact_opchain(result_value,
+                                       L.valid ? &ops : nullptr);
+    }
+    return result_value;
+}
+
+// Universal entry: parse into ANY representation. The builder owns the
+// product (for host representations, possibly as a side effect on the
+// app's own store); success/failure is the only result. NOTE: no opchain
+// compaction is applied — that transform is reference-model-bound until
+// it becomes an Accessor→Builder pass.
+tl::expected<void, ParseError> Grammar::parse_into(
+        Stream& stream, Builder& builder) const {
+    ValuePool pool;   // internal machinery (subparse/scope) still pools
+    return parse_events(stream.reader(), pool, top_, builder,
+                        /*require_full_consume=*/true, nullptr);
 }
 
 
