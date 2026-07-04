@@ -1211,7 +1211,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
         // correct positional moment in child-iteration order.
         if (f.kind() == NodeKind::Value) {
             const Node& vn = nodes_[f.node_id().value()];
-            if (vn.value) builder.value(vn.value, f.is_name());
+            if (vn.value) builder.adopt(vn.value, f.is_name());
         }
     };
 
@@ -1883,8 +1883,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 produced = *sub_r;
             }
-            produced = pool.intern(produced);
-            builder.value(produced, top.is_name());
+            builder.adopt(produced, top.is_name());
             if (top.has_current()) {
                 push_or_skip_optional(top.current_child());
             } else {
@@ -1984,8 +1983,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                 }
                 produced = *sub_r;
             }
-            produced = pool.intern(produced);
-            builder.value(produced, top.is_name());
+            builder.adopt(produced, top.is_name());
             // Scope is a terminal in the Frame model — its start /
             // INNER / stop are consumed atomically by walk_scan,
             // never as Frame-iteration children. Always pop here
@@ -2151,11 +2149,7 @@ tl::expected<ValuePtr, ParseError> Grammar::parse_from(
                     }
                     produced = *sub_r;
                 }
-                // Intern the produced primitive so identical content
-                // (same string, same int, etc.) shares a canonical
-                // ValuePtr across the entire parse.
-                ValuePtr canonical = pool.intern(produced);
-                builder.value(canonical, top.is_name());
+                builder.adopt(produced, top.is_name());
                 if (top.has_current()) {
                     push_or_skip_optional(top.current_child());
                 } else {

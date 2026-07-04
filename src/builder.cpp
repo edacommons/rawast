@@ -3,40 +3,107 @@
 #include <rawast/pool.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <utility>
 
 namespace rawast {
 
-static const bool g_strace = std::getenv("RAWAST_SHADOW_TRACE") != nullptr;
+// ---------------------------------------------------------------------------
+// Builder — default adopt(): translate a reference-model subtree into typed
+// events, so a plug-in builder only ever implements the typed surface.
+// ---------------------------------------------------------------------------
 
-SharedPtrBuilder::SharedPtrBuilder(ValuePool&) {
+void Builder::adopt(const ValuePtr& v, bool is_name) {
+    if (!v) { null_(is_name); return; }
+    switch (v->type()) {
+    case ValueType::Null:      null_(is_name); return;
+    case ValueType::Undefined: null_(is_name); return;
+    case ValueType::Bool:
+        bool_(static_cast<const BoolValue&>(*v).data(), is_name); return;
+    case ValueType::Int:
+        int_(static_cast<const IntValue&>(*v).data(), is_name); return;
+    case ValueType::UInt:
+        uint_(static_cast<const UIntValue&>(*v).data(), is_name); return;
+    case ValueType::Real:
+        real_(static_cast<const RealValue&>(*v).data(), is_name); return;
+    case ValueType::String:
+        string_(static_cast<const StringValue&>(*v).data(), is_name); return;
+    case ValueType::Array: {
+        begin(Container::Array);
+        for (const auto& e : static_cast<const ArrayValue&>(*v).data())
+            adopt(e, false);
+        end();
+        return;
+    }
+    case ValueType::Dict: {
+        begin(Container::Dict);
+        for (const auto& [k, val] : static_cast<const DictValue&>(*v).data()) {
+            string_(k, true);
+            adopt(val, false);
+        }
+        end();
+        return;
+    }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SharedPtrBuilder
+// ---------------------------------------------------------------------------
+
+SharedPtrBuilder::SharedPtrBuilder(ValuePool& pool) : pool_(pool) {
     levels_.push_back({Container::None, {}});   // root
 }
 
-void SharedPtrBuilder::value(ValuePtr v, bool is_name) {
-    if (g_strace) std::fprintf(stderr, "  shadow VALUE depth=%zu name=%d\n",
-                               levels_.size(), is_name);
+void SharedPtrBuilder::push(ValuePtr v, bool is_name) {
     levels_.back().emitted.push_back({std::move(v), is_name});
 }
 
+// Typed leaves intern through the pool: identical primitives share one
+// canonical ValuePtr across the whole parse (the sharing strategy that
+// used to live in the driver).
+void SharedPtrBuilder::null_(bool is_name)   { push(null_value(), is_name); }
+void SharedPtrBuilder::bool_(bool v, bool is_name) {
+    push(v ? true_value() : false_value(), is_name);
+}
+void SharedPtrBuilder::int_(std::int64_t v, bool is_name) {
+    push(pool_.intern_int(v), is_name);
+}
+void SharedPtrBuilder::uint_(std::uint64_t v, bool is_name) {
+    push(pool_.intern_uint(v), is_name);
+}
+void SharedPtrBuilder::real_(double v, bool is_name) {
+    push(pool_.intern_real(v), is_name);
+}
+void SharedPtrBuilder::string_(std::string_view v, bool is_name) {
+    push(pool_.intern_string(std::string(v)), is_name);
+}
+
+// Zero-copy adoption: primitives re-intern (dedup, reusing the incoming
+// allocation on first sight); composites are shared as-is.
+void SharedPtrBuilder::adopt(const ValuePtr& v, bool is_name) {
+    if (!v) { push(nullptr, is_name); return; }
+    switch (v->type()) {
+    case ValueType::Array:
+    case ValueType::Dict:
+        push(v, is_name);
+        return;
+    default:
+        push(pool_.intern(v), is_name);
+        return;
+    }
+}
+
 void SharedPtrBuilder::begin(Container kind) {
-    if (g_strace) std::fprintf(stderr, "  shadow BEGIN(%d) -> depth=%zu\n",
-                               static_cast<int>(kind), levels_.size() + 1);
     levels_.push_back({kind, {}});
 }
 
 void SharedPtrBuilder::end() {
-    if (g_strace) std::fprintf(stderr, "  shadow END depth=%zu size=%zu\n",
-                               levels_.size(),
-                               levels_.empty() ? 0 : levels_.back().emitted.size());
     if (levels_.size() < 2) return;   // desync guard (no open container)
     Level lvl = std::move(levels_.back());
     levels_.pop_back();
     auto& parent = levels_.back().emitted;
 
-    // Materialisation lifted from Frame::finish.
     switch (lvl.kind) {
     case Container::None:
         for (auto& ev : lvl.emitted) parent.push_back(std::move(ev));
@@ -58,7 +125,7 @@ void SharedPtrBuilder::end() {
         bool have_name = false;
         for (auto& ev : lvl.emitted) {
             if (ev.is_name) {
-                if (auto sv = std::dynamic_pointer_cast<StringValue>(ev.value)) {
+                if (auto sv = as_string(ev.value)) {
                     current_name = sv->data();
                     have_name = true;
                 }
@@ -67,7 +134,7 @@ void SharedPtrBuilder::end() {
                     && current_name.compare(current_name.size() - 2, 2, "[]") == 0) {
                     std::string base = current_name.substr(0, current_name.size() - 2);
                     auto& slot = map[base];
-                    auto arr = std::dynamic_pointer_cast<ArrayValue>(slot);
+                    auto arr = as_array(slot);
                     if (!arr) {
                         arr = std::make_shared<ArrayValue>();
                         slot = arr;
@@ -90,24 +157,26 @@ Builder::Checkpoint SharedPtrBuilder::checkpoint() const {
 }
 
 void SharedPtrBuilder::rollback(Checkpoint cp) {
-    if (g_strace) std::fprintf(stderr, "  shadow ROLLBACK to depth=%zu size=%zu (from depth=%zu)\n",
-                               cp.depth, cp.size, levels_.size());
     std::size_t depth = cp.depth < 1 ? 1 : cp.depth;   // never drop the root
     while (levels_.size() > depth) levels_.pop_back();
     auto& emitted = levels_.back().emitted;
     if (cp.size <= emitted.size()) emitted.resize(cp.size);
 }
 
-SharedPtrBuilder::Recording
+Builder::Recording
 SharedPtrBuilder::record_from(Checkpoint cp) const {
     if (cp.depth < 1 || cp.depth > levels_.size()) return {};   // desync guard
     const auto& lvl = levels_[cp.depth - 1].emitted;
     if (cp.size > lvl.size()) return {};
-    return Recording(lvl.begin() + cp.size, lvl.end());
+    return std::make_shared<const std::vector<EmittedValue>>(
+        lvl.begin() + cp.size, lvl.end());
 }
 
 void SharedPtrBuilder::replay(const Recording& rec) {
-    for (const auto& ev : rec) levels_.back().emitted.push_back(ev);
+    if (!rec) return;
+    const auto& evs =
+        *static_cast<const std::vector<EmittedValue>*>(rec.get());
+    for (const auto& ev : evs) levels_.back().emitted.push_back(ev);
 }
 
 ValuePtr SharedPtrBuilder::result() const {

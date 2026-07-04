@@ -1,9 +1,10 @@
-// Unit tests for the generic Builder seam + SharedPtrBuilder.
+// Unit tests for the universal Builder seam.
 //
-// SharedPtrBuilder must reproduce Frame::finish's materialisation exactly
-// (array/dict assembly, the `name[]` list-append marker, backtracking). These
-// drive the builder directly; wiring it into the parse driver is a separate,
-// corpus-gated step.
+// The Builder interface is TYPED: plug-in representations implement only
+// null_/bool_/int_/uint_/real_/string_ + begin/end + checkpoint/rollback +
+// record/replay, and never see a ValuePtr. adopt() has a default that
+// translates a reference-model subtree into typed events; SharedPtrBuilder
+// overrides it for zero-copy adoption and owns interning.
 
 #include <doctest/doctest.h>
 
@@ -13,148 +14,180 @@
 #include <rawast/value.hpp>
 
 #include <memory>
+#include <string>
+#include <vector>
 
 using namespace rawast;
 
 namespace {
 
 std::int64_t pick_int(const ValuePtr& v) {
-    auto i = std::dynamic_pointer_cast<IntValue>(v);
+    auto i = as_int(v);
     REQUIRE(i);
     return i->data();
 }
 std::string pick_str(const ValuePtr& v) {
-    auto s = std::dynamic_pointer_cast<StringValue>(v);
+    auto s = as_string(v);
     REQUIRE(s);
     return s->data();
 }
 std::shared_ptr<ArrayValue> pick_arr(const ValuePtr& v) {
-    auto a = std::dynamic_pointer_cast<ArrayValue>(v);
+    auto a = as_array(v);
     REQUIRE(a);
     return a;
 }
 std::shared_ptr<DictValue> pick_dict(const ValuePtr& v) {
-    auto d = std::dynamic_pointer_cast<DictValue>(v);
+    auto d = as_dict(v);
     REQUIRE(d);
     return d;
 }
 
 } // namespace
 
-TEST_CASE("SharedPtrBuilder: array of scalars") {
+TEST_CASE("SharedPtrBuilder: typed scalars build an array") {
     ValuePool pool;
     SharedPtrBuilder b(pool);
     b.begin(Container::Array);
-    b.value(make_int(1), false);
-    b.value(make_int(2), false);
-    b.value(make_int(3), false);
+    b.int_(1, false);
+    b.string_("x", false);
+    b.bool_(true, false);
+    b.real_(2.5, false);
     b.end();
 
     auto arr = pick_arr(b.result());
-    REQUIRE(arr->data().size() == 3);
+    REQUIRE(arr->data().size() == 4);
     CHECK(pick_int(arr->data()[0]) == 1);
-    CHECK(pick_int(arr->data()[2]) == 3);
+    CHECK(pick_str(arr->data()[1]) == "x");
+    CHECK(arr->data()[2]->type() == ValueType::Bool);
+    CHECK(arr->data()[3]->type() == ValueType::Real);
 }
 
-TEST_CASE("SharedPtrBuilder: dict with nested array + scalar (name markers)") {
+TEST_CASE("SharedPtrBuilder: interning is the builder's job") {
+    ValuePool pool;
+    SharedPtrBuilder b(pool);
+    b.begin(Container::Array);
+    b.string_("clk", false);
+    b.string_("clk", false);
+    b.int_(42, false);
+    b.int_(42, false);
+    b.end();
+
+    auto arr = pick_arr(b.result());
+    REQUIRE(arr->data().size() == 4);
+    CHECK(arr->data()[0].get() == arr->data()[1].get());   // shared canonical
+    CHECK(arr->data()[2].get() == arr->data()[3].get());
+}
+
+TEST_CASE("SharedPtrBuilder: dict via typed name markers + name[] append") {
     ValuePool pool;
     SharedPtrBuilder b(pool);
     b.begin(Container::Dict);
-    b.value(make_string("a"), true);          // key
-    b.begin(Container::Array);                 // value of "a"
-    b.value(make_int(1), false);
-    b.value(make_int(2), false);
-    b.end();
-    b.value(make_string("b"), true);          // key
-    b.value(make_string("x"), false);         // value of "b"
-    b.end();
-
-    auto d = pick_dict(b.result());
-    REQUIRE(d->data().count("a"));
-    REQUIRE(d->data().count("b"));
-    auto a = pick_arr(d->data().at("a"));
-    CHECK(a->data().size() == 2);
-    CHECK(pick_int(a->data()[0]) == 1);
-    CHECK(pick_str(d->data().at("b")) == "x");
-}
-
-TEST_CASE("SharedPtrBuilder: `name[]` list-append marker collects into a list") {
-    ValuePool pool;
-    SharedPtrBuilder b(pool);
-    b.begin(Container::Dict);
-    b.value(make_string("items[]"), true);
-    b.value(make_int(10), false);
-    b.value(make_string("items[]"), true);
-    b.value(make_int(20), false);
-    b.value(make_string("items[]"), true);
-    b.value(make_int(30), false);
+    b.string_("a", true);              // key
+    b.int_(1, false);
+    b.string_("items[]", true);        // list-append marker
+    b.int_(10, false);
+    b.string_("items[]", true);
+    b.int_(20, false);
     b.end();
 
     auto d = pick_dict(b.result());
-    REQUIRE(d->data().count("items"));      // the `[]` suffix is stripped
-    REQUIRE_FALSE(d->data().count("items[]"));
+    CHECK(pick_int(d->data().at("a")) == 1);
     auto items = pick_arr(d->data().at("items"));
-    REQUIRE(items->data().size() == 3);
-    CHECK(pick_int(items->data()[0]) == 10);
-    CHECK(pick_int(items->data()[2]) == 30);
+    REQUIRE(items->data().size() == 2);
+    CHECK(pick_int(items->data()[1]) == 20);
 }
 
 TEST_CASE("SharedPtrBuilder: checkpoint/rollback discards a failed alternative") {
     ValuePool pool;
     SharedPtrBuilder b(pool);
     b.begin(Container::Array);
-    b.value(make_int(1), false);
+    b.int_(1, false);
     auto cp = b.checkpoint();
-    // a tentative alternative that opens a nested container then fails:
-    b.begin(Container::Dict);
-    b.value(make_string("k"), true);
-    b.value(make_int(99), false);
-    b.rollback(cp);                         // reject — even mid-container
-    b.value(make_int(2), false);            // the alternative that succeeds
+    b.begin(Container::Dict);          // tentative alternative...
+    b.string_("k", true);
+    b.int_(99, false);
+    b.rollback(cp);                    // ...rejected mid-container
+    b.int_(2, false);
     b.end();
 
     auto arr = pick_arr(b.result());
     REQUIRE(arr->data().size() == 2);
-    CHECK(pick_int(arr->data()[0]) == 1);
     CHECK(pick_int(arr->data()[1]) == 2);
 }
 
-TEST_CASE("SharedPtrBuilder: Container::None passes children through") {
+TEST_CASE("SharedPtrBuilder: opaque record/replay reproduces a subtree") {
     ValuePool pool;
     SharedPtrBuilder b(pool);
     b.begin(Container::Array);
-    b.value(make_int(1), false);
-    b.begin(Container::None);               // transparent group
-    b.value(make_int(2), false);
-    b.value(make_int(3), false);
-    b.end();                                // 2,3 flow up into the array
-    b.value(make_int(4), false);
+    auto cp = b.checkpoint();
+    b.begin(Container::Dict);
+    b.string_("k", true);
+    b.int_(7, false);
     b.end();
-
-    auto arr = pick_arr(b.result());
-    REQUIRE(arr->data().size() == 4);
-    CHECK(pick_int(arr->data()[1]) == 2);
-    CHECK(pick_int(arr->data()[3]) == 4);
-}
-
-TEST_CASE("SharedPtrBuilder: record/replay reproduces a completed subtree (cache)") {
-    ValuePool pool;
-    SharedPtrBuilder b(pool);
-    b.begin(Container::Array);             // outer array will hold two copies
-    auto cp = b.checkpoint();              // before the subtree
-    b.begin(Container::Dict);              // build a subtree
-    b.value(make_string("k"), true);
-    b.value(make_int(7), false);
-    b.end();                               // dict added to the outer array
-    auto rec = b.record_from(cp);          // cache: snapshot the dict emission
-    b.replay(rec);                         // cache hit: replay -> second copy
+    Builder::Recording rec = b.record_from(cp);   // opaque token
+    b.replay(rec);
     b.end();
 
     auto arr = pick_arr(b.result());
     REQUIRE(arr->data().size() == 2);
-    CHECK(pick_int(pick_dict(arr->data()[0])->data().at("k")) == 7);
-    CHECK(pick_int(pick_dict(arr->data()[1])->data().at("k")) == 7);
-    // replay re-emits the same materialised value (matches the cache, which
-    // replays the recorded ValuePtrs rather than rebuilding).
-    CHECK(arr->data()[0].get() == arr->data()[1].get());
+    CHECK(arr->data()[0].get() == arr->data()[1].get());  // shared replay
+}
+
+TEST_CASE("SharedPtrBuilder: adopt is zero-copy for composites, interns scalars") {
+    ValuePool pool;
+    SharedPtrBuilder b(pool);
+    auto sub = make_dict();
+    as_dict(ValuePtr(sub))->data()["n"] = make_int(5);
+    b.begin(Container::Array);
+    b.adopt(sub, false);               // composite: shared as-is
+    b.string_("dup", false);
+    b.adopt(make_string("dup"), false); // scalar: interns to the canonical
+    b.end();
+
+    auto arr = pick_arr(b.result());
+    REQUIRE(arr->data().size() == 3);
+    CHECK(arr->data()[0].get() == sub.get());
+    CHECK(arr->data()[1].get() == arr->data()[2].get());
+}
+
+// A minimal plug-in representation: counts events and renders a flat
+// s-expression string. Implements ONLY the typed surface — proving a
+// plug-in never needs ValuePtr, and that the default adopt() translation
+// delivers reference-model subtrees as ordinary events.
+namespace {
+struct SexprBuilder final : Builder {
+    std::string out;
+    std::vector<std::size_t> marks;
+    void null_(bool) override { out += "() "; }
+    void bool_(bool v, bool) override { out += v ? "#t " : "#f "; }
+    void int_(std::int64_t v, bool) override { out += std::to_string(v) + " "; }
+    void uint_(std::uint64_t v, bool) override { out += std::to_string(v) + " "; }
+    void real_(double, bool) override { out += "r "; }
+    void string_(std::string_view v, bool is_name) override {
+        out += std::string(v) + (is_name ? ": " : " ");
+    }
+    void begin(Container) override { out += "( "; }
+    void end() override { out += ") "; }
+    Checkpoint checkpoint() const override { return {1, out.size()}; }
+    void rollback(Checkpoint cp) override { out.resize(cp.size); }
+    Recording record_from(Checkpoint cp) const override {
+        return std::make_shared<const std::string>(out.substr(cp.size));
+    }
+    void replay(const Recording& r) override {
+        if (r) out += *static_cast<const std::string*>(r.get());
+    }
+};
+} // namespace
+
+TEST_CASE("plug-in builder: typed surface only; default adopt translates") {
+    SexprBuilder b;
+    b.begin(Container::Array);
+    b.int_(1, false);
+    // Hand it a reference-model subtree: the DEFAULT adopt must deliver
+    // it as typed events (the plug-in has no ValuePtr knowledge).
+    auto sub = make_dict();
+    as_dict(ValuePtr(sub))->data()["k"] = make_int(9);
+    b.adopt(sub, false);
+    b.end();
+    CHECK(b.out == "( 1 ( k: 9 ) ) ");
 }
