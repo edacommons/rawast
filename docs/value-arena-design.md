@@ -34,8 +34,12 @@ roadmap step.
 - `register_usage` dropped from the parse hot path (~5%, shipped v0.1.11).
 
 **Roadmap status (2026-07-04): №1–№6 DONE (№5/№6 at the API layer —
-streaming-native internals are API-stable follow-ups), №7 open
-(measure-gated).** parse_into + typed events + pure
+streaming-native internals are API-stable follow-ups). №7 RESOLVED by
+measurement: with parse_events driving a virtual Builder&, DEF parse
+quintiles are 0.42/0.57/1.01/1.55/2.61s vs 0.41/0.59/0.99/1.60/2.66s
+pre-universal (noise; Ibex ~91.5s ≈ baseline) — per-value event granularity
+amortises the indirect call. NO templating; re-measure only when the
+save-side Accessor goes streaming-native (reads are finer-grained).** parse_into + typed events + pure
 value-model stream + same-builder subparse + Accessor/convert/save_from are
 all landed and gated on feat/builder-cutover.
 
