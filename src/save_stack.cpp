@@ -323,15 +323,15 @@ bool would_skip_optional(const Grammar& g, NodeId child_id, const SaveState& s) 
 
 // Forward decl: comparator used by discriminator_pair_matches before
 // values_equal_v2's definition appears later in the file.
-bool values_equal_v2(const ValuePtr& a, const Value* b);
+bool values_equal_v2(const Value* a, const Value* b);
 
-ValuePtr discriminator_const_value(const Grammar& g, const Node& b) {
-    if (b.kind == NodeKind::Value && !b.is_name) return b.value;
+const Value* discriminator_const_value(const Grammar& g, const Node& b) {
+    if (b.kind == NodeKind::Value && !b.is_name) return b.value.get();
     if (b.kind == NodeKind::Key) {
         // Explicit Value-child (the `'X':@` emit form): use that.
         for (NodeId kc : b.children) {
             const Node& kcn = g.node(g.resolve_ref(kc));
-            if (kcn.kind == NodeKind::Value && kcn.value) return kcn.value;
+            if (kcn.kind == NodeKind::Value && kcn.value) return kcn.value.get();
         }
         // Otherwise: the Key's own literal IS the discriminator value
         // when paired with a V-name marker (the `"X":name=@` pattern,
@@ -341,7 +341,7 @@ ValuePtr discriminator_const_value(const Grammar& g, const Node& b) {
         // literal here is safe — structural Keys (`","`, `";"`) that
         // aren't paired with a V-name simply don't reach this code
         // path.
-        if (b.value) return b.value;
+        if (b.value) return b.value.get();
     }
     return nullptr;
 }
@@ -353,16 +353,16 @@ ValuePtr discriminator_const_value(const Grammar& g, const Node& b) {
 // referenced Choice could emit. Empty list means "this isn't the
 // multi-value-discriminator pattern; use discriminator_const_value
 // for the single-value case."
-std::vector<ValuePtr>
+std::vector<const Value*>
 discriminator_choice_values(const Grammar& g, const Node& b) {
-    std::vector<ValuePtr> values;
+    std::vector<const Value*> values;
     if (b.kind != NodeKind::Choice) return values;
     for (NodeId alt : b.children) {
         const Node& a = g.node(g.resolve_ref(alt));
         if (a.kind != NodeKind::Key) return {};  // not the pattern
-        ValuePtr v = discriminator_const_value(g, a);
+        const Value* v = discriminator_const_value(g, a);
         if (!v) return {};
-        values.push_back(std::move(v));
+        values.push_back(v);
     }
     return values;
 }
@@ -382,7 +382,7 @@ discriminator_choice_values(const Grammar& g, const Node& b) {
 // alt's selection.
 struct ChildDisc {
     std::string field;
-    std::vector<ValuePtr> values;  // dict[field] must equal one of these
+    std::vector<const Value*> values;  // dict[field] must equal one of these
 };
 
 std::vector<ChildDisc>
@@ -399,8 +399,8 @@ collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
         if (a.kind != NodeKind::Value || !a.is_name) continue;
         auto fname = as_string(a.value);
         if (!fname) continue;
-        if (ValuePtr cv = discriminator_const_value(g, b)) {
-            out.push_back({fname->data(), {std::move(cv)}});
+        if (const Value* cv = discriminator_const_value(g, b)) {
+            out.push_back({fname->data(), {cv}});
             continue;
         }
         auto multi = discriminator_choice_values(g, b);
@@ -426,7 +426,7 @@ collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
         if (c.kind != NodeKind::Choice) continue;
         if (c.children.empty()) continue;
         std::string common_field;
-        std::vector<ValuePtr> values;
+        std::vector<const Value*> values;
         bool ok = true;
         for (NodeId alt : c.children) {
             const Node& a = g.node(g.resolve_ref(alt));
@@ -451,18 +451,18 @@ std::optional<bool>
 discriminator_pair_matches(const Grammar& g, const std::string& name,
                             const Node& b_resolved, const DictValue& dict) {
     // Single-value form: Value-const or Key-with-Value-child.
-    if (ValuePtr cv = discriminator_const_value(g, b_resolved)) {
+    if (const Value* cv = discriminator_const_value(g, b_resolved)) {
         auto it = dict.data().find(name);
         if (it == dict.data().end()) return false;
-        return values_equal_v2(it->second, cv.get());
+        return values_equal_v2(it->second.get(), cv);
     }
     // Multi-value form: Ref-to-Choice-of-emit-keys.
     auto values = discriminator_choice_values(g, b_resolved);
     if (!values.empty()) {
         auto it = dict.data().find(name);
         if (it == dict.data().end()) return false;
-        for (const auto& v : values) {
-            if (values_equal_v2(it->second, v.get())) return true;
+        for (const Value* v : values) {
+            if (values_equal_v2(it->second.get(), v)) return true;
         }
         return false;
     }
@@ -649,7 +649,7 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
             if (eit == elt_dict->data().end()) return false;
             bool ok = false;
             for (const auto& v : d.values) {
-                if (values_equal_v2(eit->second, v.get())) { ok = true; break; }
+                if (values_equal_v2(eit->second.get(), v)) { ok = true; break; }
             }
             if (!ok) return false;
         }
@@ -665,7 +665,7 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
         if (dit == dict.data().end()) return false;
         bool ok = false;
         for (const auto& v : d.values) {
-            if (values_equal_v2(dit->second, v.get())) {
+            if (values_equal_v2(dit->second.get(), v)) {
                 ok = true;
                 break;
             }
@@ -740,22 +740,22 @@ bool has_explicit_discriminator(const Grammar& g, NodeId alt_id) {
 
 // Compare two ValuePtrs for save-direction equality. Pointer identity
 // is the fast path (constants in the pool); fall back to type+payload.
-bool values_equal_v2(const ValuePtr& a, const Value* b) {
-    if (a.get() == b) return true;
+bool values_equal_v2(const Value* a, const Value* b) {
+    if (a == b) return true;
     if (!a || !b) return false;
     if (a->type() != b->type()) return false;
     switch (a->type()) {
     case ValueType::Null:    return true;
     case ValueType::Undefined: return true;
-    case ValueType::Bool:    return std::static_pointer_cast<BoolValue>(a)->data()
+    case ValueType::Bool:    return static_cast<const BoolValue*>(a)->data()
                                    == static_cast<const BoolValue*>(b)->data();
-    case ValueType::Int:     return std::static_pointer_cast<IntValue>(a)->data()
+    case ValueType::Int:     return static_cast<const IntValue*>(a)->data()
                                    == static_cast<const IntValue*>(b)->data();
-    case ValueType::UInt:    return std::static_pointer_cast<UIntValue>(a)->data()
+    case ValueType::UInt:    return static_cast<const UIntValue*>(a)->data()
                                    == static_cast<const UIntValue*>(b)->data();
-    case ValueType::Real:    return std::static_pointer_cast<RealValue>(a)->data()
+    case ValueType::Real:    return static_cast<const RealValue*>(a)->data()
                                    == static_cast<const RealValue*>(b)->data();
-    case ValueType::String:  return std::static_pointer_cast<StringValue>(a)->data()
+    case ValueType::String:  return static_cast<const StringValue*>(a)->data()
                                    == static_cast<const StringValue*>(b)->data();
     default: return false;   // arrays / dicts: only pointer-equal counts
     }
@@ -781,13 +781,13 @@ bool values_equal_v2(const ValuePtr& a, const Value* b) {
 // Forward declaration: variant that takes an explicit peek_value (used by
 // the container=None deep walk when simulating pending-name consumption).
 bool can_consume_peek(const Grammar& g, NodeId node_id,
-                      ValuePtr peek_value, const std::string& peek_key,
+                      const Value* peek_value, const std::string& peek_key,
                       const SaveState& s);
 
 bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
     // What value would the alt see? Either the pending-name lookup
     // (top dict scope) or the next queue entry.
-    ValuePtr peek_value;
+    const Value* peek_value = nullptr;
     std::string peek_key;
     if (s.has_pending() && s.top_dict()) {
         // Strip list-append suffix so `items[]` looks up the `items`
@@ -806,17 +806,17 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
                     std::size_t idx = pit == s.top_dict()->list_progress.end()
                                         ? 0 : pit->second;
                     if (idx < arr->data().size()) {
-                        peek_value = arr->data()[idx];
+                        peek_value = arr->data()[idx].get();
                         peek_key   = field;
                     }
                 }
             } else {
-                peek_value = it->second;
+                peek_value = it->second.get();
                 peek_key   = field;
             }
         }
     } else if (s.has_q()) {
-        peek_value = s.peek_q().value;
+        peek_value = s.peek_q().value.get();
         peek_key   = s.peek_q().key_source;
     }
     return can_consume_peek(g, node_id, peek_value, peek_key, s);
@@ -844,7 +844,7 @@ bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
             auto it = dict.data().find(d.field);
             if (it == dict.data().end() || consumed.count(d.field)) continue;
             for (const auto& v : d.values) {
-                if (values_equal_v2(it->second, v.get())) return true;
+                if (values_equal_v2(it->second.get(), v)) return true;
             }
         }
         // (b) field-presence: a V-name marker whose field is present.
@@ -867,7 +867,7 @@ bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
 }
 
 bool can_consume_peek(const Grammar& g, NodeId node_id,
-                      ValuePtr peek_value, const std::string& peek_key,
+                      const Value* peek_value, const std::string& peek_key,
                       const SaveState& s) {
     NodeId rid = g.resolve_ref(node_id);
     const Node& n = g.node(rid);
@@ -907,7 +907,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 const Node& cn = g.node(g.resolve_ref(c));
                 if (cn.kind != NodeKind::Value || cn.is_name || !cn.value)
                     continue;
-                if (!(n.value && values_equal_v2(cn.value, n.value.get()))) {
+                if (!(n.value && values_equal_v2(cn.value.get(), n.value.get()))) {
                     return false;
                 }
             }
@@ -969,7 +969,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             // quotes the identifier parser can't handle.
             if (vt != ValueType::String) return false;
             const auto& s =
-                std::static_pointer_cast<StringValue>(peek_value)->data();
+                static_cast<const StringValue*>(peek_value)->data();
             if (s.empty()) return false;
             if (Parser* pp = g.parser(p)) {
                 std::istringstream is{s};
@@ -1019,7 +1019,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             // pattern). Pairs that don't form a discriminator are
             // skipped. If no discriminator pair exists at all, the
             // alt is a dict-shaped catch-all (matches any dict).
-            const auto& dict = *dynamic_cast<const DictValue*>(peek_value.get());
+            const auto& dict = *static_cast<const DictValue*>(peek_value);
             bool found_disc_match = false;
             for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
@@ -1126,11 +1126,11 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (a.kind != NodeKind::Value || !a.is_name) continue;
                 auto name_sv = as_string(a.value);
                 if (!name_sv) continue;
-                ValuePtr cv = discriminator_const_value(g, b);
+                const Value* cv = discriminator_const_value(g, b);
                 if (!cv) continue;
                 auto it = scope->dict->data().find(name_sv->data());
                 if (it == scope->dict->data().end()) return false;
-                if (!values_equal_v2(it->second, cv.get())) return false;
+                if (!values_equal_v2(it->second.get(), cv)) return false;
                 // Reject if the field is already consumed (used by
                 // a `repeat <Choice>` over a catcher body so that
                 // `:is_fixed_mask=true`-style discriminators don't
@@ -1290,7 +1290,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                         if (idx >= arr->data().size()) return false;
                         peek = arr->data()[idx];
                     }
-                    if (!can_consume_peek(g, c, peek, field, s)) {
+                    if (!can_consume_peek(g, c, peek.get(), field, s)) {
                         if (consumer_optional) {
                             have_sim_pending = false;
                             continue;
@@ -1462,7 +1462,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             if (s.has_pending() && s.top_dict()) {
                 const auto& d = s.top_dict()->dict->data();
                 auto it = d.find(s.pending_name());
-                if (it != d.end() && values_equal_v2(it->second, n.value.get())) {
+                if (it != d.end() && values_equal_v2(it->second.get(), n.value.get())) {
                     s.top_dict()->consumed.insert(s.pending_name());
                     s.clear_pending();
                 }
@@ -1609,7 +1609,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 // Typed segment: dispatch to the first matching INNER.
                 bool dispatched = false;
                 for (NodeId inner_id : n.children) {
-                    if (!can_consume_peek(g, inner_id, seg, "", s)) continue;
+                    if (!can_consume_peek(g, inner_id, seg.get(), "", s)) continue;
                     SaveState seg_s;
                     seg_s.push_q({seg, false, ""});
                     auto sr = do_consume(g, out, inner_id,
@@ -1813,7 +1813,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                         continue;  // array exhausted
                     }
                 }
-                if (can_consume_peek(g, item_id, peek, k, s)) return true;
+                if (can_consume_peek(g, item_id, peek.get(), k, s)) return true;
             }
             return false;
         };

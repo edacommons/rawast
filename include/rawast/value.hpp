@@ -155,6 +155,27 @@ inline std::shared_ptr<IntValue> as_int(const ValuePtr& v) {
         ? std::static_pointer_cast<IntValue>(v) : nullptr;
 }
 
+// Raw-pointer narrowing helpers — the borrowed (non-owning) counterparts
+// of the ValuePtr overloads above. Used by read-only engine paths (save
+// dispatch) that traverse an AST owned by the caller: no shared_ptr
+// copies, no atomic refcount traffic.
+inline const StringValue* as_string(const Value* v) {
+    return (v && v->type() == ValueType::String)
+        ? static_cast<const StringValue*>(v) : nullptr;
+}
+inline const ArrayValue* as_array(const Value* v) {
+    return (v && v->type() == ValueType::Array)
+        ? static_cast<const ArrayValue*>(v) : nullptr;
+}
+inline const DictValue* as_dict(const Value* v) {
+    return (v && v->type() == ValueType::Dict)
+        ? static_cast<const DictValue*>(v) : nullptr;
+}
+inline const IntValue* as_int(const Value* v) {
+    return (v && v->type() == ValueType::Int)
+        ? static_cast<const IntValue*>(v) : nullptr;
+}
+
 // Structural deep equality (type + payload; arrays elementwise; dicts
 // key-ordered). Order-independent for dicts since DictValue is a std::map.
 bool value_equal(const ValuePtr& a, const ValuePtr& b);
