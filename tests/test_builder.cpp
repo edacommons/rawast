@@ -385,3 +385,53 @@ TEST_CASE("parse_as + save_as round-trip through the bundle") {
     REQUIRE(back);
     CHECK(value_equal(*back, *doc));
 }
+
+// ---------------------------------------------------------------------------
+// CompactingBuilder — #opchain compaction as an event-stream decorator
+// ---------------------------------------------------------------------------
+
+#include <rawast/compacting_builder.hpp>
+
+TEST_CASE("CompactingBuilder: decorated plug-in stream == parse()'s compacted AST") {
+    register_std_parser_group();
+    register_sv_parser_group();
+    Grammar g;
+    REQUIRE(load_rawast_grammar_from_file(g, "grammars/systemverilog.rawast"));
+    const std::string src =
+        "module m;\n"
+        "  assign y = a + b + c | d && e;\n"          // multi-tier chain
+        "  assign z = (&a) & b;\n"                     // unary-reduction guard
+        "  assign w = q inside {1, 2};\n"              // non-rhs tail bailout
+        "endmodule\n";
+
+    auto s1 = Stream::from_string(src);
+    auto compacted = g.parse(s1);
+    REQUIRE(compacted);
+
+    // Any-representation path: raw events -> decorator -> builder.
+    SharedPtrBuilder inner;                    // stands in for any plug-in
+    CompactingBuilder cb(inner, g);
+    auto s2 = Stream::from_string(src);
+    REQUIRE(g.parse_into(s2, cb));
+    cb.finish();
+    CHECK(value_equal(inner.result(), *compacted));
+}
+
+TEST_CASE("CompactingBuilder: backtracking is absorbed by the buffer") {
+    register_std_parser_group();
+    register_sv_parser_group();
+    Grammar g;
+    REQUIRE(load_rawast_grammar_from_file(g, "grammars/systemverilog.rawast"));
+    // Heavy Choice retries (expression ladder) — inner must still receive
+    // exactly one clean, folded document.
+    const std::string src = "module m;\n  assign y = (a + b) * (c - d);\nendmodule\n";
+    auto s1 = Stream::from_string(src);
+    auto expect = g.parse(s1);
+    REQUIRE(expect);
+    SharedPtrBuilder inner;
+    CompactingBuilder cb(inner, g);
+    auto s2 = Stream::from_string(src);
+    REQUIRE(g.parse_into(s2, cb));
+    cb.finish();
+    CHECK(value_equal(inner.result(), *expect));
+}

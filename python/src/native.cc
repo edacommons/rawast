@@ -10,6 +10,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <rawast/builder.hpp>
+#include <rawast/compacting_builder.hpp>
 #include <rawast/grammar.hpp>
 #include <rawast/linter.hpp>
 #include <rawast/loader.hpp>
@@ -197,6 +198,7 @@ public:
     }
 };
 
+
 rawast::ValuePtr python_to_value(nb::handle obj) {
     using namespace rawast;
     // Undefined is a RETURN-ONLY sentinel: the engine may hand it back, but
@@ -244,6 +246,29 @@ std::string format_parse_error(const rawast::ParseError& e) {
         << ", column " << e.position.column << ")";
     return out.str();
 }
+
+// The direct-parse implementation behind the *_direct bindings (and, after
+// promotion, every parse entry point): native Python objects materialise
+// during the parse. Grammars with `#opchain` get the compaction as an
+// event-stream decorator — fully representation-independent, no reference-
+// model detour.
+nb::object py_parse_direct(rawast::Grammar& g, rawast::Stream& stream,
+                           const std::string* start) {
+    PyObjectBuilder b;
+    tl::expected<void, rawast::ParseError> r;
+    if (g.has_any_opchain()) {
+        rawast::CompactingBuilder cb(b, g);
+        r = start ? g.parse_into(stream, cb, *start)
+                  : g.parse_into(stream, cb);
+        if (r) cb.finish();
+    } else {
+        r = start ? g.parse_into(stream, b, *start)
+                  : g.parse_into(stream, b);
+    }
+    if (!r) throw std::runtime_error(format_parse_error(r.error()));
+    return b.result();
+}
+
 
 // Convert the RESULT a Python `expr_eval` callback hands back into the
 // engine's ValuePtr tri-state. Unlike python_to_value (the input/save
@@ -415,19 +440,8 @@ NB_MODULE(_rawast, m) {
 
         .def("parse_string_direct",
             [](rawast::Grammar& g, const std::string& content) {
-                // Opchain grammars need the whole-tree compaction the
-                // reference wrapper applies — fall back so semantics are
-                // identical for every grammar.
                 auto stream = rawast::Stream::from_string(content);
-                if (g.has_any_opchain()) {
-                    auto r = g.parse(stream);
-                    if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                    return value_to_python(*r);
-                }
-                PyObjectBuilder b;
-                auto r = g.parse_into(stream, b);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return b.result();
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("content"),
             "Parse a string, materialising native Python objects DIRECTLY "
@@ -438,18 +452,34 @@ NB_MODULE(_rawast, m) {
             [](rawast::Grammar& g, const std::string& content,
                const std::string& start) {
                 auto stream = rawast::Stream::from_string(content);
-                if (g.has_any_opchain()) {
-                    auto r = g.parse_from(stream, start);
-                    if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                    return value_to_python(*r);
-                }
-                PyObjectBuilder b;
-                auto r = g.parse_into(stream, b, start);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return b.result();
+                return py_parse_direct(g, stream, &start);
             },
             nb::arg("content"), nb::arg("start"),
             "parse_string_direct starting from the named rule.")
+
+        .def("parse_file_direct",
+            [](rawast::Grammar& g, const std::string& path) {
+                auto stream = rawast::Stream::from_file(path);
+                return py_parse_direct(g, stream, nullptr);
+            },
+            nb::arg("path"), "parse_file, direct materialisation.")
+
+        .def("parse_file_direct",
+            [](rawast::Grammar& g, const std::string& path,
+               const std::string& start) {
+                auto stream = rawast::Stream::from_file(path);
+                return py_parse_direct(g, stream, &start);
+            },
+            nb::arg("path"), nb::arg("start"),
+            "parse_file from named rule, direct materialisation.")
+
+        .def("parse_bytes_direct",
+            [](rawast::Grammar& g, nb::bytes data) {
+                auto stream = rawast::Stream::from_string(
+                    std::string(data.c_str(), data.size()));
+                return py_parse_direct(g, stream, nullptr);
+            },
+            nb::arg("data"), "parse_bytes, direct materialisation.")
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content,

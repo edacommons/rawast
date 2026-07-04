@@ -1,4 +1,5 @@
 #include <rawast/accessor.hpp>
+#include <rawast/compacting_builder.hpp>
 #include <rawast/grammar.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_registry.hpp>
@@ -2451,6 +2452,248 @@ void Grammar::compact_opchain_into(const Accessor& accessor,
     builder.adopt(root, false);
 }
 
+
+// ---------------------------------------------------------------------------
+// CompactingBuilder — `#opchain` compaction as an event-stream decorator.
+// Implemented here (not compacting_builder.cpp) so it can reuse the one
+// proven fold core, compact_opchain, which lives in this file's anonymous
+// namespace. See include/rawast/compacting_builder.hpp for the contract.
+// ---------------------------------------------------------------------------
+
+CompactingBuilder::CompactingBuilder(Builder& inner, const Grammar& g)
+    : inner_(inner) {
+    const OpchainLadder& L = g.opchain_ladder();
+    if (L.valid) {
+        restrict_ops_ = true;
+        for (const auto& [op, _] : L.op_tier) ops_.insert(op);
+    }
+    levels_.push_back({Container::None, {}});
+}
+
+void CompactingBuilder::push(Node n, bool is_name) {
+    levels_.back().emitted.emplace_back(std::move(n), is_name);
+}
+
+void CompactingBuilder::null_(bool is_name) { push(Node{}, is_name); }
+void CompactingBuilder::bool_(bool v, bool is_name) {
+    Node n; n.k = Node::K::Bool; n.b = v; push(std::move(n), is_name);
+}
+void CompactingBuilder::int_(std::int64_t v, bool is_name) {
+    Node n; n.k = Node::K::Int; n.i = v; push(std::move(n), is_name);
+}
+void CompactingBuilder::uint_(std::uint64_t v, bool is_name) {
+    Node n; n.k = Node::K::UInt; n.u = v; push(std::move(n), is_name);
+}
+void CompactingBuilder::real_(double v, bool is_name) {
+    Node n; n.k = Node::K::Real; n.r = v; push(std::move(n), is_name);
+}
+void CompactingBuilder::string_(std::string_view v, bool is_name) {
+    Node n; n.k = Node::K::Str; n.s.assign(v.data(), v.size());
+    push(std::move(n), is_name);
+}
+void CompactingBuilder::adopt(const ValuePtr& v, bool is_name) {
+    // Parity with the classic whole-tree pass, which folded chains INSIDE
+    // adopted subtrees (scope captures) too. The adopt channel is the
+    // interface's one reference-model conduit, so the reference fold is
+    // the right tool here.
+    Node n; n.k = Node::K::Adopted;
+    n.adopted = compact_opchain(v, restrict_ops_ ? &ops_ : nullptr);
+    push(std::move(n), is_name);
+}
+
+void CompactingBuilder::begin(Container kind) {
+    levels_.push_back({kind, {}});
+}
+
+void CompactingBuilder::end() {
+    if (levels_.size() < 2) return;
+    Level lvl = std::move(levels_.back());
+    levels_.pop_back();
+    switch (lvl.kind) {
+    case Container::None:
+        for (auto& e : lvl.emitted)
+            levels_.back().emitted.push_back(std::move(e));
+        return;
+    case Container::Array: {
+        Node n; n.k = Node::K::Arr;
+        n.items.reserve(lvl.emitted.size());
+        for (auto& e : lvl.emitted) n.items.push_back(std::move(e.first));
+        push(std::move(n), false);
+        return;
+    }
+    case Container::Dict:
+        push(fold(assemble_dict(std::move(lvl.emitted))), false);
+        return;
+    }
+}
+
+CompactingBuilder::Node
+CompactingBuilder::assemble_dict(std::vector<std::pair<Node, bool>>&& emitted) const {
+    auto str_of = [](const Node& n) -> const std::string* {
+        if (n.k == Node::K::Str) return &n.s;
+        if (n.k == Node::K::Adopted) {
+            if (auto sv = as_string(n.adopted.get())) return &sv->data();
+        }
+        return nullptr;
+    };
+    Node out; out.k = Node::K::Dict;
+    std::string name;
+    bool have = false;
+    for (auto& [n, is_name] : emitted) {
+        if (is_name) {
+            if (const std::string* sp = str_of(n)) { name = *sp; have = true; }
+        } else if (have) {
+            auto find_field = [&](const std::string& key) -> Node* {
+                for (auto& f : out.fields)
+                    if (f.first == key) return &f.second;
+                return nullptr;
+            };
+            if (name.size() >= 2
+                && name.compare(name.size() - 2, 2, "[]") == 0) {
+                std::string base = name.substr(0, name.size() - 2);
+                Node* slot = find_field(base);
+                if (!slot || slot->k != Node::K::Arr) {
+                    if (!slot) {
+                        out.fields.emplace_back(base, Node{});
+                        slot = &out.fields.back().second;
+                    }
+                    *slot = Node{};
+                    slot->k = Node::K::Arr;
+                }
+                slot->items.push_back(std::move(n));
+            } else if (Node* slot = find_field(name)) {
+                *slot = std::move(n);        // last-wins, position kept
+            } else {
+                out.fields.emplace_back(name, std::move(n));
+            }
+            have = false;
+        }
+    }
+    return out;
+}
+
+CompactingBuilder::Node CompactingBuilder::fold(Node d) const {
+    auto str_of = [](const Node& n) -> const std::string* {
+        if (n.k == Node::K::Str) return &n.s;
+        if (n.k == Node::K::Adopted) {
+            if (auto sv = as_string(n.adopted.get())) return &sv->data();
+        }
+        return nullptr;
+    };
+    auto field_of = [](Node& n, const char* key) -> Node* {
+        for (auto& f : n.fields)
+            if (f.first == key) return &f.second;
+        return nullptr;
+    };
+
+    Node* lhs = field_of(d, "lhs");
+    if (!lhs) return d;
+
+    for (const auto& f : d.fields) {
+        if (f.first != "lhs" && f.first != "tail") return d;   // has_other
+    }
+
+    Node* tail = field_of(d, "tail");
+    bool has_tail = tail && tail->k == Node::K::Arr && !tail->items.empty();
+    if (!has_tail) return std::move(*lhs);   // unwrap
+
+    // Every tail entry must be a {op, rhs} dict with a foldable op —
+    // otherwise leave the whole chain in always-wrap form.
+    for (Node& te : tail->items) {
+        if (te.k != Node::K::Dict || !field_of(te, "rhs")) return d;
+        if (restrict_ops_) {
+            Node* opn = field_of(te, "op");
+            const std::string* op = opn ? str_of(*opn) : nullptr;
+            if (!op || ops_.find(*op) == ops_.end()) return d;
+        }
+    }
+
+    Node acc = std::move(*lhs);
+    bool fold_produced = false;
+    for (Node& te : tail->items) {
+        Node* opn = field_of(te, "op");
+        Node* rhs = field_of(te, "rhs");
+        const std::string* op = opn ? str_of(*opn) : nullptr;
+        if (!op || !rhs) continue;
+
+        if (fold_produced && acc.k == Node::K::Dict) {
+            Node* aop = field_of(acc, "op");
+            Node* args = field_of(acc, "args");
+            const std::string* aops = aop ? str_of(*aop) : nullptr;
+            if (aops && args && args->k == Node::K::Arr && *aops == *op) {
+                args->items.push_back(std::move(*rhs));
+                continue;
+            }
+        }
+        Node chain; chain.k = Node::K::Dict;
+        Node opv; opv.k = Node::K::Str; opv.s = *op;
+        Node argsv; argsv.k = Node::K::Arr;
+        argsv.items.push_back(std::move(acc));
+        argsv.items.push_back(std::move(*rhs));
+        chain.fields.emplace_back("op", std::move(opv));
+        chain.fields.emplace_back("args", std::move(argsv));
+        acc = std::move(chain);
+        fold_produced = true;
+    }
+    return acc;
+}
+
+void CompactingBuilder::replay_node(const Node& n, bool is_name) {
+    switch (n.k) {
+    case Node::K::Null:    inner_.null_(is_name); return;
+    case Node::K::Bool:    inner_.bool_(n.b, is_name); return;
+    case Node::K::Int:     inner_.int_(n.i, is_name); return;
+    case Node::K::UInt:    inner_.uint_(n.u, is_name); return;
+    case Node::K::Real:    inner_.real_(n.r, is_name); return;
+    case Node::K::Str:     inner_.string_(n.s, is_name); return;
+    case Node::K::Adopted: inner_.adopt(n.adopted, is_name); return;
+    case Node::K::Arr:
+        inner_.begin(Container::Array);
+        for (const Node& e : n.items) replay_node(e, false);
+        inner_.end();
+        return;
+    case Node::K::Dict:
+        inner_.begin(Container::Dict);
+        for (const auto& [k, v] : n.fields) {
+            inner_.string_(k, true);
+            replay_node(v, false);
+        }
+        inner_.end();
+        return;
+    }
+}
+
+Builder::Checkpoint CompactingBuilder::checkpoint() const {
+    return {levels_.size(), levels_.back().emitted.size()};
+}
+
+void CompactingBuilder::rollback(Checkpoint cp) {
+    std::size_t depth = cp.depth < 1 ? 1 : cp.depth;
+    while (levels_.size() > depth) levels_.pop_back();
+    auto& emitted = levels_.back().emitted;
+    if (cp.size <= emitted.size()) emitted.resize(cp.size);
+}
+
+Builder::Recording CompactingBuilder::record_from(Checkpoint cp) const {
+    if (cp.depth < 1 || cp.depth > levels_.size()) return {};
+    const auto& lvl = levels_[cp.depth - 1].emitted;
+    if (cp.size > lvl.size()) return {};
+    return std::make_shared<const std::vector<std::pair<Node, bool>>>(
+        lvl.begin() + cp.size, lvl.end());
+}
+
+void CompactingBuilder::replay(const Recording& rec) {
+    if (!rec) return;
+    const auto& evs =
+        *static_cast<const std::vector<std::pair<Node, bool>>*>(rec.get());
+    for (const auto& e : evs) levels_.back().emitted.push_back(e);
+}
+
+void CompactingBuilder::finish() {
+    for (auto& [n, is_name] : levels_.front().emitted)
+        replay_node(n, is_name);
+    levels_.front().emitted.clear();
+}
 
 // Grammar::save is defined in src/save_stack.cpp so the save
 // engine (helpers + entry point) stays in one file. See the
