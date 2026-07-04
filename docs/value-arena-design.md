@@ -53,6 +53,72 @@ interfaces rather than defining them. For its schema, the standing decision:
 generational-index node schema with kind/span columns (dagland-native), NOT
 the tag-in-id encoding §1–§4 still describe.
 
+---
+
+## THE TARGET API (main target, decided 2026-07-04)
+
+Driving scenario: an app compiles with rawast and wants a **different AST
+representation per format** — DEF into an id-arena, TCL into plain Values,
+SV straight into the app's own IR.
+
+### The two primitives — everything else is sugar
+
+For a custom representation, parse's "result" is whatever the builder
+accumulated (possibly a side effect on the app's store — e.g. dagland's
+builder writing into its graph). So the primitives return only success, and
+the builder/accessor own the product:
+
+```cpp
+tl::expected<void, ParseError> Grammar::parse_into(Stream&, Builder&);
+tl::expected<void, SaveError>  Grammar::save_from(std::ostream&, Accessor&);
+```
+
+### A representation is a bundle (traits), not just a builder
+
+```cpp
+// concept RepresentationLike:
+//   R::Builder    — models BuilderLike  (typed events, checkpoint/rollback, Recording)
+//   R::Accessor   — models AccessorLike (kind, dict_get, items, scalar getters)
+//   R::Document   — the owning result   (ValuePtr | Arena | app handle | void)
+struct SharedPtrRepr { using Builder = SharedPtrBuilder; /* … */ using Document = ValuePtr; };
+struct ArenaRepr     { /* id-columnar */                 using Document = Arena;    };
+```
+
+### Call-site sugar
+
+```cpp
+auto ast   = g.parse(stream);                 // default SharedPtrRepr → ValuePtr (today's API, unchanged)
+auto arena = g.parse_as<ArenaRepr>(stream);   // → Arena
+MyIrBuilder b(my_module);                     // app-defined representation
+g.parse_into(stream, b);                      // product lives in my_module
+```
+
+### Policy vs mechanism
+
+Which format gets which representation is the APP's one-line-per-call-site
+policy; rawast owns only the mechanism (any pair, uniformly). No
+format→representation registry in the library.
+
+### Cross-representation conversion is free
+
+`convert = accessorA → builderB` is ONE generic function, not per-pair code:
+parse DEF into an arena, materialise a subtree as Python, lower into the
+app's IR — all the same pipe.
+
+### Template vs virtual — resolved
+
+- **Virtual `Builder`/`Accessor` classes are the ABI**: `parse_into`/
+  `save_from` take them; the driver stays in the .cpp; app representations
+  inherit — no template exposure. Parse events are per-value (coarse), so
+  virtual cost is noise on the build side.
+- **Shipped representations get the fast path**: engine internals templated
+  (constrained by the same concepts) and explicitly instantiated INSIDE the
+  library — `parse_as<ArenaRepr>` pays zero dispatch without header-exposing
+  the driver.
+- Watch the save-side `Accessor` (reads are much hotter than build events):
+  measure the virtual form on the corpus before deciding app accessors need
+  a template path. Don't build that door until someone knocks.
+
 ## Motivation
 
 The current AST is a `shared_ptr<Value>` graph. For large inputs (multi-MB
