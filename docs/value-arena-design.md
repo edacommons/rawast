@@ -33,8 +33,9 @@ roadmap step.
 - Save dispatch layer borrows `const Value*` (~3–6% save win, `bd4b18f`).
 - `register_usage` dropped from the parse hot path (~5%, shipped v0.1.11).
 
-**Roadmap status (2026-07-04): №1–№4 DONE, №5 API DONE (streaming-native
-internals pending), №6–№7 open.** parse_into + typed events + pure
+**Roadmap status (2026-07-04): №1–№6 DONE (№5/№6 at the API layer —
+streaming-native internals are API-stable follow-ups), №7 open
+(measure-gated).** parse_into + typed events + pure
 value-model stream + same-builder subparse + Accessor/convert/save_from are
 all landed and gated on feat/builder-cutover.
 
