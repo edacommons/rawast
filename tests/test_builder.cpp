@@ -152,12 +152,14 @@ TEST_CASE("SharedPtrBuilder: adopt is zero-copy for composites, interns scalars"
     CHECK(arr->data()[1].get() == arr->data()[2].get());
 }
 
-// A minimal plug-in representation: counts events and renders a flat
-// s-expression string. Implements ONLY the typed surface — proving a
-// plug-in never needs ValuePtr, and that the default adopt() translation
-// delivers reference-model subtrees as ordinary events.
+// A minimal test-only plug-in representation: records the event stream as
+// a flat parenthesized trace string. Implements ONLY the typed surface —
+// proving a plug-in never needs ValuePtr, that the default adopt()
+// translation delivers reference-model subtrees as ordinary events, and
+// that the stream carries the pure value model (it caught the
+// Container::None plumbing leak).
 namespace {
-struct SexprBuilder final : Builder {
+struct EventTraceBuilder final : Builder {
     std::string out;
     std::vector<std::size_t> marks;
     void null_(bool) override { out += "() "; }
@@ -182,7 +184,7 @@ struct SexprBuilder final : Builder {
 } // namespace
 
 TEST_CASE("plug-in builder: typed surface only; default adopt translates") {
-    SexprBuilder b;
+    EventTraceBuilder b;
     b.begin(Container::Array);
     b.int_(1, false);
     // Hand it a reference-model subtree: the DEFAULT adopt must deliver
@@ -197,7 +199,7 @@ TEST_CASE("plug-in builder: typed surface only; default adopt translates") {
 TEST_CASE("parse_into: a plug-in representation receives a real parse") {
     auto g = make_json_grammar();
     auto stream = Stream::from_string(R"({"n": 42, "xs": [1, 2]})");
-    SexprBuilder b;
+    EventTraceBuilder b;
     auto r = g.parse_into(stream, b);
     REQUIRE(r);
     // dict + array structure delivered purely through typed events
@@ -207,7 +209,7 @@ TEST_CASE("parse_into: a plug-in representation receives a real parse") {
 TEST_CASE("parse_into: parse failure reaches the caller, builder untouched by commit") {
     auto g = make_json_grammar();
     auto stream = Stream::from_string("{broken");
-    SexprBuilder b;
+    EventTraceBuilder b;
     auto r = g.parse_into(stream, b);
     CHECK_FALSE(r);
 }
