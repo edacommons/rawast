@@ -481,3 +481,23 @@ def test_preprocessor_expr_eval_property_and_undecidable_policy():
     # bad on_undecidable policy is rejected
     with pytest.raises(Exception):
         rawast.Preprocessor(g, on_undecidable="maybe")
+
+
+def test_parse_string_direct_matches_classic():
+    """parse_string_direct materialises native Python objects DURING the
+    parse (PyObjectBuilder over the universal Builder seam) — result must
+    be identical to the classic parse+convert path for every grammar
+    family, including the opchain fallback (SV) and named-rule starts."""
+    import rawast
+    cases = [
+        ("tcl", "set x 1\nputs [expr {$x + 2}]\n", None),
+        ("lefdef", "VERSION 5.8 ;\nEND LIBRARY\n", None),
+        ("lefdef", "VERSION 5.8 ;\nDESIGN top ;\nEND DESIGN\n", "DEF"),
+        ("systemverilog", "module m;\n  assign y = a + b + c;\nendmodule\n", None),
+    ]
+    for gname, src, start in cases:
+        g = rawast.Grammar(gname)
+        if start:
+            assert g.parse_string_direct(src, start) == g.parse_string(src, start)
+        else:
+            assert g.parse_string_direct(src) == g.parse_string(src)

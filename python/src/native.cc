@@ -9,6 +9,7 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
+#include <rawast/builder.hpp>
 #include <rawast/grammar.hpp>
 #include <rawast/linter.hpp>
 #include <rawast/loader.hpp>
@@ -86,6 +87,115 @@ nb::object value_to_python(const rawast::ValuePtr& v) {
     }
     return nb::none();
 }
+
+// --- PyObjectBuilder — native Python as a representation ------------------
+//
+// The first foreign representation over the universal Builder seam:
+// materialises Python dict/list/scalars DIRECTLY during the parse — no
+// ValuePtr tree, no post-parse conversion pass. All events arrive on the
+// calling thread with the GIL held (the binding never releases it).
+// adopt() is overridden to route completed reference-model subtrees
+// (subparse products, scope captures, grammar constants) through
+// value_to_python — bit-identical fidelity with the classic path,
+// including the Undefined return-only sentinel, which the typed event
+// surface deliberately does not carry.
+class PyObjectBuilder final : public rawast::Builder {
+    struct EV    { nb::object v; bool is_name; };
+    struct Level { rawast::Container kind; std::vector<EV> emitted; };
+    std::vector<Level> levels_;
+
+    void push(nb::object o, bool is_name) {
+        levels_.back().emitted.push_back({std::move(o), is_name});
+    }
+
+public:
+    PyObjectBuilder() { levels_.push_back({rawast::Container::None, {}}); }
+
+    void null_(bool n) override                 { push(nb::none(), n); }
+    void bool_(bool v, bool n) override         { push(nb::cast(v), n); }
+    void int_(std::int64_t v, bool n) override  { push(nb::cast(v), n); }
+    void uint_(std::uint64_t v, bool n) override{ push(nb::cast(v), n); }
+    void real_(double v, bool n) override       { push(nb::cast(v), n); }
+    void string_(std::string_view v, bool n) override {
+        push(nb::str(v.data(), v.size()), n);
+    }
+    void adopt(const rawast::ValuePtr& v, bool is_name) override {
+        push(value_to_python(v), is_name);
+    }
+
+    void begin(rawast::Container k) override { levels_.push_back({k, {}}); }
+
+    void end() override {
+        if (levels_.size() < 2) return;
+        Level lvl = std::move(levels_.back());
+        levels_.pop_back();
+        auto& parent = levels_.back().emitted;
+        switch (lvl.kind) {
+        case rawast::Container::None:
+            for (auto& e : lvl.emitted) parent.push_back(std::move(e));
+            return;
+        case rawast::Container::Array: {
+            nb::list out;
+            for (auto& e : lvl.emitted) out.append(e.v);
+            parent.push_back({std::move(out), false});
+            return;
+        }
+        case rawast::Container::Dict: {
+            nb::dict out;
+            std::string name;
+            bool have = false;
+            for (auto& e : lvl.emitted) {
+                if (e.is_name) {
+                    if (nb::isinstance<nb::str>(e.v)) {
+                        name = nb::cast<std::string>(e.v);
+                        have = true;
+                    }
+                } else if (have) {
+                    if (name.size() >= 2
+                        && name.compare(name.size() - 2, 2, "[]") == 0) {
+                        nb::str base(name.c_str(),
+                                     name.size() - 2);
+                        if (!out.contains(base)) out[base] = nb::list();
+                        nb::cast<nb::list>(out[base]).append(e.v);
+                    } else {
+                        out[nb::str(name.c_str(), name.size())] = e.v;
+                    }
+                    have = false;
+                }
+            }
+            parent.push_back({std::move(out), false});
+            return;
+        }
+        }
+    }
+
+    Checkpoint checkpoint() const override {
+        return {levels_.size(), levels_.back().emitted.size()};
+    }
+    void rollback(Checkpoint cp) override {
+        std::size_t depth = cp.depth < 1 ? 1 : cp.depth;
+        while (levels_.size() > depth) levels_.pop_back();
+        auto& emitted = levels_.back().emitted;
+        if (cp.size <= emitted.size()) emitted.resize(cp.size);
+    }
+    Recording record_from(Checkpoint cp) const override {
+        if (cp.depth < 1 || cp.depth > levels_.size()) return {};
+        const auto& lvl = levels_[cp.depth - 1].emitted;
+        if (cp.size > lvl.size()) return {};
+        return std::make_shared<const std::vector<EV>>(
+            lvl.begin() + cp.size, lvl.end());
+    }
+    void replay(const Recording& rec) override {
+        if (!rec) return;
+        const auto& evs = *static_cast<const std::vector<EV>*>(rec.get());
+        for (const auto& e : evs) levels_.back().emitted.push_back(e);
+    }
+
+    nb::object result() const {
+        if (levels_.front().emitted.empty()) return nb::none();
+        return levels_.front().emitted.front().v;
+    }
+};
 
 rawast::ValuePtr python_to_value(nb::handle obj) {
     using namespace rawast;
@@ -302,6 +412,44 @@ NB_MODULE(_rawast, m) {
             },
             nb::arg("content"),
             "Parse a string from the grammar's default start.")
+
+        .def("parse_string_direct",
+            [](rawast::Grammar& g, const std::string& content) {
+                // Opchain grammars need the whole-tree compaction the
+                // reference wrapper applies — fall back so semantics are
+                // identical for every grammar.
+                auto stream = rawast::Stream::from_string(content);
+                if (g.has_any_opchain()) {
+                    auto r = g.parse(stream);
+                    if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                    return value_to_python(*r);
+                }
+                PyObjectBuilder b;
+                auto r = g.parse_into(stream, b);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return b.result();
+            },
+            nb::arg("content"),
+            "Parse a string, materialising native Python objects DIRECTLY "
+            "during the parse (no intermediate C++ value tree). Result is "
+            "identical to parse_string.")
+
+        .def("parse_string_direct",
+            [](rawast::Grammar& g, const std::string& content,
+               const std::string& start) {
+                auto stream = rawast::Stream::from_string(content);
+                if (g.has_any_opchain()) {
+                    auto r = g.parse_from(stream, start);
+                    if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                    return value_to_python(*r);
+                }
+                PyObjectBuilder b;
+                auto r = g.parse_into(stream, b, start);
+                if (!r) throw std::runtime_error(format_parse_error(r.error()));
+                return b.result();
+            },
+            nb::arg("content"), nb::arg("start"),
+            "parse_string_direct starting from the named rule.")
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content,

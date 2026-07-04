@@ -2407,6 +2407,20 @@ tl::expected<void, ParseError> Grammar::parse_into(
                         /*require_full_consume=*/true, nullptr);
 }
 
+tl::expected<void, ParseError> Grammar::parse_into(
+        Stream& stream, Builder& builder,
+        const std::string& start_name) const {
+    auto it = named_rules_.find(start_name);
+    if (it == named_rules_.end()) {
+        return tl::unexpected(ParseError{
+            stream.reader().position(),
+            "parse_into: no rule named '" + start_name + "'"});
+    }
+    ValuePool pool;
+    return parse_events(stream.reader(), pool, it->second, builder,
+                        /*require_full_consume=*/true, nullptr);
+}
+
 // Universal `#opchain` compaction pass. The fold itself is inherently
 // bottom-up (it inspects already-compacted children), so the one proven
 // fold core (compact_opchain above) runs on the reference model:

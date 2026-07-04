@@ -276,6 +276,10 @@ public:
     // reference-model-bound until it becomes an Accessor→Builder pass.
     tl::expected<void, ParseError> parse_into(
             Stream& stream, Builder& builder) const;
+    // Named-rule variant (mirrors parse_from(stream, start_name)).
+    tl::expected<void, ParseError> parse_into(
+            Stream& stream, Builder& builder,
+            const std::string& start_name) const;
 
     // Convenience: parse from a rule name. Looks up the named rule's
     // body NodeId via the registry; fails if the rule doesn't exist.
