@@ -372,6 +372,19 @@ it) and an `Accessor` (save serializes it). The `Accessor` is a *future* step �
 needed only when a second representation (the arena) must round-trip; `ValuePtr`
 save is unchanged until then.
 
+**Refinement (2026-07-04, implemented in part):** save's *dispatch* layer
+(can_consume / values_equal / discriminators) now borrows `const Value*`
+(~3–6% save win; shipped with the cutover branch). The *queue/consume* layer
+stays `ValuePtr`-owning on purpose: the opchain re-nest (`rebuild_cascade`)
+stores its input, so a borrowed queue would need re-owning anyway. And for
+the §0.5 intermediate model the `Accessor` turns out to be UNNECESSARY —
+arena-allocated `Value`s can enter save as **non-owning aliasing
+`shared_ptr`s** (empty control block → copies skip the atomics, near-free).
+The `ArenaValueBuilder` hands the engine those, and the whole save engine
+works unchanged. The full `Accessor` is needed only for a representation
+that is not the `Value` hierarchy at all (the id-columnar arena / dagland
+L0).
+
 ---
 
 ## 6. Operations
