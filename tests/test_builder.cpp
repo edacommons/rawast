@@ -345,3 +345,43 @@ TEST_CASE("compact_opchain_into: no-opchain grammar degenerates to convert") {
     g.compact_opchain_into(acc, out);
     CHECK(value_equal(out.result(), *ast));
 }
+
+// ---------------------------------------------------------------------------
+// Representation bundles — parse_as<R> / save_as<R>
+// ---------------------------------------------------------------------------
+
+#include <rawast/representation.hpp>
+
+TEST_CASE("parse_as<SharedPtrRepr> == parse(), including #opchain compaction") {
+    register_std_parser_group();
+    register_sv_parser_group();
+    Grammar g;
+    REQUIRE(load_rawast_grammar_from_file(g, "grammars/systemverilog.rawast"));
+    const std::string src = "module m;\n  assign y = a + b + c | d;\nendmodule\n";
+
+    auto s1 = Stream::from_string(src);
+    auto via_parse = g.parse(s1);
+    REQUIRE(via_parse);
+
+    auto s2 = Stream::from_string(src);
+    auto via_bundle = g.parse_as<SharedPtrRepr>(s2);
+    REQUIRE(via_bundle);
+    CHECK(value_equal(*via_bundle, *via_parse));   // compacted identically
+}
+
+TEST_CASE("parse_as + save_as round-trip through the bundle") {
+    auto g = make_json_grammar();
+    auto s = Stream::from_string(R"({"a": [1, 2], "s": "hi"})");
+    auto doc = g.parse_as<SharedPtrRepr>(s);
+    REQUIRE(doc);
+
+    std::ostringstream direct, via;
+    REQUIRE(g.save(direct, *doc));
+    REQUIRE(g.save_as<SharedPtrRepr>(via, *doc));
+    CHECK(via.str() == direct.str());
+
+    auto s2 = Stream::from_string(via.str());
+    auto back = g.parse_as<SharedPtrRepr>(s2);
+    REQUIRE(back);
+    CHECK(value_equal(*back, *doc));
+}

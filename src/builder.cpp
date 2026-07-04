@@ -55,6 +55,11 @@ SharedPtrBuilder::SharedPtrBuilder(ValuePool& pool) : pool_(pool) {
     levels_.push_back({Container::None, {}});   // root
 }
 
+SharedPtrBuilder::SharedPtrBuilder()
+    : owned_pool_(std::make_unique<ValuePool>()), pool_(*owned_pool_) {
+    levels_.push_back({Container::None, {}});   // root
+}
+
 void SharedPtrBuilder::push(ValuePtr v, bool is_name) {
     levels_.back().emitted.push_back({std::move(v), is_name});
 }

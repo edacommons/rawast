@@ -82,6 +82,9 @@ public:
 class SharedPtrBuilder final : public Builder {
 public:
     explicit SharedPtrBuilder(ValuePool& pool);
+    // Self-contained form: owns its interning pool. The representation-
+    // bundle sugar (parse_as<SharedPtrRepr>) constructs builders this way.
+    SharedPtrBuilder();
 
     void null_(bool is_name) override;
     void bool_(bool v, bool is_name) override;
@@ -112,6 +115,7 @@ private:
 
     void push(ValuePtr v, bool is_name);
 
+    std::unique_ptr<ValuePool> owned_pool_;   // set only by the default ctor
     ValuePool&         pool_;
     std::vector<Level> levels_;   // levels_[0] is the root (Container::None)
 };

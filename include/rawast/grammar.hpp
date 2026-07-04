@@ -1,5 +1,7 @@
 #pragma once
 
+#include <rawast/accessor.hpp>
+#include <rawast/builder.hpp>
 #include <rawast/node.hpp>
 #include <rawast/parser.hpp>
 #include <rawast/pool.hpp>
@@ -10,6 +12,7 @@
 #include <tl/expected.hpp>
 
 #include <bitset>
+#include <type_traits>
 #include <cstddef>
 #include <map>
 #include <memory>
@@ -331,6 +334,43 @@ public:
     // in with accessor/builder of their own pair. No-opchain grammars
     // degenerate to a plain convert().
     void compact_opchain_into(const Accessor& accessor, Builder& builder) const;
+
+    // --- Representation-bundle sugar (see rawast/representation.hpp) ---
+    //
+    // parse_as<R>: parse into representation R and return its owning
+    // Document. Semantics MATCH parse(): when the grammar carries
+    // `#opchain`, the universal compaction pass is applied (through R's
+    // own accessor/builder), so every representation observes the same
+    // AST shape. parse_into remains the raw, no-transform primitive.
+    template <class R>
+    tl::expected<typename R::Document, ParseError> parse_as(Stream& stream) const {
+        static_assert(std::is_base_of_v<Builder, typename R::Builder>,
+                      "R::Builder must implement rawast::Builder");
+        typename R::Builder b;
+        auto r = parse_into(stream, b);
+        if (!r) return tl::unexpected(r.error());
+        typename R::Document doc = R::take(b);
+        if (has_any_opchain()) {
+            typename R::Accessor acc = R::read(doc);
+            typename R::Builder folded;
+            compact_opchain_into(acc, folded);
+            doc = R::take(folded);
+        }
+        return doc;
+    }
+
+    // save_as<R>: serialise representation R's Document through its
+    // Accessor (reference bundles hit save_from's zero-overhead path).
+    template <class R>
+    tl::expected<void, SaveError> save_as(std::ostream& out,
+                                          const typename R::Document& doc,
+                                          bool pretty = true,
+                                          NodeId start = {}) const {
+        static_assert(std::is_base_of_v<Accessor, typename R::Accessor>,
+                      "R::Accessor must implement rawast::Accessor");
+        typename R::Accessor acc = R::read(doc);
+        return save_from(out, acc, pretty, start);
+    }
 
     // --- Performance: peek-and-skip optional/choice optimization ------
     //
