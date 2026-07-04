@@ -1,3 +1,4 @@
+#include <rawast/accessor.hpp>
 #include <rawast/grammar.hpp>
 #include <rawast/parsers.hpp>
 #include <rawast/parsers_registry.hpp>
@@ -2404,6 +2405,36 @@ tl::expected<void, ParseError> Grammar::parse_into(
     ValuePool pool;   // internal machinery (subparse/scope) still pools
     return parse_events(stream.reader(), pool, top_, builder,
                         /*require_full_consume=*/true, nullptr);
+}
+
+// Universal `#opchain` compaction pass. The fold itself is inherently
+// bottom-up (it inspects already-compacted children), so the one proven
+// fold core (compact_opchain above) runs on the reference model:
+// reference accessors fold directly (zero conversion); foreign accessors
+// materialise through the generic convert() pipe first. The result is
+// handed to the target builder via adopt() — zero-copy for the reference
+// builder, typed-event translation for any other. A streaming plan-tree
+// fold can replace the internals later without changing this API.
+void Grammar::compact_opchain_into(const Accessor& accessor,
+                                   Builder& builder) const {
+    ValuePool pool;
+    ValuePtr root;
+    if (const auto* sp = dynamic_cast<const SharedPtrAccessor*>(&accessor)) {
+        root = sp->root_value();
+    } else {
+        SharedPtrBuilder materialise(pool);
+        convert(accessor, materialise);
+        root = materialise.result();
+    }
+    if (has_opchain_in_chain(top_) || has_any_opchain()) {
+        const OpchainLadder& L = opchain_ladder();
+        std::unordered_set<std::string> ops;
+        if (L.valid) {
+            for (const auto& [op, _] : L.op_tier) ops.insert(op);
+        }
+        root = compact_opchain(root, L.valid ? &ops : nullptr);
+    }
+    builder.adopt(root, false);
 }
 
 

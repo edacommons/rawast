@@ -298,3 +298,50 @@ TEST_CASE("save_from: a foreign representation round-trips through convert") {
     REQUIRE(back);
     CHECK(value_equal(*back, *ast));
 }
+
+// ---------------------------------------------------------------------------
+// compact_opchain_into — the universal #opchain pass
+// ---------------------------------------------------------------------------
+
+#include <rawast/loader.hpp>
+#include <rawast/parsers.hpp>
+#include <rawast/parsers_sv.hpp>
+
+TEST_CASE("compact_opchain_into: raw parse_into stream + pass == compacted parse()") {
+    register_std_parser_group();
+    register_sv_parser_group();
+    Grammar g;
+    REQUIRE(load_rawast_grammar_from_file(g, "grammars/systemverilog.rawast"));
+    const std::string src = "module m;\n  assign y = a + b + c | d;\nendmodule\n";
+
+    // Reference path: parse() applies the #opchain compaction.
+    auto s1 = Stream::from_string(src);
+    auto compacted = g.parse(s1);
+    REQUIRE(compacted);
+
+    // Plug-in-style path: parse_into applies NO compaction (raw
+    // always-wrap {lhs,tail} stream) — then the universal pass folds it.
+    ValuePool pool;
+    SharedPtrBuilder raw(pool);
+    auto s2 = Stream::from_string(src);
+    REQUIRE(g.parse_into(s2, raw));
+    CHECK_FALSE(value_equal(raw.result(), *compacted));   // truly uncompacted
+
+    SharedPtrAccessor acc(raw.result());
+    ValuePool pool2;
+    SharedPtrBuilder folded(pool2);
+    g.compact_opchain_into(acc, folded);
+    CHECK(value_equal(folded.result(), *compacted));
+}
+
+TEST_CASE("compact_opchain_into: no-opchain grammar degenerates to convert") {
+    auto g = make_json_grammar();
+    auto s = Stream::from_string(R"({"a": [1, 2]})");
+    auto ast = g.parse(s);
+    REQUIRE(ast);
+    SharedPtrAccessor acc(*ast);
+    ValuePool pool;
+    SharedPtrBuilder out(pool);
+    g.compact_opchain_into(acc, out);
+    CHECK(value_equal(out.result(), *ast));
+}

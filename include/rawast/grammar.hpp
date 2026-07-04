@@ -322,6 +322,16 @@ public:
                                             bool pretty = true,
                                             NodeId start = {}) const;
 
+    // Universal `#opchain` compaction pass: read any representation
+    // through its Accessor, fold always-wrap {lhs,tail} chains into the
+    // compact {op,args} form (restricted to ops the grammar's cascade
+    // ladder can rebuild), and emit the result into any Builder. This is
+    // the same transform the reference parse wrapper applies; plug-in
+    // representations parsed via parse_into (which applies none) can opt
+    // in with accessor/builder of their own pair. No-opchain grammars
+    // degenerate to a plain convert().
+    void compact_opchain_into(const Accessor& accessor, Builder& builder) const;
+
     // --- Performance: peek-and-skip optional/choice optimization ------
     //
     // For each Node, precompute the set of input first-bytes its
