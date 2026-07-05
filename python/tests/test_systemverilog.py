@@ -2377,3 +2377,25 @@ def test_sv_defparam_bind_let_structured(sv_grammar):
     asg = a["descriptions"][0]["items"][0]["assignments"][0]
     assert asg["target"]["name"] == "a"
     assert asg["value"] == {"type": "string", "value": "on"}
+
+
+def test_sv_toplevel_directives_and_unnamed_instances(sv_grammar):
+    """Coverage-tail fixes found by root-causing the Tier-D gate failures:
+    (a) `define/`ifdef/`ifndef/`include/`undef are legal at TOP level
+    (were module-item-only — 28 std-cell library files); (b) UDP/module
+    instances may omit the instance name (asap7 SEQ cells) — plain
+    identifiers only, own type discriminator so macro statements and the
+    named form keep their save dispatch."""
+    cases = [
+        "`define SB_DFF_INIT initial Q = 0;\nmodule m; endmodule",
+        "`ifndef NO_DEF\n`define Y 2\n`endif\nmodule m; endmodule",
+        "module m; altos_dff_sr_err (a, b, c); endmodule",
+        "module m; sub u1 (.a(x)); endmodule",
+    ]
+    for src in cases:
+        a = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(a).decode()) == a
+    a = sv_grammar.parse_string("module m; myudp (x, y); endmodule")
+    it = a["descriptions"][0]["items"][0]
+    assert it["type"] == "instance_unnamed"
+    assert len(it["instances"][0]["port_bindings"]) == 2

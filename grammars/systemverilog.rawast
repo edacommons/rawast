@@ -126,6 +126,11 @@ DESCRIPTION: choice {
 SV_COMPILER_DIRECTIVE: choice {
   <CD_TIMESCALE>,
   <CD_NETTYPE>,
+  <DEFINE>,
+  <IFDEF>,
+  <IFNDEF>,
+  <INCLUDE>,
+  <UNDEF>,
   <CD_NOARG>
 }
 CD_TIMESCALE: sequence dict {
@@ -771,6 +776,7 @@ MODULE_ITEM: choice {
   <EXPORT_STMT>,
   <GATE_INSTANTIATION>,
   <MODULE_INSTANTIATION>,
+  <UNNAMED_INSTANTIATION>,
   <VIRTUAL_INTERFACE_DECL>,
   <TYPEDEF_FORWARD_CLASS>,
   <TYPEDEF_REGULAR>,
@@ -1372,7 +1378,28 @@ GATE_INSTANCE: sequence dict {
 RESERVED_NOT_INSTANCE: choice {
   'begin', 'end', 'else',
   'endmodule', 'endinterface', 'endpackage', 'endgenerate',
-  'endcase', 'endtask', 'endfunction'
+  'endcase', 'endtask', 'endfunction',
+  'if', 'for', 'foreach', 'case', 'casex', 'casez', 'while', 'do',
+  'repeat', 'forever', 'initial', 'always', 'final', 'generate',
+  'assign', 'wait', 'fork', 'join'
+}
+
+// Unnamed single instance (`altos_dff_sr_err (a, b, c);` — UDP/module
+// instance with the optional name omitted, common in vendor cell libs).
+// PLAIN identifier module names only: a macro-use head must remain a
+// macro statement, and the RESERVED guard keeps keywords out. Save
+// dispatch: shares type="instance"; the named rule's INSTANCE requires
+// `name`, so field presence routes each shape to its own alternative.
+UNNAMED_INSTANTIATION: sequence dict {
+  !<RESERVED_NOT_INSTANCE>,
+  sv_identifier:module_name=@:type="instance_unnamed" space,
+  <INSTANCE_UNNAMED>:instances[]=@,
+  ";"
+}
+INSTANCE_UNNAMED: sequence dict {
+  "(" newline,
+  repeat <PORT_BINDING>:port_bindings[]=@ indent tab separator "," newline,
+  "" newline, "" tab, ")"
 }
 
 MODULE_INSTANTIATION: sequence dict {
