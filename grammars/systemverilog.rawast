@@ -3780,27 +3780,41 @@ MODPORT_GROUP_INHERIT: sequence dict {
 LET_DECL: sequence dict {
   'let':@:type="let" space,
   sv_identifier:name=@,
-  ?<METHOD_PORT_LIST>:args=@,
-  "=",
-  *:body=@,
+  ?<METHOD_PORT_LIST>:args=@ space,
+  "=" space,
+  <EXPR>:value=@,
   ";"
 }
 
-// `bind <target> <module> <instance> (...);` — out-of-module
-// directive. Target is either a module type or an instance path;
-// captured as opaque text up to the binding clause.
-BIND_STMT: sequence dict {
-  'bind':@:type="bind",
-  *:body=@,
-  ";"
+// `bind <target> <module> <inst> (...);` — out-of-module directive.
+// The common form (lowRISC FPV: `bind i_x checker_mod #(...) u (...);`)
+// is a target reference followed by a standard module instantiation —
+// reuse MODULE_INSTANTIATION wholesale. Exotic forms (`bind mod :
+// inst1, inst2 …`) fall back to raw capture.
+BIND_STMT: choice {
+  sequence dict {
+    'bind':@:type="bind" space,
+    <HIER_REF>:target=@ space,
+    <MODULE_INSTANTIATION>:instance=@
+  },
+  sequence dict {
+    'bind':@:type="bind_raw",
+    *:body=@,
+    ";"
+  }
 }
 
 // `defparam path.to.param = value;` — overrides a parameter on an
 // instance after the fact. Deprecated in SV-1800 but still legal.
 DEFPARAM_STMT: sequence dict {
-  'defparam':@:type="defparam",
-  *:body=@,
+  'defparam':@:type="defparam" space,
+  repeat+ <DEFPARAM_ASSIGN>:assignments[]=@ separator "," space,
   ";"
+}
+DEFPARAM_ASSIGN: sequence dict {
+  <HIER_REF>:target=@ space,
+  "=" space,
+  <EXPR>:value=@
 }
 
 // `specify … endspecify` — timing specifications, structured per IEEE

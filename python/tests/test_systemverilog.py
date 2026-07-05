@@ -2356,3 +2356,24 @@ def test_sv_specify_block_structured(sv_grammar):
     assert "&&&" in out
     # empty args preserved
     assert {"type": "empty_arg"} in tc["args"]
+
+
+def test_sv_defparam_bind_let_structured(sv_grammar):
+    """Tier D: defparam/bind/let bodies are structured ASTs (were raw
+    text). bind reuses MODULE_INSTANTIATION for the common FPV form and
+    keeps a raw fallback (bind_raw) for exotic target-colon-lists."""
+    cases = [
+        ('module m; defparam a.b.c = "on", x.y = f; endmodule', "defparam"),
+        ("module m; bind i_x chk #(.D(4)) u (.clk(clk)); endmodule", "bind"),
+        ("module m; bind t : i1, i2 chk u(.*); endmodule", "bind_raw"),
+        ("module m; let andor(a, b, c) = a && b || c; endmodule", "let"),
+    ]
+    for src, typ in cases:
+        a = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(a).decode()) == a
+        assert a["descriptions"][0]["items"][0]["type"] == typ
+    # defparam targets/values are real ASTs now
+    a = sv_grammar.parse_string('module m; defparam a.b.c = "on"; endmodule')
+    asg = a["descriptions"][0]["items"][0]["assignments"][0]
+    assert asg["target"]["name"] == "a"
+    assert asg["value"] == {"type": "string", "value": "on"}
