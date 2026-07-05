@@ -3803,13 +3803,148 @@ DEFPARAM_STMT: sequence dict {
   ";"
 }
 
-// `specify … endspecify` — timing specifications. Body is highly
-// dialect-specific (timing paths, edge specifications); capture as
-// raw text and let host re-parse if needed.
+// `specify … endspecify` — timing specifications, structured per IEEE
+// 1800-2017 §30 (paths, state-dependent paths, timing checks) with a
+// raw ;-terminated fallback item so unmodeled constructs (pulsestyle,
+// PATHPULSE$ specparams, vendor extensions) never regress parsing.
+// Corpus-driven shapes: std-cell/IO-cell library models (sky130, asap7,
+// GF130) — `if (…) (A +=> PAD) = (…)`, `(posedge clk *> rd_out)`,
+// `$setuphold(posedge CLK &&& cond, D, 0, 0, ntfy,,, dCLK, dD)`,
+// `(negedge RSTN => (QN+:1'b1)) = 0`, `ifnone`, min:typ:max triples.
 SPECIFY_BLOCK: sequence dict {
-  'specify':@:type="specify",
-  *:body=@,
+  'specify':@:type="specify" newline,
+  <SPECIFY_ITEMS>:items=@,
   'endspecify'
+}
+
+SPECIFY_ITEMS: sequence array {
+  repeat <SPECIFY_ITEM> indent tab newline
+}
+
+SPECIFY_ITEM: choice {
+  <SPECPARAM_DECL>,
+  <SPEC_PATH_IF>,
+  <SPEC_PATH_IFNONE>,
+  <SPEC_PATH>,
+  <SPEC_TIMING_CHECK>,
+  <SPEC_RAW_ITEM>
+}
+
+// `specparam tplh$A$Y = 1.0, tphl$A$Y = 1.2;` — `$` is a legal
+// identifier char, so library-style names parse as plain identifiers.
+SPECPARAM_DECL: sequence dict {
+  'specparam':@:type="specparam" space,
+  repeat+ <SPECPARAM_ASSIGN>:params[]=@ separator "," space,
+  ";"
+}
+SPECPARAM_ASSIGN: sequence dict {
+  sv_identifier:name=@ space,
+  "=" space,
+  <SPEC_MTM>:value=@
+}
+
+// State-dependent path: `if (cond) (A +=> PAD) = (1.0, 1.0);`
+SPEC_PATH_IF: sequence dict {
+  'if':@:type="spec_if" space,
+  "(", <EXPR>:cond=@, ")" space,
+  "(", <SPEC_PATH_CORE>,
+  ";"
+}
+SPEC_PATH_IFNONE: sequence dict {
+  'ifnone':@:type="spec_ifnone" space,
+  "(", <SPEC_PATH_CORE>,
+  ";"
+}
+SPEC_PATH: sequence dict {
+  "(":type="spec_path",
+  <SPEC_PATH_CORE>,
+  ";"
+}
+
+// Everything after the opening `(`: optional edge, source terminals,
+// the (polarity-fused) path operator, destination — either a terminal
+// list or the edge-sensitive `(output [+|-] : data)` form — then the
+// delay assignment.
+SPEC_PATH_CORE: sequence {
+  ?<SPEC_EDGE>:edge=@ space,
+  repeat+ <EXPR>:inputs[]=@ separator "," space,
+  ?<SPEC_POLARITY>:polarity=@,
+  "" space,
+  <SPEC_PATH_OP>:op=@ space,
+  choice {
+    sequence {
+      "(",
+      <EXPR>:output=@,
+      ?<SPEC_POLARITY>:data_polarity=@,
+      ":" space,
+      <EXPR>:data=@,
+      ")"
+    },
+    sequence { repeat+ <EXPR>:outputs[]=@ separator "," space }
+  },
+  ")" space,
+  "=" space,
+  <SPEC_DELAYS>:delays=@
+}
+SPEC_EDGE: choice { 'posedge':@, 'negedge':@, 'edge':@ }
+SPEC_PATH_OP: choice { "+=>":@, "-=>":@, "+*>":@, "-*>":@, "=>":@, "*>":@ }
+SPEC_POLARITY: choice { "+":@, "-":@ }
+
+// Delay set: parenthesized 1..12-value list, or a single bare value.
+SPEC_DELAYS: choice {
+  sequence dict {
+    "(":type="delay_list",
+    repeat+ <SPEC_MTM>:values[]=@ separator "," space,
+    ")"
+  },
+  <SPEC_MTM>
+}
+
+// A delay value with optional `min : typ : max` triple.
+SPEC_MTM: sequence dict {
+  <EXPR>:value=@,
+  ?sequence { ":", <EXPR>:typ=@, ":", <EXPR>:max=@ }
+}
+
+// `$setuphold(posedge CLK &&& cond, D, 0, 0, notifier,,, dCLK, dD);`
+// Arguments may be EMPTY (consecutive commas) — modelled explicitly.
+SPEC_TIMING_CHECK: sequence dict {
+  sv_system_name:name=@:type="timing_check",
+  "(",
+  repeat+ <SPEC_TC_ARG>:args[]=@ separator "," space,
+  ")",
+  ";"
+}
+SPEC_TC_ARG: choice { <SPEC_TC_EVENT>, <SPEC_TC_EMPTY> }
+// The event terminal is a LIMITED reference (LRM: terminal_identifier
+// with optional selects), NOT a full expression — a full <EXPR> would
+// swallow the `&&&` conditioned-event operator as `&& (&cond)` (logical
+// and + unary reduction), silently changing the construct. Non-event
+// arguments (limits `0`, `1:2:3`, notifier regs, delayed signals) are
+// matched by the MTM alternative.
+// The event alternative carries an explicit type discriminator: its
+// field-presence shape ({value,…}) is otherwise indistinguishable from
+// SPEC_MTM's on the save side, and a discriminator-less dict Choice
+// mis-dispatches (the ASSERT_ACTION lesson).
+SPEC_TC_EVENT: choice {
+  sequence dict {
+    "":type="tc_event",
+    ?<SPEC_EDGE>:edge=@ space,
+    <HIER_REF>:value=@,
+    ?sequence { "" space, "&&&" space, <EXPR>:cond=@ }
+  },
+  <SPEC_MTM>
+}
+SPEC_TC_EMPTY: sequence dict { "":type="empty_arg" }
+
+// Fallback: any other `;`-terminated specify item, captured raw. The
+// negative lookahead keeps the raw scan from swallowing `endspecify`
+// on its way to a later `;` elsewhere in the file.
+SPEC_RAW_ITEM: sequence dict {
+  !'endspecify',
+  "":type="specify_raw",
+  *:body=@,
+  ";"
 }
 
 // ─── SystemVerilog Assertions (SVA) — parse-only ──────────────────────

@@ -2318,3 +2318,41 @@ def test_sv_assert_action_saves_all_shapes(sv_grammar):
         a = sv_grammar.parse_string(src)
         out = sv_grammar.save(a).decode("utf-8")
         assert sv_grammar.parse_string(out) == a, f"RT broke for: {src!r} -> {out!r}"
+
+
+def test_sv_specify_block_structured(sv_grammar):
+    """Tier D: specify blocks are structured per IEEE 1800-2017 §30 —
+    paths (polarity-fused and spaced ops, edge-sensitive destinations),
+    state-dependent if/ifnone, timing checks with &&& conditioned events
+    and EMPTY arguments, specparam (incl. string values), min:typ:max
+    triples — with a guarded raw fallback (must not swallow endspecify
+    on its way to a later semicolon). Corpus: std-cell/IO/fakeram models."""
+    src = """module m(input clk); specify
+      specparam tplh$A$Y = 1.0, s2 = "test2";
+      (posedge clk *> rd_out) = (0, 0);
+      if (IE==1'b0&&OE==1'b1) (A +=> PAD)=(1.000, 1.000);
+      ifnone (CLK => Q) = (1:2:3, 4);
+      (negedge RESETN => (QN+:1'b1)) = 0;
+      (A- => B) = (1, 2);
+      $setuphold (posedge CLK &&& cond, negedge D &&& ~CLK, 0, 0, ntf,,, dCLK, dD);
+      $width (posedge clk, 0, 0, notifier);
+      pulsestyle_ondetect Q;
+    endspecify
+    defparam a.b = 1;
+    endmodule"""
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a).decode("utf-8")
+    assert sv_grammar.parse_string(out) == a
+    items = a["descriptions"][0]["items"][0]["items"]
+    types = [i["type"] for i in items]
+    assert types == ["specparam", "spec_path", "spec_if", "spec_ifnone",
+                     "spec_path", "spec_path", "timing_check",
+                     "timing_check", "specify_raw"]
+    # &&& survives as a conditioned event, not a logical-and expression
+    tc = items[6]
+    assert tc["args"][0]["type"] == "tc_event"
+    assert tc["args"][0]["edge"] == "posedge"
+    assert tc["args"][0]["cond"] == {"name": "cond", "type": "ref"}
+    assert "&&&" in out
+    # empty args preserved
+    assert {"type": "empty_arg"} in tc["args"]
