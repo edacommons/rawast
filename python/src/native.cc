@@ -388,9 +388,7 @@ NB_MODULE(_rawast, m) {
         .def("parse_file",
             [](rawast::Grammar& g, const std::string& path) {
                 auto stream = rawast::Stream::from_file(path);
-                auto r = g.parse(stream);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("path"),
             "Parse a file from the grammar's default start. Returns a Python "
@@ -406,9 +404,7 @@ NB_MODULE(_rawast, m) {
                rawast::Preprocessor& pp) {
                 auto preprocessed = pp.process_file(path);
                 auto stream = rawast::Stream::from_string(std::move(preprocessed));
-                auto r = g.parse(stream);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("path"), nb::arg("preprocessor"),
             "Parse a file after running it through the given Preprocessor. "
@@ -419,9 +415,7 @@ NB_MODULE(_rawast, m) {
             [](rawast::Grammar& g, const std::string& path,
                const std::string& start) {
                 auto stream = rawast::Stream::from_file(path);
-                auto r = g.parse_from(stream, start);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, &start);
             },
             nb::arg("path"), nb::arg("start"),
             "Parse a file starting from the named rule instead of the grammar's "
@@ -431,64 +425,17 @@ NB_MODULE(_rawast, m) {
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content) {
                 auto stream = rawast::Stream::from_string(content);
-                auto r = g.parse(stream);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("content"),
             "Parse a string from the grammar's default start.")
-
-        .def("parse_string_direct",
-            [](rawast::Grammar& g, const std::string& content) {
-                auto stream = rawast::Stream::from_string(content);
-                return py_parse_direct(g, stream, nullptr);
-            },
-            nb::arg("content"),
-            "Parse a string, materialising native Python objects DIRECTLY "
-            "during the parse (no intermediate C++ value tree). Result is "
-            "identical to parse_string.")
-
-        .def("parse_string_direct",
-            [](rawast::Grammar& g, const std::string& content,
-               const std::string& start) {
-                auto stream = rawast::Stream::from_string(content);
-                return py_parse_direct(g, stream, &start);
-            },
-            nb::arg("content"), nb::arg("start"),
-            "parse_string_direct starting from the named rule.")
-
-        .def("parse_file_direct",
-            [](rawast::Grammar& g, const std::string& path) {
-                auto stream = rawast::Stream::from_file(path);
-                return py_parse_direct(g, stream, nullptr);
-            },
-            nb::arg("path"), "parse_file, direct materialisation.")
-
-        .def("parse_file_direct",
-            [](rawast::Grammar& g, const std::string& path,
-               const std::string& start) {
-                auto stream = rawast::Stream::from_file(path);
-                return py_parse_direct(g, stream, &start);
-            },
-            nb::arg("path"), nb::arg("start"),
-            "parse_file from named rule, direct materialisation.")
-
-        .def("parse_bytes_direct",
-            [](rawast::Grammar& g, nb::bytes data) {
-                auto stream = rawast::Stream::from_string(
-                    std::string(data.c_str(), data.size()));
-                return py_parse_direct(g, stream, nullptr);
-            },
-            nb::arg("data"), "parse_bytes, direct materialisation.")
 
         .def("parse_string",
             [](rawast::Grammar& g, const std::string& content,
                rawast::Preprocessor& pp) {
                 auto preprocessed = pp.process(content);
                 auto stream = rawast::Stream::from_string(std::move(preprocessed));
-                auto r = g.parse(stream);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("content"), nb::arg("preprocessor"),
             "Parse a string after running it through the given Preprocessor.")
@@ -497,9 +444,7 @@ NB_MODULE(_rawast, m) {
             [](rawast::Grammar& g, const std::string& content,
                const std::string& start) {
                 auto stream = rawast::Stream::from_string(content);
-                auto r = g.parse_from(stream, start);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, &start);
             },
             nb::arg("content"), nb::arg("start"),
             "Parse a string starting from the named rule.")
@@ -507,9 +452,7 @@ NB_MODULE(_rawast, m) {
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b) {
                 auto stream = rawast::Stream::from_string(std::string(b.c_str(), b.size()));
-                auto r = g.parse(stream);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("data"),
             "Parse a bytes object from the grammar's default start. Use for "
@@ -518,9 +461,7 @@ NB_MODULE(_rawast, m) {
         .def("parse_bytes",
             [](rawast::Grammar& g, nb::bytes b, const std::string& start) {
                 auto stream = rawast::Stream::from_string(std::string(b.c_str(), b.size()));
-                auto r = g.parse_from(stream, start);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, &start);
             },
             nb::arg("data"), nb::arg("start"),
             "Parse a bytes object starting from the named rule.")
@@ -531,9 +472,7 @@ NB_MODULE(_rawast, m) {
         // hold a Stream (e.g. from Preprocessor.preprocess).
         .def("parse_stream",
             [](rawast::Grammar& g, rawast::Stream& stream) {
-                auto r = g.parse(stream);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, nullptr);
             },
             nb::arg("stream"),
             "Parse a Stream from the grammar's default start. The Stream "
@@ -542,9 +481,7 @@ NB_MODULE(_rawast, m) {
         .def("parse_stream",
             [](rawast::Grammar& g, rawast::Stream& stream,
                const std::string& start) {
-                auto r = g.parse_from(stream, start);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
+                return py_parse_direct(g, stream, &start);
             },
             nb::arg("stream"), nb::arg("start"),
             "Parse a Stream starting from the named rule.")

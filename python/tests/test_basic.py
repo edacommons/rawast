@@ -483,21 +483,25 @@ def test_preprocessor_expr_eval_property_and_undecidable_policy():
         rawast.Preprocessor(g, on_undecidable="maybe")
 
 
-def test_parse_string_direct_matches_classic():
-    """parse_string_direct materialises native Python objects DURING the
-    parse (PyObjectBuilder over the universal Builder seam) — result must
-    be identical to the classic parse+convert path for every grammar
-    family, including the opchain fallback (SV) and named-rule starts."""
+def test_parse_builds_native_objects_directly():
+    """All parse entry points materialise native Python objects DURING the
+    parse (PyObjectBuilder over the universal Builder seam; opchain grammars
+    get compaction via the CompactingBuilder event decorator — no
+    representation-privileged path). Dicts carry DOCUMENT order. Structure
+    must match the engine's canonical results."""
     import rawast
-    cases = [
-        ("tcl", "set x 1\nputs [expr {$x + 2}]\n", None),
-        ("lefdef", "VERSION 5.8 ;\nEND LIBRARY\n", None),
-        ("lefdef", "VERSION 5.8 ;\nDESIGN top ;\nEND DESIGN\n", "DEF"),
-        ("systemverilog", "module m;\n  assign y = a + b + c;\nendmodule\n", None),
-    ]
-    for gname, src, start in cases:
-        g = rawast.Grammar(gname)
-        if start:
-            assert g.parse_string_direct(src, start) == g.parse_string(src, start)
-        else:
-            assert g.parse_string_direct(src) == g.parse_string(src)
+    tcl = rawast.Grammar("tcl")
+    ast = tcl.parse_string("set x 1\n")
+    assert ast["commands"][0]["words"][0]["value"][0]["value"] == "set"
+
+    lef = rawast.Grammar("lefdef")
+    ast = lef.parse_string("VERSION 5.8 ;\nDESIGN top ;\nEND DESIGN\n", "DEF")
+    # document order: hdr (VERSION) precedes design as written
+    keys = list(ast.keys())
+    assert keys.index("hdr") < keys.index("design")
+    assert ast["hdr"]["version"] == 5.8
+
+    sv = rawast.Grammar("systemverilog")
+    ast = sv.parse_string("module m;\n  assign y = a + b + c;\nendmodule\n")
+    rhs = ast["descriptions"][0]["items"][0]["assignments"][0]["rhs"]
+    assert rhs["op"] == "+" and len(rhs["args"]) == 3   # compacted via decorator
