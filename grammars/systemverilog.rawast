@@ -302,11 +302,11 @@ PARAM_DECL_LOCALPARAM: sequence dict {
 // `sv_qualified_type` here is REQUIRED so the rule fails fast on
 // `localparam x = 1` (no type) and the parser falls through.
 PARAM_DECL_LOCALPARAM_USERTYPE: sequence dict {
-  'localparam':@:type="localparam_port_usertype",
+  'localparam':@:type="localparam_port_usertype" space,
   !<TYPE_SPEC>,
-  sv_qualified_type:type_spec=@,
-  ?<PACKED_DIMENSIONS>:range=@,
-  sv_identifier:name=@,
+  sv_qualified_type:type_spec=@ space,
+  ?<PACKED_DIMENSIONS>:range=@ space,
+  sv_identifier:name=@ space,
   ?<PARAM_VALUE_DEFAULT>:default=@
 }
 

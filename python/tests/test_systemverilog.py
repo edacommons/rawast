@@ -2399,3 +2399,15 @@ def test_sv_toplevel_directives_and_unnamed_instances(sv_grammar):
     it = a["descriptions"][0]["items"][0]
     assert it["type"] == "instance_unnamed"
     assert len(it["instances"][0]["port_bindings"]) == 2
+
+
+def test_sv_param_list_localparam_usertype_spacing(sv_grammar):
+    """Param-list localparam with a user type saved fused
+    (localparamsha_word64_tZeroWord=). Latent until top-level `include
+    support made prim_sha2.sv parse — the only save failure in the
+    +695-file coverage sweep."""
+    src = "module m #(localparam my_t Z = '0)(); endmodule"
+    a = sv_grammar.parse_string(src)
+    out = sv_grammar.save(a).decode("utf-8")
+    assert "localparam my_t Z" in out
+    assert sv_grammar.parse_string(out) == a
