@@ -52,6 +52,48 @@ thread_local std::ostream* g_trim_buf = nullptr;
 thread_local std::vector<std::streamoff>* g_trim_pos = nullptr;
 
 // ---------------------------------------------------------------------------
+// NodeRef — the save engine's universal value handle (S1 of the
+// Accessor-native save).
+//
+// A borrowed {accessor, node} pair: 16 bytes, no refcount. The accessor
+// pointer doubles as provenance — document nodes carry the caller's
+// accessor; engine-synthesized scratch values (name-marker strings,
+// opchain re-nests) are reference-model Values held alive by the
+// SaveState's keepalive and wrapped in the engine's own scratch
+// SharedPtrAccessor. One uniform handle, no tagged unions.
+// ---------------------------------------------------------------------------
+
+struct NodeRef {
+    const Accessor*  acc = nullptr;
+    Accessor::Node   node = nullptr;
+
+    explicit operator bool() const { return node != nullptr; }
+    ValueType kind() const { return acc->kind(node); }
+
+    // Reference fast path: when the accessor serves shared_ptr Values,
+    // the node IS a const Value* — parsers and comparators use it
+    // directly, zero conversion.
+    const Value* as_value() const;
+};
+
+// The engine's scratch reader: any reference-model Value can be viewed
+// as a NodeRef through this shared accessor instance.
+const SharedPtrAccessor& scratch_accessor() {
+    static const SharedPtrAccessor instance{ValuePtr{}};
+    return instance;
+}
+
+const Value* NodeRef::as_value() const {
+    return acc ? acc->value_node(node) : nullptr;
+}
+
+// Wrap a reference-model value as a NodeRef (document entries in the
+// classic path, engine-synthesized scratch).
+inline NodeRef ref_node(const Value* v) {
+    return NodeRef{&scratch_accessor(), v};
+}
+
+// ---------------------------------------------------------------------------
 // SaveState
 // ---------------------------------------------------------------------------
 
