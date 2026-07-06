@@ -1326,13 +1326,10 @@ TEST_CASE("Preprocessor::preprocess: AST → Stream round-trips through Grammar"
     auto ast = pp.parse(src);
     REQUIRE(ast);
 
-    // Mode 2: expand the AST to a Stream. The Stream owns the
-    // expanded buffer — it survives past this scope into the next
-    // grammar-parse step.
+    // Mode 2: expand the AST to a Stream. The incremental walker runs
+    // lazily as the Stream is consumed, so macro/span state populates
+    // during the drain — not at preprocess() return.
     Stream s = pp.preprocess(*ast, src);
-
-    // Mode 2 walker mutates state — the macro should now be visible.
-    CHECK(pp.macros().count("WIDTH") == 1);
 
     // The Stream's bytes should be the expanded text (no \`define
     // line, WIDTH replaced by 32). Drain the reader to verify.
@@ -1340,6 +1337,10 @@ TEST_CASE("Preprocessor::preprocess: AST → Stream round-trips through Grammar"
     while (auto c = s.reader().get()) out.push_back(*c);
     CHECK(out.find("`define") == std::string::npos);
     CHECK(out.find("wire [32-1:0] x;") != std::string::npos);
+
+    // The lazy walk has now run to completion — the macro it defined is
+    // visible on the Preprocessor.
+    CHECK(pp.macros().count("WIDTH") == 1);
 }
 
 TEST_CASE("Preprocessor::preprocess: returned Stream survives Stream move") {
@@ -1357,4 +1358,44 @@ TEST_CASE("Preprocessor::preprocess: returned Stream survives Stream move") {
     std::string out;
     while (auto c = s2.reader().get()) out.push_back(*c);
     CHECK(out.find("7") != std::string::npos);
+}
+
+TEST_CASE("Preprocessor::preprocess: incremental Stream == eager process_ast, "
+          "byte for byte") {
+    // Streaming is a memory strategy, not a semantic change: draining the
+    // lazy per-item Stream must reproduce EXACTLY what the eager walker
+    // emits. Multi-item source (text + object/function macro expansion +
+    // a conditional) so chunk boundaries fall between items.
+    auto g = load_grammar();
+    std::string src =
+        "`define W 8\n"
+        "`define REG(n) logic [`W-1:0] n\n"
+        "module m;\n"
+        "  `REG(a);\n"
+        "  `REG(b);\n"
+        "`ifdef FOO\n"
+        "  wire dead;\n"
+        "`else\n"
+        "  wire live;\n"
+        "`endif\n"
+        "endmodule\n";
+
+    Preprocessor eager_pp(g);
+    auto eager_ast = eager_pp.parse(src);
+    REQUIRE(eager_ast);
+    std::string eager = eager_pp.process_ast(*eager_ast, src);
+
+    Preprocessor inc_pp(g);
+    auto inc_ast = inc_pp.parse(src);
+    REQUIRE(inc_ast);
+    Stream s = inc_pp.preprocess(*inc_ast, src);
+    std::string streamed;
+    while (auto c = s.reader().get()) streamed.push_back(*c);
+
+    CHECK(streamed == eager);
+    // The expanded output really did include an expansion + the taken
+    // conditional branch (guards against "both empty" false-pass).
+    CHECK(streamed.find("logic [8-1:0] a") != std::string::npos);
+    CHECK(streamed.find("wire live;") != std::string::npos);
+    CHECK(streamed.find("wire dead;") == std::string::npos);
 }

@@ -495,7 +495,17 @@ NB_MODULE(_rawast, m) {
             },
             nb::arg("path"),
             "Build a Stream that reads from a file path. Throws on open "
-            "failure.");
+            "failure.")
+        .def("drain",
+            [](rawast::Stream& s) {
+                std::size_t n = 0;
+                auto& r = s.reader();
+                while (r.get()) ++n;
+                return n;
+            },
+            "Consume the Stream to EOF, returning the byte count. A "
+            "streaming (no-AST) consumer: exercises the producer without "
+            "materialising a parse result.");
 
     nb::class_<rawast::Grammar>(m, "Grammar",
         "A loaded grammar — drives parse, save, and lint via its methods.")
@@ -890,10 +900,17 @@ NB_MODULE(_rawast, m) {
                 return pp.preprocess(v, source);
             },
             nb::arg("ast"), nb::arg("source"),
+            // The returned Stream walks the AST lazily (incrementally) as
+            // it is consumed, so it BORROWS this Preprocessor — keep_alive
+            // ties the Preprocessor's lifetime to the Stream's so it can't
+            // be collected while the Stream is still being read.
+            nb::keep_alive<0, 1>(),
             "Mode 2: expand a preprocessor AST (as returned by parse()) "
-            "and return the expanded bytes as a Stream. `source` is the "
-            "original input text the AST was parsed from. State (macros, "
-            "includes, warnings, spans) accumulates on this instance.")
+            "and return the expanded bytes as a Stream. The Stream expands "
+            "the AST lazily as it is consumed — the full output is never "
+            "materialised. `source` is the original input text the AST was "
+            "parsed from. State (macros, includes, warnings, spans) "
+            "accumulates on this instance AS the Stream is read.")
 
         .def("is_defined",
             [](const rawast::Preprocessor& pp, const std::string& name) {
