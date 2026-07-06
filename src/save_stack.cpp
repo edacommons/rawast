@@ -84,7 +84,12 @@ const SharedPtrAccessor& scratch_accessor() {
 }
 
 const Value* NodeRef::as_value() const {
-    return acc ? acc->value_node(node) : nullptr;
+    if (!acc) return nullptr;
+    // Classic-path fast lane: the engine's own scratch accessor serves
+    // const Value* nodes directly — a pointer compare beats a virtual
+    // call on every pulled value (measured: ~15-25% of save time).
+    if (acc == &scratch_accessor()) return static_cast<const Value*>(node);
+    return acc->value_node(node);
 }
 
 // Wrap a reference-model value as a NodeRef (document entries in the
@@ -98,7 +103,7 @@ inline NodeRef ref_node(const Value* v) {
 // ---------------------------------------------------------------------------
 
 struct QueueEntry {
-    ValuePtr    value;
+    NodeRef     value;
     bool        is_name = false;
     // When this entry was produced by an open-schema dict flatten,
     // `key_source` carries the originating dict key so Choice dispatch
@@ -204,7 +209,7 @@ public:
                     std::size_t idx = scope.list_progress[name];
                     if (idx >= arr->data().size()) {
                         if (is_optional) {
-                            return QueueEntry{nullptr, false, name};
+                            return QueueEntry{NodeRef{}, false, name};
                         }
                         return tl::unexpected(SaveError{
                             "list-append exhausted for '" + name + "'"});
@@ -213,13 +218,13 @@ public:
                     if (idx + 1 >= arr->data().size()) {
                         scope.consumed.insert(name);
                     }
-                    return QueueEntry{arr->data()[idx], false, name};
+                    return QueueEntry{ref_node(arr->data()[idx].get()), false, name};
                 }
                 scope.consumed.insert(name);
-                return QueueEntry{it->second, false, name};
+                return QueueEntry{ref_node(it->second.get()), false, name};
             }
             if (is_optional) {
-                return QueueEntry{nullptr, false, name};
+                return QueueEntry{NodeRef{}, false, name};
             }
             return tl::unexpected(SaveError{
                 "fixed-schema dict missing required field '" + name + "'"});
@@ -236,7 +241,7 @@ public:
             // unparse decide. Outside a dict scope, only optional
             // consumers tolerate absence.
             if (!dict_stack_.empty() || is_optional) {
-                return QueueEntry{nullptr, false, ""};
+                return QueueEntry{NodeRef{}, false, ""};
             }
             return tl::unexpected(SaveError{
                 "save: value queue empty when value expected"});
@@ -244,7 +249,18 @@ public:
         return next_q();
     }
 
+    // Engine-synthesized scratch values (name-marker strings, opchain
+    // re-nests) — owned here so the NodeRefs that view them stay valid
+    // for the SaveState's lifetime. Snapshot/restore never shrinks it
+    // (values merely outlive a rolled-back attempt; harmless).
+    const Value* keep_value(ValuePtr v) {
+        scratch_.push_back(std::move(v));
+        return scratch_.back().get();
+    }
+    NodeRef keep(ValuePtr v) { return ref_node(keep_value(std::move(v))); }
+
 private:
+    std::vector<ValuePtr>   scratch_;
     std::vector<QueueEntry> queue_;
     std::size_t             q_idx_ = 0;
     std::vector<DictScope>  dict_stack_;
@@ -861,7 +877,7 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
             }
         }
     } else if (s.has_q()) {
-        peek_value = s.peek_q().value.get();
+        peek_value = s.peek_q().value.as_value();
         peek_key   = s.peek_q().key_source;
     }
     return can_consume_peek(g, node_id, peek_value, peek_key, s);
@@ -1463,13 +1479,16 @@ NodeId choose_alternative_v2(const Grammar& g, const Node& choice_node,
 // trimming it corrupts the round-trip. Those consume directly via
 // do_consume, preserving the bytes. (Fixes a TCL subparse-save regression.)
 tl::expected<void, SaveError>
-save_subparse(const Grammar& g, std::ostream& out, ValuePtr v,
+save_subparse(const Grammar& g, std::ostream& out, const Value* v,
               NodeId start, bool pretty) {
     if (g.has_opchain_in_chain(start)) {
-        return g.save(out, std::move(v), pretty, start);
+        // Grammar::save's expand pre-pass needs shared ownership; a
+        // non-owning alias is sound — the document outlives the call.
+        return g.save(out, ValuePtr(ValuePtr{}, const_cast<Value*>(v)),
+                      pretty, start);
     }
     SaveState s;
-    s.push_q({std::move(v), false, ""});
+    s.push_q({ref_node(v), false, ""});
     return do_consume(g, out, start, s, 0, pretty);
 }
 
@@ -1564,7 +1583,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
-        ValuePtr v = r->value ? r->value : null_value();
+        const Value* v = r->value ? r->value.as_value() : null_value().get();
 
         // Subparse inverse: when a Parse terminal carries a
         // subparse_start rule, the AST stores the structured
@@ -1577,7 +1596,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             std::ostringstream sub_out;
             auto sub_r = save_subparse(g, sub_out, v, n.subparse_start, pretty);
             if (!sub_r) return tl::unexpected(sub_r.error());
-            v = make_string(sub_out.str());
+            v = s.keep_value(make_string(sub_out.str()));
         }
 
         auto u = p->unparse(*v);
@@ -1594,7 +1613,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
-        ValuePtr v = r->value ? r->value : null_value();
+        const Value* v = r->value ? r->value.as_value() : null_value().get();
 
         // Subparse inverse: if the Raw carries a subparse_start,
         // the stored value is the structured sub-tree (from parse-
@@ -1631,7 +1650,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
-        ValuePtr v = r->value ? r->value : null_value();
+        const Value* v = r->value ? r->value.as_value() : null_value().get();
 
         if (n.subparse_start.valid()) {
             // Subparse round-trip — independent of container mode.
@@ -1656,7 +1675,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 for (NodeId inner_id : n.children) {
                     if (!can_consume_peek(g, inner_id, seg.get(), "", s)) continue;
                     SaveState seg_s;
-                    seg_s.push_q({seg, false, ""});
+                    seg_s.push_q({ref_node(seg.get()), false, ""});
                     auto sr = do_consume(g, out, inner_id,
                                           seg_s, depth, pretty);
                     if (sr) { dispatched = true; break; }
@@ -1748,7 +1767,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         }
         auto pulled = s.pull_value(/*is_optional=*/false);
         if (!pulled) return tl::unexpected(pulled.error());
-        ValuePtr v = pulled->value;
+        const Value* v = pulled->value.as_value();
         if (!v) return tl::unexpected(SaveError{
             "container Sequence with null value"});
 
@@ -1760,7 +1779,12 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // call args, …) re-enter here through their own EXPR dispatch.
         if (const OpchainLadder& L = g.opchain_ladder();
             L.valid && rid.value() == L.root_tier.value()) {
-            v = rebuild_cascade(v, L, 0);
+            // Rebuild needs shared ownership of the input (its base case
+            // stores it). A non-owning alias is sound: the document
+            // outlives the save, and the rebuilt scratch tree is kept
+            // alive by the SaveState.
+            ValuePtr alias(ValuePtr{}, const_cast<Value*>(v));
+            v = s.keep_value(rebuild_cascade(alias, L, 0));
         }
 
         if (n.container == Container::Array) {
@@ -1770,7 +1794,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
 
             SaveState inner;
             for (const auto& e : arr->data()) {
-                inner.push_q({e, false, ""});
+                inner.push_q({ref_node(e.get()), false, ""});
             }
             for (NodeId c : n.children) {
                 auto r = do_consume(g, out, c, inner, depth, pretty);
@@ -1810,8 +1834,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // the key_source so Choice dispatch can match Key literals.
         SaveState inner;
         for (const auto& [name, val] : dict->data()) {
-            inner.push_q({make_string(name), true, name});
-            inner.push_q({val, false, name});
+            inner.push_q({inner.keep(make_string(name)), true, name});
+            inner.push_q({ref_node(val.get()), false, name});
         }
         for (NodeId c : n.children) {
             auto r = do_consume(g, out, c, inner, depth, pretty);
@@ -2504,7 +2528,9 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
         }
     }
     SaveState s;
-    s.push_q({value, false, ""});
+    // `value` (post expand/wrap) is a local ValuePtr alive for the whole
+    // call — the queue borrows it.
+    s.push_q({ref_node(value.get()), false, ""});
     if (!pretty) {
         return do_consume(*this, out, start, s, 0, pretty);
     }
