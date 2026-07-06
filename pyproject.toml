@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "rawast"
-version = "0.1.13"
+version = "0.1.14"
 description = "Universal bidirectional grammar-driven engine for EDA file formats — one grammar drives parse and save for GDSII, LEF, DEF, Tcl, and more."
 readme = "README.md"
 license = { text = "MIT" }
