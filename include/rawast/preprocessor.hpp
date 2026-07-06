@@ -425,30 +425,17 @@ public:
     tl::expected<ValuePtr, ParseError>
     parse(const std::string& source);
 
-    // Mode 2: expand a preprocessor AST into a Stream of expanded bytes
-    // ready to feed to a host Grammar::parse.
+    // Mode 2: expand a preprocessor AST into a Stream of expanded
+    // bytes ready to feed to a host Grammar::parse. State accumulates
+    // on the instance same as process_ast — macros, includes,
+    // warnings, and spans are all populated.
     //
-    // STREAMING, BOUNDED MEMORY. The walk runs lazily — one top-level
-    // PP_ITEM at a time into a small reused chunk buffer — as the consumer
-    // pulls bytes. The full expanded output is NEVER materialised, so peak
-    // memory is O(1) in the expanded size rather than O(expanded) like the
-    // eager `process`/`process_ast` string APIs. This is what makes Mode 2
-    // safe on inputs whose macro expansion dwarfs the source (generated
-    // SV, deep UVM macro nests) and efficient for streaming consumers
-    // (LSP, line tools) that never build a full AST. For a small consumer
-    // that DOES build a full host AST, the AST dominates and the streaming
-    // buffer saving is marginal; a very light expansion even costs a few MB
-    // of fixed overhead — but memory stays bounded, which is the point.
+    // The returned Stream owns the expanded byte buffer (via Stream's
+    // shared_ptr<void> owner_ slot); the buffer outlives this call,
+    // so callers can hold the Stream and consume it later.
     //
-    // Two consequences of the lazy walk, distinct from the eager APIs:
-    //   * The returned Stream BORROWS this Preprocessor — it must OUTLIVE
-    //     the Stream (the walk calls back into it as bytes are produced).
-    //   * State (macros, includes, warnings, spans) populates AS the
-    //     Stream is consumed, not at this call's return. Callers that need
-    //     all state up-front should use the eager `process*` APIs.
-    //
-    // `source` is copied into the Stream, so it need not outlive this call;
-    // it is the original input text spans reference (see process_ast()).
+    // `source` is the original input text spans should reference; see
+    // process_ast() for the contract.
     Stream
     preprocess(const ValuePtr& ast, const std::string& source);
 
@@ -609,18 +596,6 @@ private:
                               std::size_t out_offset,
                               std::string name);
 
-    // Incremental Mode 2 driver (defined in preprocessor.cpp). The
-    // streambuf walks the parsed PP_FILE ONE top-level item at a time into
-    // a small reused chunk buffer, so `preprocess`'s Stream never
-    // materialises the whole expanded output. Nested so they reach the
-    // private walker (`walk`, `state_`, `output_base_`). NOTE: the returned
-    // Stream borrows the Preprocessor — it must outlive the Stream — and
-    // macro/warning/span state populates AS the Stream is consumed, not at
-    // `preprocess()` return (the eager `process`/`process_ast` string APIs
-    // remain fully up-front).
-    class IncrementalStreamBuf;
-    class IncrementalIStream;
-
     const Grammar&    pp_grammar_;
     PpOptions         opts_;
     PreprocessorState state_;
@@ -635,15 +610,6 @@ private:
     // walk_or_discard, but those are already routed through a
     // disposable buffer; this flag closes the macro-table gap.
     bool suppress_side_effects_ = false;
-
-    // Bytes emitted BEFORE the current walk buffer. Zero for the eager
-    // `process_ast` path (the buffer holds the whole output, so
-    // `out.size()` already IS the global offset). The incremental
-    // `preprocess` driver walks one top-level item at a time into a
-    // small chunk buffer it drains and reuses; it bumps this base by
-    // each drained chunk's size so source-map spans still record correct
-    // GLOBAL output offsets. `record_span` reads `output_base_ + out.size()`.
-    std::size_t output_base_ = 0;
 };
 
 } // namespace rawast

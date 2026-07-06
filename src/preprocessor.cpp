@@ -8,10 +8,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <istream>
 #include <sstream>
 #include <stdexcept>
-#include <streambuf>
 #include <utility>
 
 namespace rawast {
@@ -202,119 +200,13 @@ Preprocessor::parse(const std::string& source) {
     return (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(stream, "PP_FILE") : pp_grammar_.parse(stream));
 }
 
-// Incremental Mode 2 streambuf. Walks the parsed PP_FILE one top-level
-// item at a time into a small reused chunk, so the full expanded output is
-// never materialised. Reads the istream forward-only; StreamReader retains
-// only the bytes under a live mark, so backtracking still works. Nested, so
-// it reaches the Preprocessor's private walker/state.
-class Preprocessor::IncrementalStreamBuf : public std::streambuf {
-public:
-    IncrementalStreamBuf(Preprocessor* pp, ValuePtr ast,
-                         std::shared_ptr<std::string> source)
-        : pp_(pp), source_(std::move(source)), ast_(std::move(ast)) {
-        // Same one-time setup process_ast does, but the walk itself is
-        // deferred to underflow() and spread across chunks.
-        pp_->state_.spans.clear();
-        root_id_ = pp_->record_span(
-            Span::NoParent, /*parent_offset=*/0, source_->size(),
-            Span::NoOutput,
-            pp_->state_.current_file.empty() ? "<input>"
-                                             : pp_->state_.current_file);
-        pp_->output_base_ = 0;
-        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(ast_)) {
-            items_ = &arr->data();   // borrows ast_'s vector; ast_ kept alive
-            array_mode_ = true;
-        }
-    }
-
-protected:
-    int_type underflow() override {
-        if (gptr() < egptr())
-            return traits_type::to_int_type(*gptr());
-        // The previous chunk has been fully consumed — account for its
-        // bytes in the global output offset, then refill.
-        pp_->output_base_ += chunk_.size();
-        chunk_.clear();
-        fill();
-        if (chunk_.empty())
-            return traits_type::eof();
-        setg(&chunk_[0], &chunk_[0], &chunk_[0] + chunk_.size());
-        return traits_type::to_int_type(
-            static_cast<unsigned char>(chunk_[0]));
-    }
-
-private:
-    // Accumulate roughly one buffer's worth of output, one top-level item
-    // at a time. Batching a few small items keeps underflow overhead down;
-    // a single item that expands large simply overshoots — still bounded
-    // by that one item, never the whole file.
-    void fill() {
-        if (done_) return;
-        constexpr std::size_t kTarget = 8192;
-        if (!array_mode_) {
-            // Non-array AST (synthesized): walk it whole, once.
-            pp_->walk(ast_, chunk_, src_cursor_, *source_, root_id_);
-            done_ = true;
-            return;
-        }
-        while (chunk_.size() < kTarget && item_idx_ < items_->size()) {
-            const ValuePtr& child = (*items_)[item_idx_++];
-            // Mirror walk()'s array branch: skip pure-whitespace strings
-            // (already consumed at parse time; walking them would advance
-            // src_cursor_ over real content).
-            if (auto s = std::dynamic_pointer_cast<StringValue>(child)) {
-                bool only_ws = true;
-                for (char c : s->data()) {
-                    if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
-                        only_ws = false;
-                        break;
-                    }
-                }
-                if (only_ws) continue;
-            }
-            pp_->walk(child, chunk_, src_cursor_, *source_, root_id_);
-        }
-        if (item_idx_ >= items_->size()) done_ = true;
-    }
-
-    Preprocessor*                pp_;
-    std::shared_ptr<std::string> source_;
-    ValuePtr                     ast_;
-    const std::vector<ValuePtr>* items_ = nullptr;
-    bool                         array_mode_ = false;
-    bool                         done_ = false;
-    std::size_t                  item_idx_ = 0;
-    std::size_t                  src_cursor_ = 0;
-    std::uint32_t                root_id_ = 0;
-    std::string                  chunk_;
-};
-
-// istream that owns the incremental streambuf. Base `istream(nullptr)` is
-// constructed before the buf_ member; rdbuf is set in the body once buf_
-// exists (the standard "streambuf-owning istream" idiom).
-class Preprocessor::IncrementalIStream : public std::istream {
-public:
-    IncrementalIStream(Preprocessor* pp, ValuePtr ast,
-                       std::shared_ptr<std::string> source)
-        : std::istream(nullptr),
-          buf_(pp, std::move(ast), std::move(source)) {
-        rdbuf(&buf_);
-    }
-
-private:
-    IncrementalStreamBuf buf_;
-};
-
 Stream Preprocessor::preprocess(const ValuePtr& ast,
                                  const std::string& source) {
-    // Incremental Mode 2: the returned Stream walks the AST lazily as the
-    // host parser pulls bytes — the full expanded output is never
-    // materialised. The Stream owns the source copy and (through the
-    // istream) the AST; the Preprocessor must OUTLIVE the Stream, since
-    // the walk mutates its macro/span/warning state as bytes are produced.
-    auto src = std::make_shared<std::string>(source);
-    auto is = std::make_unique<IncrementalIStream>(this, ast, src);
-    return Stream(std::move(is), std::move(src));
+    // Eager expansion into a heap-owned string; the Stream owns the
+    // buffer via owner_, so the returned Stream is self-contained.
+    auto expanded = std::make_shared<std::string>(process_ast(ast, source));
+    auto is = std::make_unique<std::istringstream>(*expanded);
+    return Stream(std::move(is), std::move(expanded));
 }
 
 std::string Preprocessor::process_ast(const ValuePtr& ast,
@@ -332,7 +224,6 @@ std::string Preprocessor::process_ast(const ValuePtr& ast,
                     source.size(), Span::NoOutput,
                     state_.current_file.empty() ? "<input>"
                                                 : state_.current_file);
-    output_base_ = 0;
     std::string out;
     std::size_t src_cursor = 0;
     walk(ast, out, src_cursor, source, root_id);
@@ -556,7 +447,7 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
                 std::size_t end = origin + text.size();
                 std::size_t emit_len = end - line_start;
                 record_span(parent_span_id, line_start,
-                            emit_len, output_base_ + out.size(), "text");
+                            emit_len, out.size(), "text");
                 out.append(source, line_start, emit_len);
                 src_cursor = end;
             }
@@ -585,8 +476,8 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
                         std::size_t origin =
                             locate_item(source, src_cursor, s->data());
                         record_span(parent_span_id, origin,
-                                    s->data().size(),
-                                    output_base_ + out.size(), "text");
+                                    s->data().size(), out.size(),
+                                    "text");
                         out.append(s->data());
                         src_cursor = origin + s->data().size();
                     } else if (auto sd = std::dynamic_pointer_cast<DictValue>(seg)) {
@@ -639,8 +530,7 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
                                         std::size_t o = locate_item(
                                             source, src_cursor, trailing);
                                         record_span(parent_span_id, o,
-                                                    trailing.size(),
-                                                    output_base_ + out.size(),
+                                                    trailing.size(), out.size(),
                                                     "text");
                                         out.append(trailing);
                                         src_cursor = o + trailing.size();
@@ -717,7 +607,7 @@ void Preprocessor::walk(const ValuePtr& v, std::string& out,
         if (!s.empty()) {
             std::size_t origin = locate_item(source, src_cursor, s);
             record_span(parent_span_id, origin,
-                        s.size(), output_base_ + out.size(), "text");
+                        s.size(), out.size(), "text");
             out += s;
             src_cursor = origin + s.size();
         }
@@ -1907,7 +1797,7 @@ void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
         // trailing newline via sv_eol. Replicate it on the
         // expansion side so the output keeps line structure.
         record_span(parent_span_id, use_src_start, use_src_len,
-                    output_base_ + out.size(), span_name);
+                    out.size(), span_name);
         out += body;
         if (consumed_newline
             && (body.empty() || body.back() != '\n')) {
