@@ -482,13 +482,32 @@ bool would_skip_optional(const Grammar& g, NodeId child_id, const SaveState& s) 
 bool values_equal_v2(const Value* a, const Value* b);
 
 // Compare a document value (any representation) to a grammar-side
-// constant (always a reference Value). Reference fast lane compares
-// Value*↔Value* directly; foreign lane materializes the document scalar
-// once and reuses the exact same comparison rules.
+// constant (always a scalar reference Value). Reference fast lane compares
+// Value*↔Value* directly; foreign lane compares scalar-to-scalar with NO
+// allocation — this is hot (Choice dispatch probes every alternative's
+// discriminators against each dict). Mirrors values_equal_v2's strict
+// same-kind rule (Int and UInt do not cross-compare).
 inline bool nr_equal(const NodeRef& doc, const Value* konst) {
     if (const Value* dv = doc.as_value()) return values_equal_v2(dv, konst);
-    ValuePtr tmp = materialize_scalar(doc);
-    return values_equal_v2(tmp.get(), konst);
+    if (!konst) return false;
+    const ValueType dk = doc.kind();
+    if (dk != konst->type()) return false;
+    const Accessor* a = doc.acc;
+    switch (dk) {
+    case ValueType::Null:
+    case ValueType::Undefined: return true;
+    case ValueType::Bool:   return a->bool_(doc.node)
+                                   == static_cast<const BoolValue*>(konst)->data();
+    case ValueType::Int:    return a->int_(doc.node)
+                                   == static_cast<const IntValue*>(konst)->data();
+    case ValueType::UInt:   return a->uint_(doc.node)
+                                   == static_cast<const UIntValue*>(konst)->data();
+    case ValueType::Real:   return a->real_(doc.node)
+                                   == static_cast<const RealValue*>(konst)->data();
+    case ValueType::String: return a->string_(doc.node)
+                                   == static_cast<const StringValue*>(konst)->data();
+    default: return false;   // arrays / dicts never equal a scalar constant
+    }
 }
 
 const Value* discriminator_const_value(const Grammar& g, const Node& b) {

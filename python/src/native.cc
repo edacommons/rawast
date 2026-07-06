@@ -29,6 +29,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace nb = nanobind;
@@ -212,9 +213,18 @@ public:
 // bool is checked before int (bool is a Python int subclass).
 class PyObjectAccessor final : public rawast::Accessor {
     PyObject* root_;
+    // Interned-key cache: field names (from the grammar) repeat across
+    // thousands of dicts in one save. PyDict_GetItemString re-creates and
+    // re-hashes a temporary PyUnicode on every call; caching an interned
+    // key (hash computed once) and using PyDict_GetItem drops both. Owned
+    // refs, released in the destructor. Lifetime = one save call.
+    mutable std::unordered_map<std::string, PyObject*> key_cache_;
 
 public:
     explicit PyObjectAccessor(nb::handle root) : root_(root.ptr()) {}
+    ~PyObjectAccessor() override {
+        for (auto& [k, v] : key_cache_) Py_DECREF(v);
+    }
 
     Node root() const override { return root_; }
 
@@ -263,8 +273,8 @@ public:
         return PyTuple_GET_ITEM(o, static_cast<Py_ssize_t>(i));
     }
     Node get(Node n, std::string_view name) const override {
-        // Borrowed reference; nullptr if absent.
-        return PyDict_GetItemString(obj(n), std::string(name).c_str());
+        // Borrowed reference; nullptr if absent. Interned, hash-cached key.
+        return PyDict_GetItem(obj(n), intern_key(name));
     }
     void each(Node n,
               const std::function<void(std::string_view, Node)>& fn) const override {
@@ -290,6 +300,16 @@ public:
 private:
     static PyObject* obj(Node n) {
         return const_cast<PyObject*>(static_cast<const PyObject*>(n));
+    }
+
+    // Return an interned PyUnicode for `name` (cached; hash computed once).
+    PyObject* intern_key(std::string_view name) const {
+        std::string key(name);   // SSO for the short field names we cache
+        auto it = key_cache_.find(key);
+        if (it != key_cache_.end()) return it->second;
+        PyObject* k = PyUnicode_InternFromString(key.c_str());  // new ref
+        key_cache_.emplace(std::move(key), k);
+        return k;
     }
 };
 
