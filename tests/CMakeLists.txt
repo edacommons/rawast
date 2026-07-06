@@ -7,6 +7,8 @@ FetchContent_Declare(doctest
 )
 set(DOCTEST_WITH_TESTS OFF CACHE BOOL "" FORCE)
 set(DOCTEST_WITH_MAIN_IN_STATIC_LIB OFF CACHE BOOL "" FORCE)
+# Keep doctest (a test-only dependency) out of rawast's install tree.
+set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(doctest)
 
 add_executable(rawast_tests

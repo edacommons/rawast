@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+# rawast is a generic, representation-agnostic parse/save engine. This
+# package exports the rawast::rawast library and its public seam headers
+# (builder.hpp / accessor.hpp / grammar.hpp / stream.hpp / value.hpp /
+# node.hpp). The header-only tl::expected dependency is bundled into
+# rawast's own include tree, so no transitive find_dependency() is needed.
+
+include("${CMAKE_CURRENT_LIST_DIR}/rawastTargets.cmake")
+
+check_required_components(rawast)
