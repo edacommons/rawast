@@ -44,6 +44,13 @@ public:
     virtual Node        get(Node, std::string_view) const = 0; // dict field; nullptr if absent
     virtual void        each(Node,
         const std::function<void(std::string_view, Node)>&) const = 0; // dict, key-sorted
+
+    // Reference-model escape hatch: when this accessor's nodes ARE
+    // shared_ptr-model Values, return the node as such; otherwise null.
+    // Lets the save engine's hot paths (parser unparse, constant
+    // comparison) skip conversion entirely for reference documents and
+    // engine-synthesized scratch values.
+    virtual const Value* value_node(Node) const { return nullptr; }
 };
 
 // The reference accessor: reads the classic shared_ptr<Value> AST.
@@ -93,6 +100,9 @@ public:
               const std::function<void(std::string_view, Node)>& fn) const override {
         for (const auto& [k, v] : static_cast<const DictValue*>(n)->data())
             fn(k, v.get());
+    }
+    const Value* value_node(Node n) const override {
+        return static_cast<const Value*>(n);
     }
 
 private:
