@@ -80,6 +80,33 @@ def test_save_native_dict_no_parse_roundtrips():
     assert g.parse_string(raw.decode("utf-8")) == value
 
 
+def test_save_native_dict_expression_first_opchain():
+    """Foreign expression-first #opchain save: the compact {op,args} native
+    dict is expanded into the cascade shape by reading the Python object graph
+    directly (expand_opchain runs over the Accessor — no convert-to-Value
+    detour). Regression for the removed opchain save boundary."""
+    grammar = (
+        "use: std\n"
+        "start: <EXPR>\n"
+        "EXPR ignore whitespace: <ADD>:#opchain\n"
+        "ADD: sequence dict { <NUM>:lhs=@, repeat <ADD_TAIL>:tail[]=@ }\n"
+        "ADD_TAIL: sequence dict { choice { '+':op=\"+\", '-':op=\"-\" }, <NUM>:rhs=@ }\n"
+        "NUM: sequence dict { int:type=\"num\":value=@ }\n"
+    )
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".rawast", delete=False) as f:
+        f.write(grammar)
+        path = f.name
+    try:
+        g = rawast.Grammar.load(path)
+        for expr in ["1+2-3", "42", "1-2-3-4"]:
+            ast = g.parse_string(expr)            # native dict, compact {op,args}
+            out = g.save(ast).decode("utf-8")     # foreign expression-first save
+            assert g.parse_string(out) == ast, f"round-trip failed for {expr!r}"
+    finally:
+        os.unlink(path)
+
+
 def test_lint_clean_grammar():
     g = rawast.Grammar.load(str(GRAMMARS / "json.json"))
     assert g.lint() == []

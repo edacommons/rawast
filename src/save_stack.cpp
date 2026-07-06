@@ -2269,46 +2269,49 @@ bool ops_in_same_tail_rule(
     return ait->second == bit->second;
 }
 
+// Reads its input through a NodeRef (reference fast lane OR any foreign
+// Accessor) and BUILDS the expanded reference tree. Because the transform
+// already allocates new cascade nodes, reading via the Accessor fuses the
+// old convert+expand double pass into one — a foreign expression-first
+// document no longer needs a separate whole-tree convert, and reference
+// and foreign share this single representation-agnostic path.
 ValuePtr expand_opchain(
-    const ValuePtr& v,
+    const NodeRef& v,
     const std::unordered_map<std::string, int>& op_compat) {
-    if (!v) return v;
+    if (!v) return nullptr;
 
-    if (auto arr = as_array(v)) {
+    if (v.kind() == ValueType::Array) {
         auto out = std::make_shared<ArrayValue>();
-        for (const auto& e : arr->data()) {
-            out->data().push_back(expand_opchain(e, op_compat));
+        std::size_t n = nr_size(v);
+        for (std::size_t i = 0; i < n; ++i) {
+            out->data().push_back(expand_opchain(nr_at(v, i), op_compat));
         }
         return out;
     }
 
-    auto d = as_dict(v);
-    if (!d) return v;
+    if (v.kind() != ValueType::Dict) return materialize_scalar(v);
 
     // Detect compacted shape: `{op:OP, args:[a, b, ...]}` with at
     // least two args. Unary `{op:"!", args:[x]}` (NOT_EXPR etc.)
     // stays as-is; it's not a chain.
-    auto op_it = d->data().find("op");
-    auto args_it = d->data().find("args");
-    auto args_arr = (args_it != d->data().end())
-        ? as_array(args_it->second) : nullptr;
-    bool is_chain = (op_it != d->data().end())
-                    && args_arr
-                    && args_arr->data().size() >= 2;
+    NodeRef op_node = nr_get(v, "op");
+    NodeRef args_node = nr_get(v, "args");
+    const bool is_chain = op_node && args_node
+                          && args_node.kind() == ValueType::Array
+                          && nr_size(args_node) >= 2;
 
     if (!is_chain) {
         // Not compacted at this level — recurse on field values so
         // nested compacted nodes get expanded too.
         auto out = std::make_shared<DictValue>();
-        for (const auto& [k, val] : d->data()) {
-            out->data().emplace(k, expand_opchain(val, op_compat));
-        }
+        nr_each(v, [&](std::string_view k, NodeRef val) {
+            out->data().emplace(std::string(k), expand_opchain(val, op_compat));
+        });
         return out;
     }
 
-    auto op_sv = as_string(op_it->second);
-    if (!op_sv) return v;
-    const std::string& op = op_sv->data();
+    if (op_node.kind() != ValueType::String) return nr_to_value(v);
+    const std::string op(nr_str(op_node));
 
     // Op-aware absorb: if args[0] is itself a chain whose op routes
     // to the SAME tail rule as the outer op, the two are part of one
@@ -2316,7 +2319,8 @@ ValuePtr expand_opchain(
     // ADD_TAIL). Absorb args[0]'s lhs as our lhs and prepend its
     // tail. Otherwise — different precedence level — keep args[0]
     // expanded as a complete sub-tree at the outer lhs position.
-    ValuePtr first = expand_opchain(args_arr->data()[0], op_compat);
+    // (Operates on the already-expanded `first` ValuePtr, not the input.)
+    ValuePtr first = expand_opchain(nr_at(args_node, 0), op_compat);
     ValuePtr lhs;
     std::vector<ValuePtr> tail;
     bool absorbed = false;
@@ -2354,10 +2358,11 @@ ValuePtr expand_opchain(
     }
 
     // Each remaining arg becomes a tail entry `{op:OP, rhs:arg}`.
-    for (std::size_t i = 1; i < args_arr->data().size(); ++i) {
+    std::size_t na = nr_size(args_node);
+    for (std::size_t i = 1; i < na; ++i) {
         auto te = std::make_shared<DictValue>();
         te->data().emplace("op", make_string(op));
-        te->data().emplace("rhs", expand_opchain(args_arr->data()[i], op_compat));
+        te->data().emplace("rhs", expand_opchain(nr_at(args_node, i), op_compat));
         tail.push_back(te);
     }
 
@@ -2367,10 +2372,10 @@ ValuePtr expand_opchain(
     for (const auto& t : tail) tail_arr_v->data().push_back(t);
     out->data().emplace("tail", tail_arr_v);
     // Carry any other wrapper-level fields (not op/args).
-    for (const auto& [k, val] : d->data()) {
-        if (k == "op" || k == "args") continue;
-        out->data().emplace(k, expand_opchain(val, op_compat));
-    }
+    nr_each(v, [&](std::string_view k, NodeRef val) {
+        if (k == "op" || k == "args") return;
+        out->data().emplace(std::string(k), expand_opchain(val, op_compat));
+    });
     return out;
 }
 
@@ -2668,10 +2673,15 @@ run_save(const Grammar& g, std::ostream& out, const NodeRef& root,
 // Apply the `#opchain` save-side pre-process (compact {op,args} → the
 // always-wrap {lhs,tail} shape the cascade rules emit) to a reference
 // tree. Only touches trees; foreign representations convert first.
-ValuePtr apply_opchain_preprocess(const Grammar& g, ValuePtr value,
+// `#opchain` save pre-process: expand the compacted `{op,args}` form into
+// the always-wrap `{lhs,tail}` shape, then wrap a bare atom so the start
+// rule's `<NEXT>:lhs=@` binding always finds an `lhs`. Reads its root
+// through a NodeRef, so reference and foreign (Accessor) documents run the
+// SAME path — no representation-privileged convert.
+ValuePtr apply_opchain_preprocess(const Grammar& g, const NodeRef& root,
                                   NodeId start) {
     auto op_compat = build_op_compat_map(g);
-    value = expand_opchain(value, op_compat);
+    ValuePtr value = expand_opchain(root, op_compat);
     NodeId resolved_start = g.resolve_ref(start);
     if (resolved_start.value() < g.node_count()
         && g.node(resolved_start).kind == NodeKind::Sequence
@@ -2702,7 +2712,7 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     // recursively, then wrap atoms so the top-level rule's
     // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
     if (has_opchain_in_chain(start)) {
-        value = apply_opchain_preprocess(*this, value, start);
+        value = apply_opchain_preprocess(*this, ref_node(value.get()), start);
     }
     // `value` (post expand/wrap) is a local ValuePtr alive for the whole
     // call — the queue borrows it.
@@ -2715,11 +2725,14 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
 // representation is saved NATIVELY — the reader walks the Python dict (or
 // any Accessor) in place, no convert-to-Value tree, no per-node copy.
 //
-// The one boundary that still needs a reference tree is `#opchain`: the
-// save-side expand/re-nest rebuilds cascade sub-trees, which the current
-// transform expresses over Values. So an opchain grammar converts the
-// foreign document first (acknowledged, and it's the SV / expression case,
-// not the big-file LEF/DEF/TCL/GDSII formats where the memory win matters).
+// `#opchain` needs the compact `{op,args}` form expanded into the cascade
+// shape before the engine walks it — but expand_opchain now reads through a
+// NodeRef, so it consumes the foreign Accessor directly (no separate
+// convert). Only the expression tree itself is materialized (for the
+// expression-first case that IS the whole document; for an opchain embedded
+// under a structural start rule — e.g. SystemVerilog — this branch does not
+// fire and the per-dispatch handler rebuilds each expression subtree in
+// place). No representation-privileged path.
 tl::expected<void, SaveError>
 Grammar::save_from(std::ostream& out, const Accessor& accessor,
                    bool pretty, NodeId start) const {
@@ -2728,18 +2741,14 @@ Grammar::save_from(std::ostream& out, const Accessor& accessor,
     }
     ensure_refs_resolved_();
     if (!start.valid()) start = top();
+    NodeRef root{&accessor, accessor.root()};
     if (has_opchain_in_chain(start)) {
-        // Opchain boundary: materialize once, then the reference path.
-        ValuePool pool;
-        SharedPtrBuilder builder(pool);
-        convert(accessor, builder);
-        ValuePtr value = apply_opchain_preprocess(*this, builder.result(),
-                                                  start);
+        ValuePtr value = apply_opchain_preprocess(*this, root, start);
         return run_save(*this, out, ref_node(value.get()), pretty, start);
     }
-    // Native foreign save: run the engine directly over the accessor.
-    return run_save(*this, out, NodeRef{&accessor, accessor.root()},
-                    pretty, start);
+    // Non-opchain / embedded-opchain: run the engine directly over the
+    // accessor — the document is serialised in place.
+    return run_save(*this, out, root, pretty, start);
 }
 
 } // namespace rawast
