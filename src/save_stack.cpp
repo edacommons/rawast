@@ -2599,61 +2599,26 @@ const OpchainLadder& Grammar::opchain_ladder() const {
     return *opchain_ladder_cache_;
 }
 
-// Definition of Grammar::save lives here (rather than in
-// grammar.cpp) so the entire save engine — the helpers in this
-// file's anonymous namespace plus the entry point — stays
-// together. grammar.cpp has a one-line locator comment near
-// the rest of the Grammar member definitions.
+// Core save loop, shared by every entry point. `root` is the document
+// root as a NodeRef (any representation); opchain expand/wrap, when
+// needed, has already happened on the caller's side (it requires a
+// reference tree). Owns the pretty-trim buffering.
+namespace {
 tl::expected<void, SaveError>
-Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
-              NodeId start) const {
-    if (!value) return tl::unexpected(SaveError{"save: null root value"});
-    // Precompute the resolved-Ref cache; resolve_ref becomes O(1)
-    // for the duration of this save call. Idempotent and amortised
-    // across subsequent calls.
-    ensure_refs_resolved_();
-    if (!start.valid()) start = top();
-    // `#opchain` pre-process: when the start rule chain carries the
-    // flag, the input AST is in compacted `{op, args[]}` form but
-    // the grammar expects always-wrap `{lhs, tail:[...]}`. Expand
-    // recursively, then wrap atoms so the top-level rule's
-    // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
-    if (has_opchain_in_chain(start)) {
-        auto op_compat = build_op_compat_map(*this);
-        value = expand_opchain(value, op_compat);
-        // Wrap atoms only when the start chain resolves to a
-        // Sequence-Dict whose schema actually expects an `lhs`-binding
-        // item — i.e. the cascade-atom shape used by test_opchain's
-        // flat ADD grammar. Some grammars (SV) mark `#opchain` on a
-        // top-level wrapper that itself binds different fields (e.g.
-        // `descriptions`); wrapping an already-shaped dict there
-        // turns a valid input into `{lhs:{descriptions:…}, tail:[]}`
-        // and the fixed-schema check on the start rule then fails.
-        NodeId resolved_start = resolve_ref(start);
-        if (resolved_start.value() < node_count()
-            && node(resolved_start).kind == NodeKind::Sequence
-            && start_binds_lhs_helper(*this, resolved_start)) {
-            value = wrap_atom_as_chain(value);
-        }
-    }
+run_save(const Grammar& g, std::ostream& out, const NodeRef& root,
+         bool pretty, NodeId start) {
     SaveState s;
-    // `value` (post expand/wrap) is a local ValuePtr alive for the whole
-    // call — the queue borrows it.
-    s.push_q({ref_node(value.get()), false, ""});
+    s.push_q({root, false, ""});
     if (!pretty) {
-        return do_consume(*this, out, start, s, 0, pretty);
+        return do_consume(g, out, start, s, 0, pretty);
     }
     // Pretty: render to a buffer, then strip the STRUCTURAL spaces that
     // `space` attrs leak as trailing whitespace before a newline / closer.
-    // Only spaces recorded by emit_post (g_trim_pos) are removed — literal
-    // whitespace captured inside a Raw/scope/terminal body (e.g. a TCL brace
-    // group or quoted string) carries no recorded offset and is preserved,
-    // so the round-trip holds for whitespace-significant grammars.
     std::ostringstream buf;
     std::vector<std::streamoff> struct_spaces;
     g_trim_buf = &buf;
     g_trim_pos = &struct_spaces;
-    auto r = do_consume(*this, buf, start, s, 0, pretty);
+    auto r = do_consume(g, buf, start, s, 0, pretty);
     g_trim_buf = nullptr;
     g_trim_pos = nullptr;
     if (!r) return r;
@@ -2681,22 +2646,81 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     return {};
 }
 
+// Apply the `#opchain` save-side pre-process (compact {op,args} → the
+// always-wrap {lhs,tail} shape the cascade rules emit) to a reference
+// tree. Only touches trees; foreign representations convert first.
+ValuePtr apply_opchain_preprocess(const Grammar& g, ValuePtr value,
+                                  NodeId start) {
+    auto op_compat = build_op_compat_map(g);
+    value = expand_opchain(value, op_compat);
+    NodeId resolved_start = g.resolve_ref(start);
+    if (resolved_start.value() < g.node_count()
+        && g.node(resolved_start).kind == NodeKind::Sequence
+        && start_binds_lhs_helper(g, resolved_start)) {
+        value = wrap_atom_as_chain(value);
+    }
+    return value;
+}
+} // namespace
 
-// Universal save entry: serialise any representation via its Accessor.
-// Reference fast path: a SharedPtrAccessor's tree is saved directly.
-// Foreign representations are piped through convert() into the reference
-// model — correct by construction; the streaming-native walk over the
-// Accessor is the planned follow-up and will not change this API.
+// Definition of Grammar::save lives here (rather than in
+// grammar.cpp) so the entire save engine — the helpers in this
+// file's anonymous namespace plus the entry point — stays
+// together. grammar.cpp has a one-line locator comment near
+// the rest of the Grammar member definitions.
+tl::expected<void, SaveError>
+Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
+              NodeId start) const {
+    if (!value) return tl::unexpected(SaveError{"save: null root value"});
+    // Precompute the resolved-Ref cache; resolve_ref becomes O(1)
+    // for the duration of this save call. Idempotent and amortised
+    // across subsequent calls.
+    ensure_refs_resolved_();
+    if (!start.valid()) start = top();
+    // `#opchain` pre-process: when the start rule chain carries the
+    // flag, the input AST is in compacted `{op, args[]}` form but
+    // the grammar expects always-wrap `{lhs, tail:[...]}`. Expand
+    // recursively, then wrap atoms so the top-level rule's
+    // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
+    if (has_opchain_in_chain(start)) {
+        value = apply_opchain_preprocess(*this, value, start);
+    }
+    // `value` (post expand/wrap) is a local ValuePtr alive for the whole
+    // call — the queue borrows it.
+    return run_save(*this, out, ref_node(value.get()), pretty, start);
+}
+
+
+// Universal save entry: serialise any representation through its Accessor.
+// The engine reads documents entirely through NodeRef ops, so a foreign
+// representation is saved NATIVELY — the reader walks the Python dict (or
+// any Accessor) in place, no convert-to-Value tree, no per-node copy.
+//
+// The one boundary that still needs a reference tree is `#opchain`: the
+// save-side expand/re-nest rebuilds cascade sub-trees, which the current
+// transform expresses over Values. So an opchain grammar converts the
+// foreign document first (acknowledged, and it's the SV / expression case,
+// not the big-file LEF/DEF/TCL/GDSII formats where the memory win matters).
 tl::expected<void, SaveError>
 Grammar::save_from(std::ostream& out, const Accessor& accessor,
                    bool pretty, NodeId start) const {
     if (const auto* sp = dynamic_cast<const SharedPtrAccessor*>(&accessor)) {
         return save(out, sp->root_value(), pretty, start);
     }
-    ValuePool pool;
-    SharedPtrBuilder builder(pool);
-    convert(accessor, builder);
-    return save(out, builder.result(), pretty, start);
+    ensure_refs_resolved_();
+    if (!start.valid()) start = top();
+    if (has_opchain_in_chain(start)) {
+        // Opchain boundary: materialize once, then the reference path.
+        ValuePool pool;
+        SharedPtrBuilder builder(pool);
+        convert(accessor, builder);
+        ValuePtr value = apply_opchain_preprocess(*this, builder.result(),
+                                                  start);
+        return run_save(*this, out, ref_node(value.get()), pretty, start);
+    }
+    // Native foreign save: run the engine directly over the accessor.
+    return run_save(*this, out, NodeRef{&accessor, accessor.root()},
+                    pretty, start);
 }
 
 } // namespace rawast

@@ -54,6 +54,27 @@ def test_save_json_roundtrip():
     assert json.loads(text) == value
 
 
+def test_save_native_dict_no_parse_roundtrips():
+    """Construction-toolkit path: a hand-built native Python dict (no parse
+    ever ran) is serialised by reading the object graph IN PLACE through its
+    Accessor — no Value-tree copy. save -> re-parse must reproduce it deeply,
+    including nested dicts, lists, and every scalar kind."""
+    g = rawast.Grammar.load(str(GRAMMARS / "json.json"))
+    value = {
+        "name": "top",
+        "count": 42,
+        "ratio": 1.5,
+        "enabled": True,
+        "missing": None,
+        "tags": ["a", "b", "c"],
+        "nested": {"z": 1, "a": 2, "inner": [{"k": "v"}, {"k": "w"}]},
+        "empty_list": [],
+        "empty_dict": {},
+    }
+    raw = g.save(value)
+    assert g.parse_string(raw.decode("utf-8")) == value
+
+
 def test_lint_clean_grammar():
     g = rawast.Grammar.load(str(GRAMMARS / "json.json"))
     assert g.lint() == []
