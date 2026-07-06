@@ -9,6 +9,7 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
+#include <rawast/accessor.hpp>
 #include <rawast/builder.hpp>
 #include <rawast/compacting_builder.hpp>
 #include <rawast/grammar.hpp>
@@ -23,10 +24,13 @@
 #include <rawast/preprocessor.hpp>
 #include <rawast/to_value.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace nb = nanobind;
 
@@ -197,6 +201,148 @@ public:
         return levels_.front().emitted.front().v;
     }
 };
+
+
+// --- PyObjectAccessor — the read half: save FROM native Python ------------
+//
+// Symmetric to PyObjectBuilder. The save engine reads a document entirely
+// through the Accessor interface (NodeRef ops), so a Python dict/list/scalar
+// graph is serialised IN PLACE — no python_to_value tree, no per-node copy.
+// Node == PyObject* (borrowed; the graph is kept alive by the caller with the
+// GIL held for the whole save call). Kind mapping mirrors python_to_value:
+// bool is checked before int (bool is a Python int subclass).
+class PyObjectAccessor final : public rawast::Accessor {
+    PyObject* root_;
+    // Interned-key cache: field names (from the grammar) repeat across
+    // thousands of dicts in one save. PyDict_GetItemString re-creates and
+    // re-hashes a temporary PyUnicode on every call; caching an interned
+    // key (hash computed once) and using PyDict_GetItem drops both. Owned
+    // refs, released in the destructor. Lifetime = one save call.
+    mutable std::unordered_map<std::string, PyObject*> key_cache_;
+
+public:
+    explicit PyObjectAccessor(nb::handle root) : root_(root.ptr()) {}
+    ~PyObjectAccessor() override {
+        for (auto& [k, v] : key_cache_) Py_DECREF(v);
+    }
+
+    Node root() const override { return root_; }
+
+    rawast::ValueType kind(Node n) const override {
+        PyObject* o = const_cast<PyObject*>(static_cast<const PyObject*>(n));
+        if (o == Py_None)          return rawast::ValueType::Null;
+        if (PyBool_Check(o))       return rawast::ValueType::Bool;
+        if (PyLong_Check(o))       return rawast::ValueType::Int;
+        if (PyFloat_Check(o))      return rawast::ValueType::Real;
+        if (PyUnicode_Check(o))    return rawast::ValueType::String;
+        if (PyList_Check(o) || PyTuple_Check(o)) return rawast::ValueType::Array;
+        if (PyDict_Check(o))       return rawast::ValueType::Dict;
+        throw std::runtime_error("rawast: unsupported Python type for save");
+    }
+
+    bool bool_(Node n) const override {
+        return obj(n) == Py_True;
+    }
+    std::int64_t int_(Node n) const override {
+        return PyLong_AsLongLong(obj(n));
+    }
+    std::uint64_t uint_(Node n) const override {
+        return static_cast<std::uint64_t>(PyLong_AsLongLong(obj(n)));
+    }
+    double real_(Node n) const override {
+        return PyFloat_AsDouble(obj(n));
+    }
+    std::string_view string_(Node n) const override {
+        Py_ssize_t len = 0;
+        const char* p = PyUnicode_AsUTF8AndSize(obj(n), &len);
+        if (!p) throw std::runtime_error("rawast: bad Python str in save");
+        return {p, static_cast<std::size_t>(len)};
+    }
+
+    std::size_t size(Node n) const override {
+        PyObject* o = obj(n);
+        if (PyDict_Check(o)) return static_cast<std::size_t>(PyDict_Size(o));
+        return static_cast<std::size_t>(PySequence_Size(o));
+    }
+    Node at(Node n, std::size_t i) const override {
+        // Borrowed via the sequence-fast-path; the parent list/tuple keeps
+        // the element alive.
+        PyObject* o = obj(n);
+        if (PyList_Check(o))
+            return PyList_GET_ITEM(o, static_cast<Py_ssize_t>(i));
+        return PyTuple_GET_ITEM(o, static_cast<Py_ssize_t>(i));
+    }
+    Node get(Node n, std::string_view name) const override {
+        // Borrowed reference; nullptr if absent. Interned, hash-cached key.
+        return PyDict_GetItem(obj(n), intern_key(name));
+    }
+    void each(Node n,
+              const std::function<void(std::string_view, Node)>& fn) const override {
+        // Key-sorted iteration is part of the Accessor contract (save
+        // dispatch + round-trip equality rely on it). Collect, sort, emit.
+        PyObject* d = obj(n);
+        std::vector<std::pair<std::string, PyObject*>> items;
+        items.reserve(static_cast<std::size_t>(PyDict_Size(d)));
+        PyObject* key = nullptr;
+        PyObject* val = nullptr;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(d, &pos, &key, &val)) {
+            Py_ssize_t len = 0;
+            const char* p = PyUnicode_AsUTF8AndSize(key, &len);
+            if (!p) throw std::runtime_error("rawast: non-str dict key in save");
+            items.emplace_back(std::string(p, static_cast<std::size_t>(len)), val);
+        }
+        std::sort(items.begin(), items.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& [k, v] : items) fn(k, v);
+    }
+
+private:
+    static PyObject* obj(Node n) {
+        return const_cast<PyObject*>(static_cast<const PyObject*>(n));
+    }
+
+    // Return an interned PyUnicode for `name` (cached; hash computed once).
+    PyObject* intern_key(std::string_view name) const {
+        std::string key(name);   // SSO for the short field names we cache
+        auto it = key_cache_.find(key);
+        if (it != key_cache_.end()) return it->second;
+        PyObject* k = PyUnicode_InternFromString(key.c_str());  // new ref
+        key_cache_.emplace(std::move(key), k);
+        return k;
+    }
+};
+
+// Reject the Undefined RETURN-ONLY sentinel anywhere in a save input.
+// The native save path only visits grammar-consumed nodes, so — unlike the
+// old whole-tree python_to_value — it can't catch an Undefined buried in a
+// field the grammar ignores. This pointer-identity walk restores that
+// contract without building a tree: pure PyObject* compares over the graph,
+// a small fraction of the save's own per-node cost.
+void reject_undefined_sentinel(nb::handle o) {
+    PyObject* p = o.ptr();
+    if (p == undefined_py().ptr()) {
+        throw nb::type_error(
+            "Undefined is a return-only sentinel; it cannot be assigned "
+            "or used as an input value");
+    }
+    if (PyList_Check(p)) {
+        Py_ssize_t n = PyList_GET_SIZE(p);
+        for (Py_ssize_t i = 0; i < n; ++i)
+            reject_undefined_sentinel(nb::borrow(PyList_GET_ITEM(p, i)));
+    } else if (PyTuple_Check(p)) {
+        Py_ssize_t n = PyTuple_GET_SIZE(p);
+        for (Py_ssize_t i = 0; i < n; ++i)
+            reject_undefined_sentinel(nb::borrow(PyTuple_GET_ITEM(p, i)));
+    } else if (PyDict_Check(p)) {
+        PyObject* key = nullptr;
+        PyObject* val = nullptr;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(p, &pos, &key, &val)) {
+            reject_undefined_sentinel(nb::borrow(val));
+        }
+    }
+}
 
 
 rawast::ValuePtr python_to_value(nb::handle obj) {
@@ -489,7 +635,6 @@ NB_MODULE(_rawast, m) {
         .def("save",
             [](rawast::Grammar& g, nb::handle value, bool pretty,
                std::optional<std::string> start) -> nb::object {
-                auto v = python_to_value(value);
                 rawast::NodeId start_id{};
                 if (start) {
                     if (!g.has_rule(*start)) {
@@ -498,8 +643,16 @@ NB_MODULE(_rawast, m) {
                     }
                     start_id = g.rule_id(*start);
                 }
+                // Reject the Undefined sentinel at any depth (the native
+                // path would otherwise only see grammar-consumed nodes).
+                reject_undefined_sentinel(value);
+                // Read the native Python graph in place through its
+                // Accessor — no python_to_value tree. save_from runs the
+                // engine directly over it (opchain grammars materialize at
+                // that one boundary; see Grammar::save_from).
+                PyObjectAccessor acc(value);
                 std::ostringstream out;
-                auto r = g.save(out, v, pretty, start_id);
+                auto r = g.save_from(out, acc, pretty, start_id);
                 if (!r) throw std::runtime_error(r.error().message);
                 const std::string s = out.str();
                 // Return bytes — binary-safe for GDSII and similar.

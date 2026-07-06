@@ -98,6 +98,102 @@ inline NodeRef ref_node(const Value* v) {
     return NodeRef{&scratch_accessor(), v};
 }
 
+// --- NodeRef read ops -------------------------------------------------------
+// The engine reads a document ONLY through these. Each has a reference
+// fast lane (as_value() → concrete Value*, zero virtual dispatch, the
+// classic/scratch path) and a foreign lane through the accessor. This is
+// what makes the save engine representation-agnostic: a foreign Accessor
+// (native Python dict, etc.) is saved WITHOUT a convert-to-Value tree.
+
+// Dict field lookup. Returns a null NodeRef when absent.
+inline NodeRef nr_get(const NodeRef& dict, std::string_view name) {
+    if (const Value* dv = dict.as_value()) {
+        const auto& m = static_cast<const DictValue*>(dv)->data();
+        auto it = m.find(std::string(name));
+        return (it == m.end()) ? NodeRef{} : NodeRef{dict.acc, it->second.get()};
+    }
+    Accessor::Node n = dict.acc->get(dict.node, name);
+    return n ? NodeRef{dict.acc, n} : NodeRef{};
+}
+
+// Container size (array elements / dict entries).
+inline std::size_t nr_size(const NodeRef& n) { return n.acc->size(n.node); }
+
+// Array element by index.
+inline NodeRef nr_at(const NodeRef& n, std::size_t i) {
+    if (const Value* v = n.as_value())
+        return NodeRef{n.acc, static_cast<const ArrayValue*>(v)->data()[i].get()};
+    return NodeRef{n.acc, n.acc->at(n.node, i)};
+}
+
+// Dict iteration, key-sorted (the accessor's canonical order).
+inline void nr_each(const NodeRef& dict,
+                    const std::function<void(std::string_view, NodeRef)>& fn) {
+    const Accessor* a = dict.acc;
+    if (const Value* dv = dict.as_value()) {
+        for (const auto& [k, v] : static_cast<const DictValue*>(dv)->data())
+            fn(k, NodeRef{a, v.get()});
+        return;
+    }
+    a->each(dict.node,
+            [&](std::string_view k, Accessor::Node n) { fn(k, NodeRef{a, n}); });
+}
+
+// String view of a String-kind node (reference: the StringValue payload;
+// foreign: the accessor's string_). Valid while the document is alive.
+inline std::string_view nr_str(const NodeRef& n) {
+    if (const Value* v = n.as_value())
+        return static_cast<const StringValue*>(v)->data();
+    return n.acc->string_(n.node);
+}
+
+// Materialize a foreign scalar as a transient reference Value so leaf
+// parsers (unparse) and the constant comparator can consume it without a
+// full-tree convert. One leaf, freed when its keepalive scope ends.
+// Returns nullptr for containers (caller handles those structurally).
+inline ValuePtr materialize_scalar(const NodeRef& nr) {
+    const Accessor* a = nr.acc;
+    switch (a->kind(nr.node)) {
+    case ValueType::Null:      return null_value();
+    case ValueType::Undefined: return undefined_value();
+    case ValueType::Bool:      return a->bool_(nr.node) ? true_value() : false_value();
+    case ValueType::Int:       return make_int(a->int_(nr.node));
+    case ValueType::UInt:      return make_uint(a->uint_(nr.node));
+    case ValueType::Real:      return make_real(a->real_(nr.node));
+    case ValueType::String:    return make_string(std::string(a->string_(nr.node)));
+    default:                   return nullptr;
+    }
+}
+
+// Materialize a foreign node (scalar OR container) as a reference Value.
+// Scalars are one leaf; containers are converted through a SharedPtrBuilder
+// (needed only at tree-requiring boundaries: leaf unparse of a #subparse
+// sub-tree, opchain re-nest). Reference nodes never reach here — callers
+// take the as_value() fast lane first — so no self-copy on the hot path.
+inline ValuePtr nr_to_value(const NodeRef& nr) {
+    switch (nr.kind()) {
+    case ValueType::Array:
+    case ValueType::Dict: {
+        SharedPtrBuilder b;
+        convert(*nr.acc, nr.node, b);
+        return b.result();
+    }
+    default:
+        return materialize_scalar(nr);
+    }
+}
+
+// Resolve a pulled NodeRef to a reference Value* for a leaf/tree consumer.
+// Reference/scratch nodes return their Value* directly (zero copy); foreign
+// nodes materialize into `owned`, which the caller must keep alive across
+// the use. Absent (null NodeRef) yields the shared null singleton.
+inline const Value* leaf_value(const NodeRef& nr, ValuePtr& owned) {
+    if (!nr) return null_value().get();
+    if (const Value* v = nr.as_value()) return v;
+    owned = nr_to_value(nr);
+    return owned.get();
+}
+
 // ---------------------------------------------------------------------------
 // SaveState
 // ---------------------------------------------------------------------------
@@ -112,7 +208,7 @@ struct QueueEntry {
 };
 
 struct DictScope {
-    const DictValue* dict;
+    NodeRef node;   // the dict being filled (any representation)
     std::set<std::string> consumed;
     // Per-field iteration cursor for list-append (`:name[]=@`) bindings.
     // Each pull from a `name[]`-suffixed pending advances the cursor;
@@ -142,7 +238,7 @@ public:
     QueueEntry next_q() { return std::move(queue_[q_idx_++]); }
 
     // --- dict scope ---
-    void push_dict(const DictValue& d) { dict_stack_.push_back({&d, {}, {}}); }
+    void push_dict(const NodeRef& d) { dict_stack_.push_back({d, {}, {}}); }
     void pop_dict() { dict_stack_.pop_back(); }
     DictScope* top_dict() {
         return dict_stack_.empty() ? nullptr : &dict_stack_.back();
@@ -193,21 +289,21 @@ public:
             bool was_list = false;
             const std::string name = strip_list_suffix(pending_, was_list);
             clear_pending();
-            auto it = scope.dict->data().find(name);
-            if (it != scope.dict->data().end()) {
+            NodeRef field = nr_get(scope.node, name);
+            if (field) {
                 // List-append (`name[]`) form: return the next
                 // element of dict[name] as an array, advance the
                 // per-field cursor, mark consumed when exhausted.
                 if (was_list) {
-                    auto arr = as_array(it->second);
-                    if (!arr) {
+                    if (field.kind() != ValueType::Array) {
                         return tl::unexpected(SaveError{
                             "list-append binding (`" + name + "[]`) "
                             "expected ArrayValue but field is "
                             "non-array"});
                     }
+                    std::size_t sz = nr_size(field);
                     std::size_t idx = scope.list_progress[name];
-                    if (idx >= arr->data().size()) {
+                    if (idx >= sz) {
                         if (is_optional) {
                             return QueueEntry{NodeRef{}, false, name};
                         }
@@ -215,13 +311,13 @@ public:
                             "list-append exhausted for '" + name + "'"});
                     }
                     scope.list_progress[name] = idx + 1;
-                    if (idx + 1 >= arr->data().size()) {
+                    if (idx + 1 >= sz) {
                         scope.consumed.insert(name);
                     }
-                    return QueueEntry{ref_node(arr->data()[idx].get()), false, name};
+                    return QueueEntry{nr_at(field, idx), false, name};
                 }
                 scope.consumed.insert(name);
-                return QueueEntry{ref_node(it->second.get()), false, name};
+                return QueueEntry{field, false, name};
             }
             if (is_optional) {
                 return QueueEntry{NodeRef{}, false, name};
@@ -370,8 +466,7 @@ bool node_is_optional_chain(const Grammar& g, NodeId id) {
 bool would_skip_optional(const Grammar& g, NodeId child_id, const SaveState& s) {
     if (!s.has_pending() || !s.top_dict()) return false;
     if (!node_is_optional_chain(g, child_id)) return false;
-    const auto& d = s.top_dict()->dict->data();
-    return d.find(s.pending_name()) == d.end();
+    return !nr_get(s.top_dict()->node, s.pending_name());
 }
 
 // Extract the constant value bound to a Value-name by the following
@@ -385,6 +480,35 @@ bool would_skip_optional(const Grammar& g, NodeId child_id, const SaveState& s) 
 // Forward decl: comparator used by discriminator_pair_matches before
 // values_equal_v2's definition appears later in the file.
 bool values_equal_v2(const Value* a, const Value* b);
+
+// Compare a document value (any representation) to a grammar-side
+// constant (always a scalar reference Value). Reference fast lane compares
+// Value*↔Value* directly; foreign lane compares scalar-to-scalar with NO
+// allocation — this is hot (Choice dispatch probes every alternative's
+// discriminators against each dict). Mirrors values_equal_v2's strict
+// same-kind rule (Int and UInt do not cross-compare).
+inline bool nr_equal(const NodeRef& doc, const Value* konst) {
+    if (const Value* dv = doc.as_value()) return values_equal_v2(dv, konst);
+    if (!konst) return false;
+    const ValueType dk = doc.kind();
+    if (dk != konst->type()) return false;
+    const Accessor* a = doc.acc;
+    switch (dk) {
+    case ValueType::Null:
+    case ValueType::Undefined: return true;
+    case ValueType::Bool:   return a->bool_(doc.node)
+                                   == static_cast<const BoolValue*>(konst)->data();
+    case ValueType::Int:    return a->int_(doc.node)
+                                   == static_cast<const IntValue*>(konst)->data();
+    case ValueType::UInt:   return a->uint_(doc.node)
+                                   == static_cast<const UIntValue*>(konst)->data();
+    case ValueType::Real:   return a->real_(doc.node)
+                                   == static_cast<const RealValue*>(konst)->data();
+    case ValueType::String: return a->string_(doc.node)
+                                   == static_cast<const StringValue*>(konst)->data();
+    default: return false;   // arrays / dicts never equal a scalar constant
+    }
+}
 
 const Value* discriminator_const_value(const Grammar& g, const Node& b) {
     if (b.kind == NodeKind::Value && !b.is_name) return b.value.get();
@@ -510,20 +634,20 @@ collect_child_discriminators(const Grammar& g, const Node& seq, int depth = 0) {
 
 std::optional<bool>
 discriminator_pair_matches(const Grammar& g, const std::string& name,
-                            const Node& b_resolved, const DictValue& dict) {
+                            const Node& b_resolved, const NodeRef& dict) {
     // Single-value form: Value-const or Key-with-Value-child.
     if (const Value* cv = discriminator_const_value(g, b_resolved)) {
-        auto it = dict.data().find(name);
-        if (it == dict.data().end()) return false;
-        return values_equal_v2(it->second.get(), cv);
+        NodeRef f = nr_get(dict, name);
+        if (!f) return false;
+        return nr_equal(f, cv);
     }
     // Multi-value form: Ref-to-Choice-of-emit-keys.
     auto values = discriminator_choice_values(g, b_resolved);
     if (!values.empty()) {
-        auto it = dict.data().find(name);
-        if (it == dict.data().end()) return false;
+        NodeRef f = nr_get(dict, name);
+        if (!f) return false;
         for (const Value* v : values) {
-            if (values_equal_v2(it->second.get(), v)) return true;
+            if (nr_equal(f, v)) return true;
         }
         return false;
     }
@@ -552,7 +676,7 @@ discriminator_pair_matches(const Grammar& g, const std::string& name,
 //     subtree). Other children don't constrain at this level.
 //   * Other  — permissive; let the actual emission path decide.
 bool dispatchable_for_dict(const Grammar& g, NodeId node_id,
-                            const DictValue& dict,
+                            const NodeRef& dict,
                             std::unordered_set<std::uint32_t>& visited) {
     NodeId resolved = g.resolve_ref(node_id);
     // Cycle guard. TCL has BRACKET_WORD → ... → SCRIPT → COMMAND →
@@ -666,7 +790,7 @@ bool dispatchable_for_dict(const Grammar& g, NodeId node_id,
 //   * true — pattern recognised and matches.
 std::optional<bool>
 repeat_field_matches(const Grammar& g, const Node& repeat_node,
-                      const DictValue& dict) {
+                      const NodeRef& dict) {
     if (repeat_node.kind != NodeKind::Repeat) return std::nullopt;
     std::size_t item_idx = repeat_node.has_separator ? 1 : 0;
     if (item_idx >= repeat_node.children.size()) return std::nullopt;
@@ -693,24 +817,24 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
         sep_discs = collect_child_discriminators(g, sep);
     }
     if (discs.empty() && sep_discs.empty()) return std::nullopt;
-    auto it = dict.data().find(field);
-    if (it == dict.data().end()) {
+    NodeRef fld = nr_get(dict, field);
+    if (!fld) {
         return repeat_node.min > 0 ? std::optional<bool>{false} : std::nullopt;
     }
-    auto arr = std::dynamic_pointer_cast<ArrayValue>(it->second);
-    if (!arr) return std::nullopt;
-    if (arr->data().empty()) {
+    if (fld.kind() != ValueType::Array) return std::nullopt;
+    std::size_t asz = nr_size(fld);
+    if (asz == 0) {
         return repeat_node.min > 0 ? std::optional<bool>{false} : std::nullopt;
     }
-    for (const auto& elt : arr->data()) {
-        auto elt_dict = std::dynamic_pointer_cast<DictValue>(elt);
-        if (!elt_dict) return std::nullopt;
+    for (std::size_t ei = 0; ei < asz; ++ei) {
+        NodeRef elt = nr_at(fld, ei);
+        if (elt.kind() != ValueType::Dict) return std::nullopt;
         for (const auto& d : discs) {
-            auto eit = elt_dict->data().find(d.field);
-            if (eit == elt_dict->data().end()) return false;
+            NodeRef ef = nr_get(elt, d.field);
+            if (!ef) return false;
             bool ok = false;
             for (const auto& v : d.values) {
-                if (values_equal_v2(eit->second.get(), v)) { ok = true; break; }
+                if (nr_equal(ef, v)) { ok = true; break; }
             }
             if (!ok) return false;
         }
@@ -722,11 +846,11 @@ repeat_field_matches(const Grammar& g, const Node& repeat_node,
     // OR_CHAIN with '||', AND_CHAIN with '&&' — both look like
     // catch-alls and the dispatcher picks whichever comes first.
     for (const auto& d : sep_discs) {
-        auto dit = dict.data().find(d.field);
-        if (dit == dict.data().end()) return false;
+        NodeRef df = nr_get(dict, d.field);
+        if (!df) return false;
         bool ok = false;
         for (const auto& v : d.values) {
-            if (values_equal_v2(dit->second.get(), v)) {
+            if (nr_equal(df, v)) {
                 ok = true;
                 break;
             }
@@ -842,13 +966,13 @@ bool values_equal_v2(const Value* a, const Value* b) {
 // Forward declaration: variant that takes an explicit peek_value (used by
 // the container=None deep walk when simulating pending-name consumption).
 bool can_consume_peek(const Grammar& g, NodeId node_id,
-                      const Value* peek_value, const std::string& peek_key,
+                      const NodeRef& peek_value, const std::string& peek_key,
                       const SaveState& s);
 
 bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
     // What value would the alt see? Either the pending-name lookup
     // (top dict scope) or the next queue entry.
-    const Value* peek_value = nullptr;
+    NodeRef peek_value;
     std::string peek_key;
     if (s.has_pending() && s.top_dict()) {
         // Strip list-append suffix so `items[]` looks up the `items`
@@ -858,26 +982,25 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
         // to scalar field lookup for non-list bindings.
         bool is_list = false;
         std::string field = strip_list_suffix(s.pending_name(), is_list);
-        auto it = s.top_dict()->dict->data().find(field);
-        if (it != s.top_dict()->dict->data().end()) {
+        NodeRef fld = nr_get(s.top_dict()->node, field);
+        if (fld) {
             if (is_list) {
-                auto arr = as_array(it->second);
-                if (arr && !arr->data().empty()) {
+                if (fld.kind() == ValueType::Array && nr_size(fld) > 0) {
                     auto pit = s.top_dict()->list_progress.find(field);
                     std::size_t idx = pit == s.top_dict()->list_progress.end()
                                         ? 0 : pit->second;
-                    if (idx < arr->data().size()) {
-                        peek_value = arr->data()[idx].get();
+                    if (idx < nr_size(fld)) {
+                        peek_value = nr_at(fld, idx);
                         peek_key   = field;
                     }
                 }
             } else {
-                peek_value = it->second.get();
+                peek_value = fld;
                 peek_key   = field;
             }
         }
     } else if (s.has_q()) {
-        peek_value = s.peek_q().value.as_value();
+        peek_value = s.peek_q().value;
         peek_key   = s.peek_q().key_source;
     }
     return can_consume_peek(g, node_id, peek_value, peek_key, s);
@@ -894,7 +1017,7 @@ bool can_consume(const Grammar& g, NodeId node_id, const SaveState& s) {
 // is present and unconsumed. Plain keys (no emit/value field) correctly
 // skip.
 bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
-                              const DictValue& dict,
+                              const NodeRef& dict,
                               const std::set<std::string>& consumed) {
     const Node& ch = g.node(g.resolve_ref(choice_id));
     if (ch.kind != NodeKind::Choice) return false;
@@ -902,10 +1025,11 @@ bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
         const Node& a = g.node(g.resolve_ref(alt));
         // (a) const discriminators: dict[field] must equal an alt value.
         for (const auto& d : collect_child_discriminators(g, a)) {
-            auto it = dict.data().find(d.field);
-            if (it == dict.data().end() || consumed.count(d.field)) continue;
+            if (consumed.count(d.field)) continue;
+            NodeRef f = nr_get(dict, d.field);
+            if (!f) continue;
             for (const auto& v : d.values) {
-                if (values_equal_v2(it->second.get(), v)) return true;
+                if (nr_equal(f, v)) return true;
             }
         }
         // (b) field-presence: a V-name marker whose field is present.
@@ -917,8 +1041,7 @@ bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
                 if (!fn) continue;
                 bool is_list = false;
                 std::string field = strip_list_suffix(fn->data(), is_list);
-                if (dict.data().find(field) != dict.data().end()
-                    && !consumed.count(field)) {
+                if (nr_get(dict, field) && !consumed.count(field)) {
                     return true;
                 }
             }
@@ -928,7 +1051,7 @@ bool inline_choice_consumable(const Grammar& g, NodeId choice_id,
 }
 
 bool can_consume_peek(const Grammar& g, NodeId node_id,
-                      const Value* peek_value, const std::string& peek_key,
+                      const NodeRef& peek_value, const std::string& peek_key,
                       const SaveState& s) {
     NodeId rid = g.resolve_ref(node_id);
     const Node& n = g.node(rid);
@@ -950,7 +1073,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         for (NodeId c : n.children) {
             const Node& cn = g.node(g.resolve_ref(c));
             if (cn.kind == NodeKind::Value && cn.value && peek_value
-                && values_equal_v2(peek_value, cn.value.get())) {
+                && nr_equal(peek_value, cn.value.get())) {
                 return true;
             }
         }
@@ -975,10 +1098,9 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         }
         // Bare Key: key-based dispatch. Match if peek value is a
         // StringValue equal to this Key's literal token.
-        if (n.value && peek_value) {
+        if (n.value && peek_value && peek_value.kind() == ValueType::String) {
             auto tok = as_string(n.value);
-            auto vs  = as_string(peek_value);
-            if (tok && vs && tok->data() == vs->data()) return true;
+            if (tok && tok->data() == nr_str(peek_value)) return true;
         }
         // Match against the originating dict key (open-schema flatten).
         if (n.value && !peek_key.empty()) {
@@ -1007,7 +1129,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         auto name = as_string(n.value);
         if (!name) return false;
         const std::string& p = name->data();
-        ValueType vt = peek_value->type();
+        ValueType vt = peek_value.kind();
 
         // Standard parsers: strict value-type match. Order is
         // important — `int`/`uint` is checked before the generic
@@ -1029,8 +1151,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             // correctly rejects strings with spaces, semicolons, or
             // quotes the identifier parser can't handle.
             if (vt != ValueType::String) return false;
-            const auto& s =
-                static_cast<const StringValue*>(peek_value)->data();
+            const std::string s{nr_str(peek_value)};
             if (s.empty()) return false;
             if (Parser* pp = g.parser(p)) {
                 std::istringstream is{s};
@@ -1069,10 +1190,10 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
 
     case NodeKind::Sequence: {
         if (n.container == Container::Array) {
-            return peek_value && peek_value->type() == ValueType::Array;
+            return peek_value && peek_value.kind() == ValueType::Array;
         }
         if (n.container == Container::Dict) {
-            if (!peek_value || peek_value->type() != ValueType::Dict) return false;
+            if (!peek_value || peek_value.kind() != ValueType::Dict) return false;
             // Walk (Value-name, expr) discriminator pairs — all
             // matching pairs must agree with the input dict. `expr`
             // may be a Value-const, a Key-with-Value-child, or a
@@ -1080,7 +1201,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
             // pattern). Pairs that don't form a discriminator are
             // skipped. If no discriminator pair exists at all, the
             // alt is a dict-shaped catch-all (matches any dict).
-            const auto& dict = *static_cast<const DictValue*>(peek_value);
+            const NodeRef& dict = peek_value;
             bool found_disc_match = false;
             for (std::size_t i = 0; i + 1 < n.children.size(); ++i) {
                 const Node& a = g.node(g.resolve_ref(n.children[i]));
@@ -1097,8 +1218,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (!m.has_value()) continue;  // not a discriminator
                 if (!*m) {
                     // Optional pair + absent field: not a mismatch, skip.
-                    if (b_orig.is_optional
-                        && dict.data().find(name_sv->data()) == dict.data().end()) {
+                    if (b_orig.is_optional && !nr_get(dict, name_sv->data())) {
                         continue;
                     }
                     return false;
@@ -1170,7 +1290,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (b.kind == NodeKind::Value && !b.is_name) continue;
                 // Required field must exist (list-append OK with empty
                 // array since `repeat min=0` is the common case).
-                if (dict.data().find(field) == dict.data().end()) {
+                if (!nr_get(dict, field)) {
                     return false;
                 }
             }
@@ -1189,9 +1309,9 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (!name_sv) continue;
                 const Value* cv = discriminator_const_value(g, b);
                 if (!cv) continue;
-                auto it = scope->dict->data().find(name_sv->data());
-                if (it == scope->dict->data().end()) return false;
-                if (!values_equal_v2(it->second.get(), cv)) return false;
+                NodeRef f = nr_get(scope->node, name_sv->data());
+                if (!f) return false;
+                if (!nr_equal(f, cv)) return false;
                 // Reject if the field is already consumed (used by
                 // a `repeat <Choice>` over a catcher body so that
                 // `:is_fixed_mask=true`-style discriminators don't
@@ -1263,9 +1383,9 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                                         std::string field =
                                             strip_list_suffix(fname->data(),
                                                               is_list);
-                                        auto it =
-                                            scope->dict->data().find(field);
-                                        if (it != scope->dict->data().end()
+                                        NodeRef fv =
+                                            nr_get(scope->node, field);
+                                        if (fv
                                             && !scope->consumed.count(field)) {
                                             // For list bindings, also
                                             // verify the array has
@@ -1274,14 +1394,13 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                                             // shouldn't keep the alt
                                             // dispatchable.
                                             if (is_list) {
-                                                if (auto arr =
-                                                    as_array(it->second)) {
+                                                if (fv.kind() == ValueType::Array) {
                                                     auto pit =
                                                         scope->list_progress.find(field);
                                                     std::size_t idx =
                                                         pit == scope->list_progress.end()
                                                           ? 0 : pit->second;
-                                                    if (idx < arr->data().size()) {
+                                                    if (idx < nr_size(fv)) {
                                                         walked_consumer = true;
                                                     }
                                                 }
@@ -1305,7 +1424,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                         // on save. Shallow, non-recursive field match only —
                         // never the catch-all over-fire the deep
                         // dispatchable_for_dict recursion would cause.
-                        if (inline_choice_consumable(g, c, *scope->dict,
+                        if (inline_choice_consumable(g, c, scope->node,
                                                      scope->consumed)) {
                             walked_consumer = true;
                         }
@@ -1315,10 +1434,10 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (have_sim_pending) {
                     bool is_list = false;
                     std::string field = strip_list_suffix(sim_pending, is_list);
-                    auto it = scope->dict->data().find(field);
+                    NodeRef fv = nr_get(scope->node, field);
                     const bool consumer_optional =
                         node_is_optional_chain(g, c);
-                    if (it == scope->dict->data().end()) {
+                    if (!fv) {
                         // Optional consumer + absent field: skip
                         // the marker (the optional clause opts
                         // out), don't reject the whole alt.
@@ -1341,17 +1460,17 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                     // the whole array. Lets `repeat <Choice>` over a
                     // `:name[]=@` alternative know it can still
                     // dispatch one more element.
-                    ValuePtr peek = it->second;
+                    NodeRef peek = fv;
                     if (is_list) {
-                        auto arr = as_array(it->second);
-                        if (!arr || arr->data().empty()) return false;
+                        if (fv.kind() != ValueType::Array || nr_size(fv) == 0)
+                            return false;
                         auto pit = scope->list_progress.find(field);
                         std::size_t idx = pit == scope->list_progress.end()
                                             ? 0 : pit->second;
-                        if (idx >= arr->data().size()) return false;
-                        peek = arr->data()[idx];
+                        if (idx >= nr_size(fv)) return false;
+                        peek = nr_at(fv, idx);
                     }
-                    if (!can_consume_peek(g, c, peek.get(), field, s)) {
+                    if (!can_consume_peek(g, c, peek, field, s)) {
                         if (consumer_optional) {
                             have_sim_pending = false;
                             continue;
@@ -1389,8 +1508,8 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
                 if (cn.value) {
                     auto tok = as_string(cn.value);
                     if (tok) {
-                        auto vs = as_string(peek_value);
-                        if (vs && vs->data() == tok->data()) return true;
+                        if (peek_value && peek_value.kind() == ValueType::String
+                            && nr_str(peek_value) == tok->data()) return true;
                         if (!peek_key.empty() && peek_key == tok->data()) return true;
                     }
                 }
@@ -1410,7 +1529,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
     }
     case NodeKind::Repeat:
         // Repeat at top of an alt — assume it would dispatch.
-        return peek_value != nullptr;
+        return static_cast<bool>(peek_value);
 
     case NodeKind::Value:
         // Used as a child during walks, not as a dispatch root.
@@ -1428,7 +1547,7 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         // for non-string values when subparse_start is valid.
         if (!peek_value) return false;
         if (n.subparse_start.valid()) return true;
-        return peek_value->type() == ValueType::String;
+        return peek_value.kind() == ValueType::String;
 
     case NodeKind::Scope:
         // Scope at the top of an alt. Parse-side produced either a
@@ -1437,9 +1556,9 @@ bool can_consume_peek(const Grammar& g, NodeId node_id,
         if (!peek_value) return false;
         if (n.subparse_start.valid()) return true;
         if (n.container == Container::Array) {
-            return peek_value->type() == ValueType::Array;
+            return peek_value.kind() == ValueType::Array;
         }
-        return peek_value->type() == ValueType::String;
+        return peek_value.kind() == ValueType::String;
 
     case NodeKind::Ref:
         return can_consume_peek(g, g.resolve_ref(node_id), peek_value, peek_key, s);
@@ -1524,9 +1643,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             //   * no dict scope  → no save-time effect (Value-const in
             //     container=None alternatives like REF dispatch).
             if (s.has_pending() && s.top_dict()) {
-                const auto& d = s.top_dict()->dict->data();
-                auto it = d.find(s.pending_name());
-                if (it != d.end() && values_equal_v2(it->second.get(), n.value.get())) {
+                NodeRef f = nr_get(s.top_dict()->node, s.pending_name());
+                if (f && nr_equal(f, n.value.get())) {
                     s.top_dict()->consumed.insert(s.pending_name());
                     s.clear_pending();
                 }
@@ -1583,7 +1701,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
-        const Value* v = r->value ? r->value.as_value() : null_value().get();
+        ValuePtr v_owned;
+        const Value* v = leaf_value(r->value, v_owned);
 
         // Subparse inverse: when a Parse terminal carries a
         // subparse_start rule, the AST stores the structured
@@ -1613,7 +1732,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
-        const Value* v = r->value ? r->value.as_value() : null_value().get();
+        ValuePtr v_owned;
+        const Value* v = leaf_value(r->value, v_owned);
 
         // Subparse inverse: if the Raw carries a subparse_start,
         // the stored value is the structured sub-tree (from parse-
@@ -1650,7 +1770,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         const bool is_optional = n.is_optional;
         auto r = s.pull_value(is_optional);
         if (!r) return tl::unexpected(r.error());
-        const Value* v = r->value ? r->value.as_value() : null_value().get();
+        ValuePtr v_owned;
+        const Value* v = leaf_value(r->value, v_owned);
 
         if (n.subparse_start.valid()) {
             // Subparse round-trip — independent of container mode.
@@ -1673,7 +1794,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
                 // Typed segment: dispatch to the first matching INNER.
                 bool dispatched = false;
                 for (NodeId inner_id : n.children) {
-                    if (!can_consume_peek(g, inner_id, seg.get(), "", s)) continue;
+                    if (!can_consume_peek(g, inner_id, ref_node(seg.get()), "", s)) continue;
                     SaveState seg_s;
                     seg_s.push_q({ref_node(seg.get()), false, ""});
                     auto sr = do_consume(g, out, inner_id,
@@ -1767,8 +1888,8 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         }
         auto pulled = s.pull_value(/*is_optional=*/false);
         if (!pulled) return tl::unexpected(pulled.error());
-        const Value* v = pulled->value.as_value();
-        if (!v) return tl::unexpected(SaveError{
+        NodeRef vref = pulled->value;
+        if (!vref) return tl::unexpected(SaveError{
             "container Sequence with null value"});
 
         // `#opchain` per-dispatch re-nest: when this Sequence is the root
@@ -1777,24 +1898,27 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         // into the full per-tier `{lhs,tail}` shape the cascade rules emit.
         // Fires once at the root tier; nested sub-expressions (paren bodies,
         // call args, …) re-enter here through their own EXPR dispatch.
+        // Rebuild needs a reference tree — foreign nodes materialize here
+        // (the acknowledged opchain boundary); the rebuilt scratch tree is
+        // kept alive by the SaveState.
         if (const OpchainLadder& L = g.opchain_ladder();
             L.valid && rid.value() == L.root_tier.value()) {
-            // Rebuild needs shared ownership of the input (its base case
-            // stores it). A non-owning alias is sound: the document
-            // outlives the save, and the rebuilt scratch tree is kept
-            // alive by the SaveState.
-            ValuePtr alias(ValuePtr{}, const_cast<Value*>(v));
-            v = s.keep_value(rebuild_cascade(alias, L, 0));
+            const Value* rv = vref.as_value();
+            ValuePtr owned;
+            if (!rv) { owned = nr_to_value(vref); rv = owned.get(); }
+            ValuePtr alias = owned ? owned
+                : ValuePtr(ValuePtr{}, const_cast<Value*>(rv));
+            vref = ref_node(s.keep_value(rebuild_cascade(alias, L, 0)));
         }
 
         if (n.container == Container::Array) {
-            auto arr = as_array(v);
-            if (!arr) return tl::unexpected(SaveError{
+            if (vref.kind() != ValueType::Array) return tl::unexpected(SaveError{
                 "expected ArrayValue for container=Array sequence"});
 
             SaveState inner;
-            for (const auto& e : arr->data()) {
-                inner.push_q({ref_node(e.get()), false, ""});
+            std::size_t asz = nr_size(vref);
+            for (std::size_t i = 0; i < asz; ++i) {
+                inner.push_q({nr_at(vref, i), false, ""});
             }
             for (NodeId c : n.children) {
                 auto r = do_consume(g, out, c, inner, depth, pretty);
@@ -1804,8 +1928,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         }
 
         // container=Dict
-        auto dict = as_dict(v);
-        if (!dict) return tl::unexpected(SaveError{
+        if (vref.kind() != ValueType::Dict) return tl::unexpected(SaveError{
             "expected DictValue for container=Dict sequence"});
 
         if (has_name_markers(g, n) || n.fixed_schema) {
@@ -1816,7 +1939,7 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             // live inside nested rules (e.g. via a Ref/Choice) and
             // `has_name_markers` can't see them.
             SaveState inner;
-            inner.push_dict(*dict);
+            inner.push_dict(vref);
             for (NodeId c : n.children) {
                 if (would_skip_optional(g, c, inner)) {
                     inner.clear_pending();
@@ -1829,14 +1952,16 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
             return {};
         }
 
-        // Open-schema: flatten alphabetically as (key-as-name, value)
-        // queue entries; the inner Repeat/Choice iterates them. Keep
-        // the key_source so Choice dispatch can match Key literals.
+        // Open-schema: flatten in the accessor's canonical (key-sorted)
+        // order as (key-as-name, value) queue entries; the inner
+        // Repeat/Choice iterates them. Keep the key_source so Choice
+        // dispatch can match Key literals.
         SaveState inner;
-        for (const auto& [name, val] : dict->data()) {
-            inner.push_q({inner.keep(make_string(name)), true, name});
-            inner.push_q({ref_node(val.get()), false, name});
-        }
+        nr_each(vref, [&](std::string_view name, NodeRef val) {
+            inner.push_q({inner.keep(make_string(std::string(name))), true,
+                          std::string(name)});
+            inner.push_q({val, false, std::string(name)});
+        });
         for (NodeId c : n.children) {
             auto r = do_consume(g, out, c, inner, depth, pretty);
             if (!r) return r;
@@ -1863,28 +1988,31 @@ do_consume_body(const Grammar& g, std::ostream& out, NodeId node_id,
         auto fixed_schema_dispatchable = [&]() {
             const DictScope* scope = s.top_dict();
             if (!scope) return false;
-            for (const auto& [k, v] : scope->dict->data()) {
-                if (scope->consumed.count(k)) continue;
+            bool ok = false;
+            nr_each(scope->node, [&](std::string_view ksv, NodeRef v) {
+                if (ok) return;
+                std::string k(ksv);
+                if (scope->consumed.count(k)) return;
                 // For list-typed fields whose target binding is a
                 // list-append (`:k[]=@`) alternative, peek the next
                 // unconsumed element so the inner Choice's
                 // dispatch sees one entry at a time instead of the
                 // whole array. Falls back to the raw value for
                 // scalar fields.
-                ValuePtr peek = v;
-                if (auto arr = as_array(v)) {
+                NodeRef peek = v;
+                if (v.kind() == ValueType::Array) {
                     auto pit = scope->list_progress.find(k);
                     std::size_t idx = pit == scope->list_progress.end()
                                         ? 0 : pit->second;
-                    if (idx < arr->data().size()) {
-                        peek = arr->data()[idx];
+                    if (idx < nr_size(v)) {
+                        peek = nr_at(v, idx);
                     } else {
-                        continue;  // array exhausted
+                        return;  // array exhausted
                     }
                 }
-                if (can_consume_peek(g, item_id, peek.get(), k, s)) return true;
-            }
-            return false;
+                if (can_consume_peek(g, item_id, peek, k, s)) ok = true;
+            });
+            return ok;
         };
 
         bool first = true;
@@ -2490,61 +2618,26 @@ const OpchainLadder& Grammar::opchain_ladder() const {
     return *opchain_ladder_cache_;
 }
 
-// Definition of Grammar::save lives here (rather than in
-// grammar.cpp) so the entire save engine — the helpers in this
-// file's anonymous namespace plus the entry point — stays
-// together. grammar.cpp has a one-line locator comment near
-// the rest of the Grammar member definitions.
+// Core save loop, shared by every entry point. `root` is the document
+// root as a NodeRef (any representation); opchain expand/wrap, when
+// needed, has already happened on the caller's side (it requires a
+// reference tree). Owns the pretty-trim buffering.
+namespace {
 tl::expected<void, SaveError>
-Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
-              NodeId start) const {
-    if (!value) return tl::unexpected(SaveError{"save: null root value"});
-    // Precompute the resolved-Ref cache; resolve_ref becomes O(1)
-    // for the duration of this save call. Idempotent and amortised
-    // across subsequent calls.
-    ensure_refs_resolved_();
-    if (!start.valid()) start = top();
-    // `#opchain` pre-process: when the start rule chain carries the
-    // flag, the input AST is in compacted `{op, args[]}` form but
-    // the grammar expects always-wrap `{lhs, tail:[...]}`. Expand
-    // recursively, then wrap atoms so the top-level rule's
-    // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
-    if (has_opchain_in_chain(start)) {
-        auto op_compat = build_op_compat_map(*this);
-        value = expand_opchain(value, op_compat);
-        // Wrap atoms only when the start chain resolves to a
-        // Sequence-Dict whose schema actually expects an `lhs`-binding
-        // item — i.e. the cascade-atom shape used by test_opchain's
-        // flat ADD grammar. Some grammars (SV) mark `#opchain` on a
-        // top-level wrapper that itself binds different fields (e.g.
-        // `descriptions`); wrapping an already-shaped dict there
-        // turns a valid input into `{lhs:{descriptions:…}, tail:[]}`
-        // and the fixed-schema check on the start rule then fails.
-        NodeId resolved_start = resolve_ref(start);
-        if (resolved_start.value() < node_count()
-            && node(resolved_start).kind == NodeKind::Sequence
-            && start_binds_lhs_helper(*this, resolved_start)) {
-            value = wrap_atom_as_chain(value);
-        }
-    }
+run_save(const Grammar& g, std::ostream& out, const NodeRef& root,
+         bool pretty, NodeId start) {
     SaveState s;
-    // `value` (post expand/wrap) is a local ValuePtr alive for the whole
-    // call — the queue borrows it.
-    s.push_q({ref_node(value.get()), false, ""});
+    s.push_q({root, false, ""});
     if (!pretty) {
-        return do_consume(*this, out, start, s, 0, pretty);
+        return do_consume(g, out, start, s, 0, pretty);
     }
     // Pretty: render to a buffer, then strip the STRUCTURAL spaces that
     // `space` attrs leak as trailing whitespace before a newline / closer.
-    // Only spaces recorded by emit_post (g_trim_pos) are removed — literal
-    // whitespace captured inside a Raw/scope/terminal body (e.g. a TCL brace
-    // group or quoted string) carries no recorded offset and is preserved,
-    // so the round-trip holds for whitespace-significant grammars.
     std::ostringstream buf;
     std::vector<std::streamoff> struct_spaces;
     g_trim_buf = &buf;
     g_trim_pos = &struct_spaces;
-    auto r = do_consume(*this, buf, start, s, 0, pretty);
+    auto r = do_consume(g, buf, start, s, 0, pretty);
     g_trim_buf = nullptr;
     g_trim_pos = nullptr;
     if (!r) return r;
@@ -2572,22 +2665,81 @@ Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
     return {};
 }
 
+// Apply the `#opchain` save-side pre-process (compact {op,args} → the
+// always-wrap {lhs,tail} shape the cascade rules emit) to a reference
+// tree. Only touches trees; foreign representations convert first.
+ValuePtr apply_opchain_preprocess(const Grammar& g, ValuePtr value,
+                                  NodeId start) {
+    auto op_compat = build_op_compat_map(g);
+    value = expand_opchain(value, op_compat);
+    NodeId resolved_start = g.resolve_ref(start);
+    if (resolved_start.value() < g.node_count()
+        && g.node(resolved_start).kind == NodeKind::Sequence
+        && start_binds_lhs_helper(g, resolved_start)) {
+        value = wrap_atom_as_chain(value);
+    }
+    return value;
+}
+} // namespace
 
-// Universal save entry: serialise any representation via its Accessor.
-// Reference fast path: a SharedPtrAccessor's tree is saved directly.
-// Foreign representations are piped through convert() into the reference
-// model — correct by construction; the streaming-native walk over the
-// Accessor is the planned follow-up and will not change this API.
+// Definition of Grammar::save lives here (rather than in
+// grammar.cpp) so the entire save engine — the helpers in this
+// file's anonymous namespace plus the entry point — stays
+// together. grammar.cpp has a one-line locator comment near
+// the rest of the Grammar member definitions.
+tl::expected<void, SaveError>
+Grammar::save(std::ostream& out, ValuePtr value, bool pretty,
+              NodeId start) const {
+    if (!value) return tl::unexpected(SaveError{"save: null root value"});
+    // Precompute the resolved-Ref cache; resolve_ref becomes O(1)
+    // for the duration of this save call. Idempotent and amortised
+    // across subsequent calls.
+    ensure_refs_resolved_();
+    if (!start.valid()) start = top();
+    // `#opchain` pre-process: when the start rule chain carries the
+    // flag, the input AST is in compacted `{op, args[]}` form but
+    // the grammar expects always-wrap `{lhs, tail:[...]}`. Expand
+    // recursively, then wrap atoms so the top-level rule's
+    // `<NEXT>:lhs=@` binding always has a `lhs` field to dispatch.
+    if (has_opchain_in_chain(start)) {
+        value = apply_opchain_preprocess(*this, value, start);
+    }
+    // `value` (post expand/wrap) is a local ValuePtr alive for the whole
+    // call — the queue borrows it.
+    return run_save(*this, out, ref_node(value.get()), pretty, start);
+}
+
+
+// Universal save entry: serialise any representation through its Accessor.
+// The engine reads documents entirely through NodeRef ops, so a foreign
+// representation is saved NATIVELY — the reader walks the Python dict (or
+// any Accessor) in place, no convert-to-Value tree, no per-node copy.
+//
+// The one boundary that still needs a reference tree is `#opchain`: the
+// save-side expand/re-nest rebuilds cascade sub-trees, which the current
+// transform expresses over Values. So an opchain grammar converts the
+// foreign document first (acknowledged, and it's the SV / expression case,
+// not the big-file LEF/DEF/TCL/GDSII formats where the memory win matters).
 tl::expected<void, SaveError>
 Grammar::save_from(std::ostream& out, const Accessor& accessor,
                    bool pretty, NodeId start) const {
     if (const auto* sp = dynamic_cast<const SharedPtrAccessor*>(&accessor)) {
         return save(out, sp->root_value(), pretty, start);
     }
-    ValuePool pool;
-    SharedPtrBuilder builder(pool);
-    convert(accessor, builder);
-    return save(out, builder.result(), pretty, start);
+    ensure_refs_resolved_();
+    if (!start.valid()) start = top();
+    if (has_opchain_in_chain(start)) {
+        // Opchain boundary: materialize once, then the reference path.
+        ValuePool pool;
+        SharedPtrBuilder builder(pool);
+        convert(accessor, builder);
+        ValuePtr value = apply_opchain_preprocess(*this, builder.result(),
+                                                  start);
+        return run_save(*this, out, ref_node(value.get()), pretty, start);
+    }
+    // Native foreign save: run the engine directly over the accessor.
+    return run_save(*this, out, NodeRef{&accessor, accessor.root()},
+                    pretty, start);
 }
 
 } // namespace rawast
