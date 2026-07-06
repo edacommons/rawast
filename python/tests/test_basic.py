@@ -21,6 +21,11 @@ GRAMMARS = REPO_ROOT / "grammars"
 def test_version_string():
     assert isinstance(rawast.__version__, str)
     assert rawast.__version__
+    # Must track the installed distribution metadata (pyproject.toml) — not a
+    # hand-maintained constant that drifts. Regression guard: 0.1.13/0.1.14
+    # shipped reporting a stale hardcoded "0.1.12".
+    from importlib.metadata import version
+    assert rawast.__version__ == version("rawast")
 
 
 def test_load_json_grammar():

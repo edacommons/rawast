@@ -44,8 +44,17 @@ Cross-format conversion is one line via a second grammar:
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
-from ._rawast import Grammar as _Grammar, Preprocessor, Stream, Undefined, __version__
+from ._rawast import Grammar as _Grammar, Preprocessor, Stream, Undefined
+
+# Single source of truth: the installed distribution metadata (built from
+# pyproject.toml). The C++ extension no longer carries a hand-maintained
+# version string that silently drifts every release.
+try:
+    __version__ = _pkg_version("rawast")
+except PackageNotFoundError:  # pragma: no cover — uninstalled source tree
+    __version__ = "0+unknown"
 
 
 # Path to bundled grammar files. The wheel ships these under

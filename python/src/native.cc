@@ -1005,6 +1005,6 @@ NB_MODULE(_rawast, m) {
             "dicts ordered leaf-first (immediate source first, ultimate "
             "root last). Empty list if the offset is outside any recorded "
             "span.");
-
-    m.attr("__version__") = "0.1.12";
+    // __version__ is defined in rawast/__init__.py from the installed
+    // distribution metadata (single source of truth: pyproject.toml).
 }
