@@ -117,6 +117,21 @@ def test_nonansi_port_decl_with_initializer(sv_grammar):
     assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
 
 
+def test_ansi_port_with_initializer(sv_grammar):
+    """An ANSI (header) port declared with an initializer — `output reg
+    a=0`, `input logic [3:0] a=6`, and the direction-inheriting
+    continuation form `output reg a=0, b=1`. IEEE 1800 §23.2.2.1. The
+    optional init is additive, so plain ports are unaffected."""
+    for src in [
+        "module m(output reg a=0, output reg b=1); endmodule",
+        "module m(input logic [3:0] a=6, output logic [3:0] b); assign b=a; endmodule",
+        "module m(output reg a=0, b=1); endmodule",
+        "module m(input wire clk, output reg [7:0] q); endmodule",  # no-init: unchanged
+    ]:
+        r = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
+
+
 # ─── Always blocks + statements ─────────────────────────────────────
 
 

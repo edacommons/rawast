@@ -560,7 +560,8 @@ PORT_DECL_NODIR_TYPED: sequence dict {
   ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
-  ?<UNPACKED_DIMENSIONS>:unpacked=@
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<NET_INIT>
 }
 
 // Interface port — `interface_name[.modport_name] port_name`.
@@ -592,7 +593,8 @@ MODPORT_SUFFIX: sequence { ".", sv_identifier }
 PORT_NAME_CONT: sequence dict {
   ?<PACKED_DIMENSIONS>:range=@,
   <IDENT_OR_MACRO>:name=@:type="port_name_cont",
-  ?<UNPACKED_DIMENSIONS>:unpacked=@
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<NET_INIT>
 }
 
 // `input <typedef'd_name> [range] <name>` — two identifiers in a row,
@@ -609,7 +611,8 @@ PORT_DECL_ANSI_USERTYPE: sequence dict {
   ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
-  ?<UNPACKED_DIMENSIONS>:unpacked=@
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<NET_INIT>
 }
 
 PORT_LIST_NONANSI: sequence dict {
@@ -625,7 +628,8 @@ PORT_DECL_ANSI: sequence dict {
   ?<SIGNING_KW>:signing=@ space,
   ?<PACKED_DIMENSIONS>:range=@ space,
   <IDENT_OR_MACRO>:name=@,
-  ?<UNPACKED_DIMENSIONS>:unpacked=@
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<NET_INIT>
 }
 
 // `const ref` (IEEE 1800-2017 §13.5.2) is the read-only-pass-by-reference
