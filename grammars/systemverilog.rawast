@@ -253,7 +253,20 @@ PARAM_DECL_OR_LOCAL: choice {
   <PARAM_DECL_UNTYPED>,
   <PARAM_DECL_USERTYPE>,
   <PARAM_DECL_USERTYPE_BARE>,
-  <PARAM_DECL_IMPLICIT>
+  <PARAM_DECL_IMPLICIT>,
+  <PARAM_DECL_BARE_VALUE>
+}
+
+// Bare `NAME = expr` parameter entry — no `parameter` keyword and no
+// type. In a `#(...)` list the `parameter` keyword is only required on the
+// FIRST entry; comma-separated continuations inherit it (IEEE 1800-2017
+// §A.1.3), so `#(parameter WIDTH=32, SELW=1, DINW=2**SELW)` is three
+// parameters. Every other PARAM_DECL_* alt needs a keyword or a type, so
+// this catch-all (LAST, and requiring `=` so it can't claim a bare type
+// name) handles the inherited-keyword continuations.
+PARAM_DECL_BARE_VALUE: sequence dict {
+  sv_identifier:name=@:type="param_bare" space,
+  "=" space, <EXPR>:value=@
 }
 
 // Inside a `#(...)` parameter port list the `parameter` keyword is

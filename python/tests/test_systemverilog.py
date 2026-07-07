@@ -132,6 +132,22 @@ def test_ansi_port_with_initializer(sv_grammar):
         assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
 
 
+def test_param_port_keyword_inheritance(sv_grammar):
+    """In a `#(...)` parameter port list the `parameter` keyword is only
+    required on the first entry; comma-separated continuations inherit it
+    (IEEE 1800 §A.1.3). `#(parameter WIDTH=32, SELW=1, DINW=2**SELW)` is
+    three parameters. The bare `NAME = expr` continuation had no rule."""
+    for src in [
+        "module m #(parameter WIDTH=32, SELW=1, DINW=2**SELW)(input c); endmodule",
+        "module m #(parameter A=1, B=2); endmodule",
+        "module m #(A=1, B=2); endmodule",
+        "module m #(parameter int A=1, B=2); endmodule",
+        "module m #(parameter A=1, parameter B=2); endmodule",  # repeated: unchanged
+    ]:
+        r = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
+
+
 # ─── Always blocks + statements ─────────────────────────────────────
 
 
