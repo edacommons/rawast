@@ -1703,7 +1703,18 @@ TASK_PORT: choice {
   <TASK_PORT_BUILTIN>,
   <TASK_PORT_USERTYPED>,
   <TASK_PORT_IMPLICIT>,
-  <TASK_PORT_RANGE_ONLY>
+  <TASK_PORT_RANGE_ONLY>,
+  <TASK_PORT_NAME_CONT>
+}
+
+// Bare `name` task/function port — a name-only continuation that inherits
+// the preceding port's direction + type (IEEE 1800-2017 §13.3:
+// `function f(input [3:0] s1, s2, s3)` = three same-typed ports). Also
+// covers a lone implicit port `f(x)`. LAST alt, so typed forms win first.
+TASK_PORT_NAME_CONT: sequence dict {
+  sv_identifier:name=@:type="task_port_cont",
+  ?<UNPACKED_DIMENSIONS>:unpacked=@,
+  ?<TASK_PORT_INIT>:init=@
 }
 
 // `[1:0] a` — no direction, no type keyword, just a packed range + name

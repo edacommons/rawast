@@ -148,6 +148,19 @@ def test_param_port_keyword_inheritance(sv_grammar):
         assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
 
 
+def test_tf_port_shared_type_multi_name(sv_grammar):
+    """Function/task ports sharing a type across comma-separated names —
+    `function f(input [3:0] s1, s2, s3)` is three same-typed ports (IEEE
+    1800 §13.3). The bare-name continuation had no rule."""
+    for src in [
+        "module m; function [7:0] f(input [3:0] s1, s2, s3); f=s1; endfunction endmodule",
+        "module m; task t(input [3:0] a, b); endtask endmodule",
+        "module m; function [7:0] f(input [3:0] s1); f=s1; endfunction endmodule",
+    ]:
+        r = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
+
+
 # ─── Always blocks + statements ─────────────────────────────────────
 
 
