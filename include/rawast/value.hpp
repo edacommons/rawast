@@ -1,14 +1,102 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
-#include <map>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace rawast {
+
+class Value;
+using ValuePtr = std::shared_ptr<Value>;
+
+// Dict backing store: a flat vector of (key, value) kept SORTED by key.
+// Replaces std::map<std::string, ValuePtr> for DictValue. Rationale
+// (measured): SV ASTs are ~2 entries/dict with only a handful of distinct
+// keys; std::map spends ~half the tree's footprint on red-black nodes (3
+// pointers + colour, separately malloc'd) each holding a 32-byte inline
+// std::string key. A sorted vector stores the same pairs contiguously — no
+// per-entry allocation, better locality — while preserving the KEY-SORTED
+// iteration the Accessor/save contract relies on. Exposes the std::map
+// subset call sites actually use, so it is a drop-in for DictValue::data().
+class FlatDict {
+public:
+    using value_type     = std::pair<std::string, ValuePtr>;
+    using storage        = std::vector<value_type>;
+    using iterator       = storage::iterator;
+    using const_iterator = storage::const_iterator;
+
+    iterator       begin() noexcept       { return v_.begin(); }
+    iterator       end() noexcept         { return v_.end(); }
+    const_iterator begin() const noexcept { return v_.begin(); }
+    const_iterator end() const noexcept   { return v_.end(); }
+    std::size_t    size() const noexcept  { return v_.size(); }
+    bool           empty() const noexcept { return v_.empty(); }
+    void           clear() noexcept       { v_.clear(); }
+
+    iterator find(std::string_view k) {
+        auto it = lower(k);
+        return (it != v_.end() && key_eq(it, k)) ? it : v_.end();
+    }
+    const_iterator find(std::string_view k) const {
+        auto it = lower(k);
+        return (it != v_.end() && key_eq(it, k)) ? it : v_.end();
+    }
+    std::size_t count(std::string_view k) const { return find(k) != end() ? 1 : 0; }
+
+    ValuePtr& operator[](std::string_view k) {
+        auto it = lower(k);
+        if (it != v_.end() && key_eq(it, k)) return it->second;
+        it = v_.insert(it, value_type{std::string(k), ValuePtr{}});
+        return it->second;
+    }
+    ValuePtr& at(std::string_view k) {
+        auto it = find(k);
+        if (it == v_.end()) throw std::out_of_range("FlatDict::at");
+        return it->second;
+    }
+    const ValuePtr& at(std::string_view k) const {
+        auto it = find(k);
+        if (it == v_.end()) throw std::out_of_range("FlatDict::at");
+        return it->second;
+    }
+
+    std::pair<iterator, bool> emplace(std::string k, ValuePtr val) {
+        auto it = lower(k);
+        if (it != v_.end() && key_eq(it, k)) return {it, false};
+        it = v_.insert(it, value_type{std::move(k), std::move(val)});
+        return {it, true};
+    }
+    iterator    erase(const_iterator pos) { return v_.erase(pos); }
+    std::size_t erase(std::string_view k) {
+        auto it = find(k);
+        if (it == v_.end()) return 0;
+        v_.erase(it);
+        return 1;
+    }
+
+private:
+    static bool key_eq(const_iterator it, std::string_view k) {
+        return std::string_view{it->first} == k;
+    }
+    iterator lower(std::string_view k) {
+        return std::lower_bound(v_.begin(), v_.end(), k,
+            [](const value_type& e, std::string_view kk) {
+                return std::string_view{e.first} < kk;
+            });
+    }
+    const_iterator lower(std::string_view k) const {
+        return std::lower_bound(v_.begin(), v_.end(), k,
+            [](const value_type& e, std::string_view kk) {
+                return std::string_view{e.first} < kk;
+            });
+    }
+    storage v_;
+};
 
 // Type tag carried by every Value.
 enum class ValueType {
@@ -22,9 +110,6 @@ enum class ValueType {
     Array,
     Dict,
 };
-
-class Value;
-using ValuePtr = std::shared_ptr<Value>;
 
 // Abstract base for all values in the structural tree. Immutable post-
 // construction; identity comparison via std::shared_ptr::get() is the
@@ -105,12 +190,12 @@ public:
 };
 
 class DictValue final : public Value {
-    std::map<std::string, ValuePtr> data_;
+    FlatDict data_;
 public:
     DictValue() = default;
     ValueType type() const noexcept override { return ValueType::Dict; }
-    const std::map<std::string, ValuePtr>& data() const noexcept { return data_; }
-    std::map<std::string, ValuePtr>& data() noexcept { return data_; }
+    const FlatDict& data() const noexcept { return data_; }
+    FlatDict& data() noexcept { return data_; }
 };
 
 // Shared singletons. Identity comparison is meaningful: null_value().get()
@@ -177,7 +262,9 @@ inline const IntValue* as_int(const Value* v) {
 }
 
 // Structural deep equality (type + payload; arrays elementwise; dicts
-// key-ordered). Order-independent for dicts since DictValue is a std::map.
+// key-ordered). Order-independent for dicts: FlatDict keeps entries sorted
+// by key, so two equal dicts iterate in the same order regardless of
+// insertion order.
 bool value_equal(const ValuePtr& a, const ValuePtr& b);
 
 } // namespace rawast
