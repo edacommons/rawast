@@ -910,7 +910,9 @@ std::shared_ptr<ArrayValue> substitute_segments(
     };
 
     auto result = std::make_shared<ArrayValue>();
-    for (const auto& seg : body_segs.data()) {
+    const auto& segdata = body_segs.data();
+    for (std::size_t si = 0; si < segdata.size(); ++si) {
+        const auto& seg = segdata[si];
         if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
             std::string sub = substitute_params(sv->data(), params, args_text);
             result->data().push_back(make_string(std::move(sub)));
@@ -918,10 +920,99 @@ std::shared_ptr<ArrayValue> substitute_segments(
         }
         if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
             auto type = dict_string_or_empty(*d, "type");
-            // `\`\`` paste marker — drops out of the body at
-            // substitution time. The neighbouring text/ref segments
-            // fuse because no separator survives.
-            if (type == "token_paste") continue;
+            // `\`\`` token paste (IEEE 1800-2017 §22.5.1): fuse the
+            // previously-emitted token with the NEXT segment into ONE
+            // token. When the left operand is a macro_use (e.g. `\`dv_`),
+            // the fused spelling names a macro to expand — `\`dv_``SEV_`
+            // with SEV_="fatal" is `\`dv_fatal`, NOT a `\`dv_` use next to
+            // the text "fatal". We resolve it in the segment domain:
+            // build `\`<name>`, pull any following call `(args)` in with
+            // it, and emit that as one string, which
+            // render_macro_body_segments re-scans through expand_recursive
+            // — so the constructed macro use expands like any other.
+            if (type == "token_paste") {
+                if (result->data().empty() || si + 1 >= segdata.size())
+                    continue;
+                // Spelling of the LEFT operand (already emitted).
+                ValuePtr left = result->data().back();
+                result->data().pop_back();
+                std::string left_txt;
+                bool left_is_macro = false;
+                if (auto ld = std::dynamic_pointer_cast<DictValue>(left)) {
+                    if (dict_string_or_empty(*ld, "type") == "macro_use") {
+                        left_is_macro = true;
+                        left_txt = dict_string_or_empty(*ld, "name");
+                    } else {
+                        left_txt = render_segment(left);
+                    }
+                } else if (auto ls =
+                               std::dynamic_pointer_cast<StringValue>(left)) {
+                    left_txt = ls->data();
+                }
+                // Spelling of a segment, with outer-param substitution.
+                // Recursive so a `\`"…`"` stringify operand resolves its
+                // inner ref against the outer arg BEFORE being quoted —
+                // otherwise a paste-absorbed call arg like `\`"T_`"` renders
+                // empty and leaves a `f(a, , b)` hole.
+                std::function<std::string(const ValuePtr&)> spell =
+                        [&](const ValuePtr& s) -> std::string {
+                    if (auto rd = std::dynamic_pointer_cast<DictValue>(s)) {
+                        auto st = dict_string_or_empty(*rd, "type");
+                        if (st == "ref") {
+                            auto rn = dict_string_or_empty(*rd, "value");
+                            auto pit = param_idx.find(rn);
+                            if (pit != param_idx.end())
+                                return render_segment(args[pit->second]);
+                            return rn;
+                        }
+                        if (st == "stringify") {
+                            std::string inner;
+                            if (auto segs = std::dynamic_pointer_cast<ArrayValue>(
+                                    dict_value_or_null(*rd, "segments"))) {
+                                for (const auto& is : segs->data())
+                                    inner += spell(is);
+                            }
+                            return "\"" + inner + "\"";
+                        }
+                        return render_segment(s);
+                    }
+                    if (auto rs = std::dynamic_pointer_cast<StringValue>(s))
+                        return substitute_params(rs->data(), params, args_text);
+                    return {};
+                };
+                std::string right_txt = spell(segdata[si + 1]);
+                ++si;  // consumed the right operand
+                std::string fused = left_txt + right_txt;
+                if (!left_is_macro) {
+                    // Plain identifier paste — a fused text token.
+                    result->data().push_back(make_string(std::move(fused)));
+                    continue;
+                }
+                // Constructed macro use. Absorb a following balanced
+                // `(...)` call-argument run so the emitted string is a
+                // complete function-like invocation.
+                std::string call = "`" + fused;
+                if (si + 1 < segdata.size()) {
+                    std::string peek = spell(segdata[si + 1]);
+                    std::size_t nb = peek.find_first_not_of(" \t");
+                    if (nb != std::string::npos && peek[nb] == '(') {
+                        int depth = 0;
+                        std::size_t j = si + 1;
+                        for (; j < segdata.size(); ++j) {
+                            std::string t = spell(segdata[j]);
+                            for (char c : t) {
+                                if (c == '(') ++depth;
+                                else if (c == ')') --depth;
+                            }
+                            call += t;
+                            if (depth <= 0) break;
+                        }
+                        si = j;  // consumed through the closing ')'
+                    }
+                }
+                result->data().push_back(make_string(std::move(call)));
+                continue;
+            }
             // `\`"…\`"` stringification — recurse on the inner
             // segments to substitute parameters first, then render
             // the whole thing as a string literal at expand time.

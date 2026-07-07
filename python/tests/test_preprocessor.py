@@ -66,6 +66,23 @@ def test_function_like_call_with_space_before_paren():
     assert "x = alpha + beta;" in _expand(ol)
 
 
+def test_token_paste_constructs_and_reexpands_macro_name():
+    r"""The `` token-paste operator (LRM §22.5.1) can build a macro NAME
+    from fragments — lowRISC's `DV_CHECK` does `` `dv_``SEV_(...) `` so
+    `SEV_=fatal` yields `` `dv_fatal(...) ``. The constructed name must be
+    resolved and expanded, not left as `` `dv_ `` next to the text `fatal`.
+    Fixed by folding `macro_use `` frag` into a constructed macro use in the
+    segment domain (no text re-parse)."""
+    src = ("`define dv_error(M) real_error(M)\n"
+           "`define dv_fatal(M) real_fatal(M)\n"
+           "`define CHK(SEV) `dv_``SEV(hi)\n"
+           "initial `CHK(error);\n"
+           "initial `CHK(fatal);\n")
+    out = _expand(src)
+    assert "real_error(hi)" in out and "real_fatal(hi)" in out, out
+    assert "`dv_" not in out, out
+
+
 def test_inline_ifdef_in_expression():
     r"""A conditional directive embedded MID-LINE in an expression value —
     `localparam int X = \`ifdef Y 2 \`else 1 \`endif;` (PULP/Snitch). The
