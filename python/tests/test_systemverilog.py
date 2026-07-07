@@ -100,6 +100,23 @@ def test_module_with_nonansi_ports(sv_grammar):
     assert decls[2]["direction"] == "output"
 
 
+def test_nonansi_port_decl_with_initializer(sv_grammar):
+    """A non-ANSI `output`/`input` port declared with a type AND an
+    initializer — the port is also a variable and may be initialised
+    (IEEE 1800 §23.2.2.1). Regression: yosys simlib.v's `\\$initstate`
+    module declares `output reg Y = 1;`, which used to stop the parse."""
+    src = (
+        "module m;\n"
+        "  output reg Y = 1;\n"
+        "  output reg [3:0] cnt = 4'd1;\n"
+        "  input logic en = 0;\n"
+        "endmodule\n"
+    )
+    r = sv_grammar.parse_string(src)
+    # Byte round-trip through save must reproduce the same AST.
+    assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
+
+
 # ─── Always blocks + statements ─────────────────────────────────────
 
 
