@@ -4860,12 +4860,15 @@ PARAM_FORMAL_DEFAULT: sequence dict {
 }
 
 // `\`NAME[(args)]` use site. No explicit ignore — inherit from
-// Inherit `linespace` (from PP_CONSTRUCT / DEFINE_BODY): LRM §22.5.1
-// permits whitespace between the macro name and its `(args)`, so
-// `\`INC (Y)` captures (Y). A side effect is that a NO-ARGS use eats the
-// trailing linespace while looking for `(`; the scan driver re-emits
-// that whitespace so object-like `\`A + \`B` keeps the space before `+`.
-PP_MACRO_USE: sequence dict {
+// `ignore:` (empty) — TIGHT. A macro use captures `\`NAME` and, only if
+// `(` follows IMMEDIATELY, its `(args)`. It never consumes trailing
+// whitespace: in the preprocessor, inter-token whitespace is CONTENT that
+// must pass through to the output (`\`A \`C` -> `alpha gamma`, not
+// `alphagamma`). LRM §22.5.1 also permits whitespace before a
+// function-like macro's `(args)` (`\`INC (Y)`) — the scan driver handles
+// that space-before-paren case by lifting the args when NAME is
+// function-like (the space stays content for object-like uses).
+PP_MACRO_USE ignore: sequence dict {
   "`":type="macro_use",
   identifier:name=@,
   ?<MACRO_ARGS>:args=@
@@ -4884,8 +4887,12 @@ PP_MACRO_USE: sequence dict {
 // arg's raw bytes, the flat-text shape the substitution pipeline
 // consumes.
 //
-// `ignore linespace` applies between structural items (around `,`,
-// before `)`); whitespace INSIDE an arg is preserved by the scanner.
+// Captures ONLY an IMMEDIATE `(args)` — no leading whitespace. Whether a
+// SPACE-separated `(...)` is arguments is table-dependent (function-like
+// vs object-like), which the grammar can't know; the expander decides
+// that (see handle/render). `ignore linespace` applies between structural
+// items (around `,`, before `)`); whitespace INSIDE an arg is preserved
+// by the scanner.
 MACRO_ARGS ignore linespace: sequence array {
   "(",
   repeat sv_balanced_arg separator ",",

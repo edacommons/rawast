@@ -765,14 +765,22 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
         const auto& macro = it->second;
         std::vector<std::string> args;
         std::size_t after_args = name_end;
-        if (macro.is_function_like && name_end < text.size()
-            && text[name_end] == '(') {
-            after_args = scan_args(text, name_end, args);
-            if (after_args == name_end) {
-                // Unbalanced parens — give up on this expansion.
-                out.append(text, i, name_end - i);
-                i = name_end;
-                continue;
+        // Function-like: the `(args)` may follow after LRM §22.5.1
+        // whitespace. Whether the `(...)` is arguments is decided HERE
+        // (we know `is_function_like` from the table) — an object-like
+        // macro leaves any following `(...)` as text.
+        if (macro.is_function_like) {
+            std::size_t paren = name_end;
+            while (paren < text.size()
+                   && (text[paren] == ' ' || text[paren] == '\t')) ++paren;
+            if (paren < text.size() && text[paren] == '(') {
+                after_args = scan_args(text, paren, args);
+                if (after_args == paren) {
+                    // Unbalanced parens — give up on this expansion.
+                    out.append(text, i, name_end - i);
+                    i = name_end;
+                    continue;
+                }
             }
         }
 
@@ -866,13 +874,27 @@ std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
                 auto name = dict_string_or_empty(*d, "name");
                 if (name == "ifdef" || name == "ifndef") {
                     std::string cond;
-                    if (k + 1 < data.size()) {
+                    // The cond ref follows the directive, possibly after a
+                    // whitespace-only text segment (PP_MACRO_USE is tight
+                    // and no longer swallows the separating space). Skip
+                    // such blank segments to reach the `ref`.
+                    std::size_t j = k + 1;
+                    while (j < data.size()) {
+                        if (auto sv = std::dynamic_pointer_cast<StringValue>(
+                                data[j])) {
+                            bool blank = sv->data().find_first_not_of(" \t")
+                                         == std::string::npos;
+                            if (blank) { ++j; continue; }
+                        }
+                        break;
+                    }
+                    if (j < data.size()) {
                         if (auto dn = std::dynamic_pointer_cast<DictValue>(
-                                data[k + 1])) {
+                                data[j])) {
                             auto nt = dict_string_or_empty(*dn, "type");
                             if (nt == "ref") {
                                 cond = dict_string_or_empty(*dn, "value");
-                                ++k;
+                                k = j;
                             }
                         }
                     }
@@ -913,6 +935,35 @@ std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
         if (auto d = std::dynamic_pointer_cast<DictValue>(seg)) {
             auto type = dict_string_or_empty(*d, "type");
             if (type == "macro_use") {
+                // If NAME is function-like but no args were captured, a
+                // space separated it from `(` — the args sit in the
+                // FOLLOWING segments (`\`INC (Y)`). Splice `\`NAME + the
+                // rendered tail and let expand_recursive attach them
+                // table-aware (it knows is_function_like); this consumes
+                // the rest of the body as text, fine for trailing content
+                // after the call. Object-like uses and captured-args uses
+                // fall through to the isolated render below.
+                auto nm = dict_string_or_empty(*d, "name");
+                bool has_args = false;
+                if (auto a = d->data().find("args"); a != d->data().end())
+                    if (auto arr = as_array(a->second))
+                        has_args = !arr->data().empty();
+                auto mit = state_.macros.find(nm);
+                bool fn_like = mit != state_.macros.end()
+                               && mit->second.is_function_like;
+                if (fn_like && !has_args && k + 1 < data.size()) {
+                    std::string tail;
+                    for (std::size_t j = k + 1; j < data.size(); ++j)
+                        tail += render_segment(data[j]);
+                    std::size_t p = 0;
+                    while (p < tail.size()
+                           && (tail[p] == ' ' || tail[p] == '\t')) ++p;
+                    if (p < tail.size() && tail[p] == '(') {
+                        out += expand_recursive("`" + nm + tail);
+                        k = data.size();   // consumed remainder as text
+                        continue;
+                    }
+                }
                 out += render_macro_use_inline(*d);
                 continue;
             }
@@ -1663,22 +1714,44 @@ void Preprocessor::scan_stream(const std::string& text, std::string& out) {
                     skip_line_tail();
                 } else if (type == "macro_use") {
                     if (emit) {
-                        out += expand_macro_use(*dd);
-                        // A no-args use eats trailing linespace while the
-                        // optional `(args)` boundary looks for `(`. Re-emit
-                        // it so object-like `\`A + \`B` keeps its spacing.
+                        // LRM §22.5.1: a function-like macro may have
+                        // whitespace before its `(args)`. PP_MACRO_USE is
+                        // tight (it stops at `\`NAME`), so if NAME is
+                        // function-like and `(` follows after linespace,
+                        // lift those args into the call. Object-like uses
+                        // leave the whitespace as pass-through content.
                         bool has_args = false;
                         if (auto av = dict_value_or_null(*dd, "args"))
                             if (auto aa =
                                 std::dynamic_pointer_cast<ArrayValue>(av))
                                 has_args = !aa->data().empty();
-                        if (!has_args) {
-                            std::string nm = dict_string_or_empty(*dd, "name");
-                            std::size_t tok_end = i + 1 + nm.size();
-                            std::size_t here = sr.position().bytes;
-                            if (here > tok_end)
-                                out.append(text, tok_end, here - tok_end);
+                        std::string nm = dict_string_or_empty(*dd, "name");
+                        auto mit = state_.macros.find(nm);
+                        bool fn_like = mit != state_.macros.end()
+                                       && mit->second.is_function_like;
+                        bool lifted = false;
+                        if (!has_args && fn_like) {
+                            std::size_t p = sr.position().bytes;
+                            while (p < n && (text[p] == ' ' || text[p] == '\t'))
+                                ++p;
+                            std::vector<std::string> arglist;
+                            std::size_t past = (p < n && text[p] == '(')
+                                ? scan_args(text, p, arglist) : p;
+                            if (past > p && !arglist.empty()) {
+                                while (sr.position().bytes < past && !sr.eof())
+                                    sr.get();
+                                auto with = std::make_shared<DictValue>();
+                                for (const auto& kv : dd->data())
+                                    with->data()[kv.first] = kv.second;
+                                auto aa = std::make_shared<ArrayValue>();
+                                for (auto& a : arglist)
+                                    aa->data().push_back(make_string(a));
+                                with->data()["args"] = aa;
+                                out += expand_macro_use(*with);
+                                lifted = true;
+                            }
                         }
+                        if (!lifted) out += expand_macro_use(*dd);
                     }
                 } else {
                     if (emit) out.append(text, i, sr.position().bytes - i);

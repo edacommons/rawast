@@ -395,14 +395,14 @@ TEST_CASE("sv_pp define: body MACRO_USE with multiple arguments") {
     CHECK(as_string(args->data()[2])->data() == "z");
 }
 
-TEST_CASE("sv_pp define: body MACRO_USE captures args even with leading space") {
+TEST_CASE("sv_pp define: body MACRO_USE does NOT bind space-separated args at parse time") {
     auto g = load_grammar();
-    // LRM §22.5.1: at the use site, whitespace between the macro
-    // name and the opening `(` of args is allowed for function-like
-    // macros. Inside a body, MACRO_USE inherits PP_FILE's
-    // `ignore linespace` from the surrounding scope dispatch, so
-    // `\`OTHER (x)` captures `(x)` as args rather than dropping
-    // `(x)` to text.
+    // Whether a SPACE-separated `(...)` is arguments is table-dependent
+    // (function-like vs object-like), which the grammar can't know — so
+    // parse-time captures only an IMMEDIATE `(args)`. `\`OTHER (x)` parses
+    // as macro_use OTHER with NO args; the ` (x)` is separate body
+    // content. The expander binds it at expansion time when NAME is known
+    // function-like (see the process() test below).
     auto ast = parse(g, "`define A `OTHER (x)\n");
     auto body = body_of(ast);
     REQUIRE(body);
@@ -411,12 +411,19 @@ TEST_CASE("sv_pp define: body MACRO_USE captures args even with leading space") 
     REQUIRE(seg0);
     CHECK(str_field(seg0, "type") == "macro_use");
     CHECK(str_field(seg0, "name") == "OTHER");
-    auto args_it = seg0->data().find("args");
-    REQUIRE(args_it != seg0->data().end());
-    auto args = std::dynamic_pointer_cast<ArrayValue>(args_it->second);
-    REQUIRE(args);
-    REQUIRE(args->data().size() == 1);
-    CHECK(as_string(args->data()[0])->data() == "x");
+    CHECK(seg0->data().find("args") == seg0->data().end());  // no args bound
+}
+
+TEST_CASE("sv_pp define: expansion binds space-separated args for a function-like macro") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    // OTHER is function-like, so at expansion the ` (x)` after `\`OTHER`
+    // is bound as its argument — the space is permitted (LRM §22.5.1).
+    auto out = pp.process(
+        "`define OTHER(p) got_p\n"
+        "`define A `OTHER (x)\n"
+        "`A\n");
+    CHECK(out.find("got_p") != std::string::npos);
 }
 
 TEST_CASE("sv_pp define: body MACRO_USE single arg round-trips") {
