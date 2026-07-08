@@ -4684,132 +4684,80 @@ VIRTUAL_INTERFACE_DECL: sequence dict {
 // prefix (PP_DEFINE/PP_IFDEF/PP_IFNDEF/PP_INCLUDE/PP_MACRO_USE/PP_UNDEF).
 // ═══════════════════════════════════════════════════════════════
 
-// `linespace` + `line_comment` — horizontal whitespace AND
-// trailing `//` comments at every rule-frame boundary, so
-// `\`endif // INC_ASSERT` parses the same as a bare `\`endif`.
-// TEXT_LINE overrides with `ignore:` empty so a `// comment` on
-// its own line stays captured as line content.
-PP_FILE ignore linespace line_comment: sequence array {
-  repeat <PP_ITEM>
-}
-
-PP_ITEM: choice {
+// ─── Scan-driven, not a whole-file parse ──────────────────────────────
+// The Preprocessor driver (src/preprocessor.cpp) scans the raw source and,
+// at each backtick, matches ONE construct via PP_CONSTRUCT (parse_from).
+// Strings, comments, and plain text are passed through verbatim to the SV
+// parse — the driver owns that scan. So directives need not sit at line
+// start; they're recognised wherever the backtick appears (mid-line
+// `\`ifdef`/`\`include` included). Conditionals are FLAT tokens — the
+// driver keeps the emit/skip stack and pairs `\`ifdef`…`\`endif` by
+// scanning, exactly like a C preprocessor. No BODY nesting in the grammar.
+// `ignore linespace line_comment` — horizontal whitespace + trailing
+// `//` comments between tokens, NEVER newlines (directives are newline-
+// terminated). Seeds every alternative, replacing what PP_FILE used to
+// supply; without it, parse_from would fall back to the SV default
+// (`whitespace`, which eats `\n`) and directive terminators would vanish.
+PP_CONSTRUCT ignore linespace line_comment: choice {
   <PP_DEFINE>,
   <PP_UNDEF>,
   <PP_INCLUDE>,
   <PP_IFDEF>,
   <PP_IFNDEF>,
-  <IF>,
-  <TEXT_LINE>
+  <PP_IF>,
+  <PP_ELSIF>,
+  <PP_ELSE>,
+  <PP_ENDIF>,
+  <PP_MACRO_USE>
 }
 
-PP_IFDEF: sequence dict {
+PP_IFDEF ignore linespace: sequence dict {
   "`ifdef":type="ifdef" space,
-  identifier:cond=@,
-  "\n",
-  <BODY>:body=@,
-  repeat <IFDEF_ELSIF>:elsif_branches[]=@,
-  ?<ELSE_BRANCH>:else_branch=@,
-  "`endif",
-  "\n"
+  identifier:cond=@
 }
 
-PP_IFNDEF: sequence dict {
+PP_IFNDEF ignore linespace: sequence dict {
   "`ifndef":type="ifndef" space,
-  identifier:cond=@,
-  "\n",
-  <BODY>:body=@,
-  repeat <IFDEF_ELSIF>:elsif_branches[]=@,
-  ?<ELSE_BRANCH>:else_branch=@,
-  "`endif",
+  identifier:cond=@
+}
+
+PP_ENDIF: sequence dict { "`endif":type="endif" }
+PP_ELSE:  sequence dict { "`else":type="else" }
+
+// `\`if`/`\`elsif` take an expression condition — captured as the rest of
+// the line (raw `*`, to the newline) and subparsed to the SV expression
+// ladder via PP_COND on demand. In an `\`ifdef` chain, `\`elsif` instead
+// names a macro (definedness); the driver picks the interpretation from
+// the enclosing conditional. A cond PP_COND can't parse is undecidable,
+// never a hard parse failure.
+PP_IF ignore linespace: sequence dict {
+  "`if":type="pp_if" space,
+  *:cond=@,
   "\n"
 }
 
-BODY: sequence array {
-  repeat <PP_ITEM>
-}
-
-ELSE_BRANCH: sequence dict {
-  "`else",
-  "\n",
-  <BODY>:body=@
-}
-
-IF: sequence dict {
-  <IF_HEAD>:branches[]=@,
-  repeat <ELSIF>:branches[]=@,
-  ?<ELSE_BRANCH>:else_branch=@,
-  "`endif":type="if",
+PP_ELSIF ignore linespace: sequence dict {
+  "`elsif":type="elsif" space,
+  *:cond=@,
   "\n"
 }
 
-// IF_HEAD/ELSIF capture the condition as the rest of the line (raw
-// text) — robust: ANY `\`if` preprocesses, even conditions outside the
-// PP_EXPR subset (sized literals, shifts, ternary, macro calls). The
-// evaluator parses the captured text through the PP_EXPR rule below
-// (Grammar::parse_from start="PP_EXPR") on demand; a cond it can't parse
-// is undecidable, never a hard parse failure. The walker trims the
-// leading space (Raw bypasses `ignore`) before evaluating.
-// `if/`elsif conditions subparse to the SV expression grammar via PP_COND.
-// COND_EXPR can't be the subparse target directly: the SV whitespace policy
-// is declared on the SOURCE_TEXT start rule, so COND_EXPR doesn't inherit it
-// in a parse_from entry — and the raw `*` cond capture keeps a leading space.
-// PP_COND declares the ignore (skips that space + inter-token whitespace,
-// which propagates into COND_EXPR's children since none override) and is
-// transparent, so the cond AST is exactly COND_EXPR's.
+// PP_COND declares the ignore (skips the leading space the raw `*` keeps
+// + inter-token whitespace, propagated into COND_EXPR's children since
+// none override) and is transparent, so the cond AST is exactly
+// COND_EXPR's. COND_EXPR can't be the subparse target directly: the SV
+// whitespace policy is declared on the SOURCE_TEXT start rule, so it
+// doesn't inherit it in a parse_from entry.
 PP_COND ignore whitespace line_comment block_comment: choice { <COND_EXPR> }
 
-IF_HEAD: sequence dict {
-  "`if" space,
-  *:cond=@:#subparse="PP_COND",
-  "\n",
-  <BODY>:body=@
-}
-
-ELSIF: sequence dict {
-  "`elsif" space,
-  *:cond=@:#subparse="PP_COND",
-  "\n",
-  <BODY>:body=@
-}
-
-// `\`elsif` in an `\`ifdef`/`\`ifndef` chain tests DEFINEDNESS, so its
-// condition is a macro name. Using `identifier` (not the raw `*` of the
-// expression ELSIF) keeps cond clean — no leading space to trim — and the
-// `space` provides the separator on save.
-IFDEF_ELSIF: sequence dict {
-  "`elsif" space,
-  identifier:cond=@,
-  "\n",
-  <BODY>:body=@
-}
-
-PP_UNDEF: sequence dict {
+PP_UNDEF ignore linespace: sequence dict {
   "`undef":type="undef" space,
-  identifier:name=@,
-  "\n"
+  identifier:name=@
 }
 
-PP_INCLUDE: sequence dict {
+PP_INCLUDE ignore linespace: sequence dict {
   "`include":type="include" space,
-  std.string:path=@,
-  "\n"
-}
-
-// A single line of arbitrary text. Line content captured as
-// `scope array { <PP_MACRO_USE> }` so embedded `\`NAME` calls surface
-// as macro_use dicts in segments; everything else stays as bare
-// StringValue text runs. The walker iterates segments.
-//
-// `ignore:` overrides the inherited policy — line whitespace is
-// content. Leading negative-lookaheads keep TEXT_LINE from claiming
-// structural close tokens.
-TEXT_LINE ignore: sequence dict {
-  !"`endif",
-  !"`else",
-  !"`elsif",
-  scope array { <PP_MACRO_USE> }:segments=@,
-  "\n":type="text_line"
+  std.string:path=@
 }
 
 // `\`define NAME [(p1, …)] body`. The name + optional params sits
@@ -4912,12 +4860,11 @@ PARAM_FORMAL_DEFAULT: sequence dict {
 }
 
 // `\`NAME[(args)]` use site. No explicit ignore — inherit from
-// caller. LRM §22.5.1 allows whitespace between macro name and the
-// opening `(` of args at the use site (asymmetric to `\`define`,
-// where no whitespace is allowed). Inside a macro body MACRO_USE
-// inherits PP_FILE's `ignore linespace`, so `\`INC (Y)` captures
-// (Y) as args. Inside TEXT_LINE (empty ignore), line content stays
-// verbatim — `\`FOO (5)` at the top level treats `(5)` as text.
+// Inherit `linespace` (from PP_CONSTRUCT / DEFINE_BODY): LRM §22.5.1
+// permits whitespace between the macro name and its `(args)`, so
+// `\`INC (Y)` captures (Y). A side effect is that a NO-ARGS use eats the
+// trailing linespace while looking for `(`; the scan driver re-emits
+// that whitespace so object-like `\`A + \`B` keeps the space before `+`.
 PP_MACRO_USE: sequence dict {
   "`":type="macro_use",
   identifier:name=@,

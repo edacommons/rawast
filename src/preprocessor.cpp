@@ -130,105 +130,19 @@ Preprocessor::Preprocessor(const Grammar& pp_grammar, PpOptions opts)
 
 namespace {
 
-// Scan forward past the end of one logical preprocessor directive
-// line, returning the byte offset just past the terminating newline
-// (or end-of-source). Handles `\\` line continuation in the same way
-// sv_line_text does — a backslash immediately before a newline
-// extends the directive to the next line.
-std::size_t scan_past_directive_line(const std::string& source,
-                                     std::size_t cursor) {
-    while (cursor < source.size()) {
-        char c = source[cursor];
-        if (c == '\\' && cursor + 1 < source.size()
-            && source[cursor + 1] == '\n') {
-            cursor += 2;
-            continue;
-        }
-        if (c == '\n') return cursor + 1;
-        if (c == '\r') {
-            if (cursor + 1 < source.size() && source[cursor + 1] == '\n') {
-                return cursor + 2;
-            }
-            return cursor + 1;
-        }
-        ++cursor;
-    }
-    return cursor;
-}
-
-// Defined further down; used by process() to lift mid-line conditional
-// directives onto their own lines before the line-oriented parse.
-std::string normalize_inline_conditionals(const std::string& src);
-
 } // namespace
 
-std::string Preprocessor::process(const std::string& text_in) {
-    // Guard against a grammar with no top rule set — the parse
-    // engine derefs the top NodeId and would segfault. A no-rule
-    // grammar is a degenerate but legitimate construction (e.g. in
-    // skeleton tests before systemverilog.rawast lands); pass
-    // text through unchanged in that case.
-    if (!pp_grammar_.top().valid()) return text_in;
-
-    // Normalize mid-line conditional directives (`\`ifdef … `else … `endif`
-    // embedded in an expression) onto their own lines so the line-oriented
-    // conditional rules can evaluate them. No-op for normal source.
-    const std::string text = normalize_inline_conditionals(text_in);
-
-    auto stream = Stream::from_string(text);
-    auto parsed = (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(stream, "PP_FILE") : pp_grammar_.parse(stream));
-    if (!parsed) {
-        state_.warnings.push_back(
-            {"preprocessor parse failed: " + parsed.error().message,
-             state_.current_file, state_.current_line});
-        // Pass-through on parse failure — better than silently
-        // truncating the host's input. Host parser will get the
-        // raw text and produce its own diagnostic if it can't
-        // handle the directives.
-        return text;
-    }
-    return process_ast(*parsed, text);
-}
-
-tl::expected<ValuePtr, ParseError>
-Preprocessor::parse(const std::string& source) {
-    if (!pp_grammar_.top().valid()) {
-        return tl::unexpected(ParseError{
-            {}, "Preprocessor::parse: pp_grammar has no top rule"});
-    }
-    auto stream = Stream::from_string(source);
-    return (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(stream, "PP_FILE") : pp_grammar_.parse(stream));
-}
-
-Stream Preprocessor::preprocess(const ValuePtr& ast,
-                                 const std::string& source) {
-    // Eager expansion into a heap-owned string; the Stream owns the
-    // buffer via owner_, so the returned Stream is self-contained.
-    auto expanded = std::make_shared<std::string>(process_ast(ast, source));
-    auto is = std::make_unique<std::istringstream>(*expanded);
-    return Stream(std::move(is), std::move(expanded));
-}
-
-std::string Preprocessor::process_ast(const ValuePtr& ast,
-                                       const std::string& source) {
-    // Reset the source map for this call. Spans are scoped to one
-    // process_*() invocation; callers that need to retain a map
-    // across calls (multi-file workflows) snapshot the state
-    // themselves.
+std::string Preprocessor::process(const std::string& text) {
+    // A grammar with no top rule (degenerate skeleton) can't recognise
+    // constructs — pass text through unchanged.
+    if (!pp_grammar_.top().valid()) return text;
     state_.spans.clear();
-    // Root span: covers the entire input text. No parent. Source-
-    // structure only (no output offset of its own — child spans
-    // record output ranges).
-    std::uint32_t root_id =
-        record_span(Span::NoParent, /*parent_offset=*/0,
-                    source.size(), Span::NoOutput,
-                    state_.current_file.empty() ? "<input>"
-                                                : state_.current_file);
     std::string out;
-    std::size_t src_cursor = 0;
-    walk(ast, out, src_cursor, source, root_id);
+    scan_stream(text, out);
     return out;
 }
+// scan_stream / expand_macro_use are defined lower down, after the
+// file-local expansion helpers (trim_horiz, render_segment, …) they use.
 
 std::uint32_t Preprocessor::record_span(std::uint32_t parent_id,
                                        std::size_t parent_offset,
@@ -278,343 +192,6 @@ Preprocessor::stack_at(std::size_t out_offset) const {
         cur = &state_.spans[cur->parent_id];
     }
     return frames;
-}
-
-namespace {
-
-// Position the cursor at the start of the item's source span. The
-// preprocessor grammar's `ignore linespace` skips horizontal
-// whitespace silently — the AST doesn't carry those skipped bytes,
-// so the walker can't blindly advance src_cursor by the captured
-// text's length. Instead, for each item we search for a characteristic
-// prefix (the literal opening token for a directive, or the captured
-// text itself for PP_TEXT) starting at the current cursor; the match
-// position is the item's true source offset.
-//
-// Returns the byte offset where the item begins, or src_cursor
-// unchanged if no match is found (defensive fallback — the map
-// degrades to approximate, but no out-of-bounds writes).
-std::size_t locate_item(const std::string& source,
-                        std::size_t src_cursor,
-                        const std::string& prefix) {
-    if (prefix.empty()) return src_cursor;
-    auto found = source.find(prefix, src_cursor);
-    return found == std::string::npos ? src_cursor : found;
-}
-
-// Put any conditional compiler directive (`\`ifdef`/`\`ifndef`/`\`elsif`/
-// `\`else`/`\`endif`) that appears MID-LINE onto its own line, so the
-// line-oriented IFDEF/IFNDEF/IF grammar rules can evaluate it. Mid-line
-// conditionals occur inside expression values, e.g. PULP/Snitch's
-// `localparam int X = \`ifdef Y 2 \`else 1 \`endif;`. NO-OP for directives
-// that already start their line (no newline is inserted unless content
-// actually follows the directive on the same line). Skips strings and
-// comments so a `\`ifdef` token inside them isn't touched.
-std::string normalize_inline_conditionals(const std::string& src) {
-    auto is_id = [](char c) {
-        unsigned char u = static_cast<unsigned char>(c);
-        return std::isalnum(u) || c == '_';
-    };
-    std::string out;
-    out.reserve(src.size() + 64);
-    bool line_blank = true;             // only whitespace since last '\n'
-    const std::size_t n = src.size();
-    std::size_t i = 0;
-    while (i < n) {
-        char c = src[i];
-        if (c == '/' && i + 1 < n && src[i + 1] == '/') {        // line comment
-            while (i < n && src[i] != '\n') out += src[i++];
-            continue;
-        }
-        if (c == '/' && i + 1 < n && src[i + 1] == '*') {        // block comment
-            out += src[i++]; out += src[i++];
-            while (i < n && !(src[i] == '*' && i + 1 < n && src[i + 1] == '/')) {
-                if (src[i] == '\n') line_blank = true;
-                out += src[i++];
-            }
-            if (i < n) { out += src[i++]; out += src[i++]; }
-            line_blank = false;
-            continue;
-        }
-        if (c == '"') {                                          // string literal
-            out += src[i++];
-            while (i < n && src[i] != '"') {
-                if (src[i] == '\\' && i + 1 < n) out += src[i++];
-                out += src[i++];
-            }
-            if (i < n) out += src[i++];
-            line_blank = false;
-            continue;
-        }
-        if (c == '`') {
-            std::size_t j = i + 1;
-            while (j < n && is_id(src[j])) ++j;
-            std::string word = src.substr(i + 1, j - (i + 1));
-            bool cond = word == "ifdef" || word == "ifndef" ||
-                        word == "elsif" || word == "else" || word == "endif";
-            // Only MID-LINE conditionals need lifting. A directive that
-            // already starts its line is handled verbatim by the
-            // line-oriented rules — and crucially its condition may be a
-            // full expression (`\`elsif defined(B)`) we must NOT touch.
-            if (cond && !line_blank) {
-                out += '\n';                    // directive on its own line
-                out += '`'; out += word;
-                i = j;
-                if (word == "ifdef" || word == "ifndef" || word == "elsif") {
-                    // keep the condition on the directive's line
-                    while (i < n && (src[i] == ' ' || src[i] == '\t'))
-                        out += src[i++];
-                    if (i < n && src[i] == '`') out += src[i++];   // `\`MACRO cond
-                    while (i < n && is_id(src[i])) out += src[i++];
-                }
-                // add a trailing newline only if real content follows on
-                // this line (else the directive already ends its line).
-                std::size_t k = i;
-                while (k < n && (src[k] == ' ' || src[k] == '\t')) ++k;
-                bool terminated = k >= n || src[k] == '\n' || src[k] == '\r' ||
-                                  (src[k] == '/' && k + 1 < n && src[k + 1] == '/');
-                if (!terminated) { out += '\n'; line_blank = true; }
-                continue;
-            }
-            out += c; ++i; line_blank = false;
-            continue;
-        }
-        if (c == '\n') { out += c; ++i; line_blank = true; continue; }
-        if (c == ' ' || c == '\t' || c == '\r') { out += c; ++i; continue; }
-        out += c; ++i; line_blank = false;
-    }
-    return out;
-}
-
-// Defined below; used by the TEXT_LINE walker's function-like-call
-// (whitespace-before-paren) lookahead.
-std::size_t scan_args(const std::string& text, std::size_t cursor,
-                      std::vector<std::string>& args);
-
-} // namespace
-
-void Preprocessor::walk(const ValuePtr& v, std::string& out,
-                        std::size_t& src_cursor,
-                        const std::string& source,
-                        std::uint32_t parent_span_id) {
-    if (!v) return;
-
-    if (auto arr = std::dynamic_pointer_cast<ArrayValue>(v)) {
-        for (const auto& child : arr->data()) {
-            // Skip pure-whitespace strings: these are emissions from
-            // terminals like `sv_eol` matched inside a sequence-array
-            // sub-rule (e.g. PP_ELSE_CLAUSE's `\`else, sv_eol, repeat
-            // <PP_ITEM>`). They've already been consumed at parse
-            // time; walking them would advance the cursor forward to
-            // the next matching whitespace in source and skip real
-            // content.
-            if (auto s = std::dynamic_pointer_cast<StringValue>(child)) {
-                bool only_ws = true;
-                for (char c : s->data()) {
-                    if (c != ' ' && c != '\t'
-                        && c != '\n' && c != '\r') {
-                        only_ws = false;
-                        break;
-                    }
-                }
-                if (only_ws) continue;
-            }
-            walk(child, out, src_cursor, source, parent_span_id);
-        }
-        return;
-    }
-
-    if (auto dict = std::dynamic_pointer_cast<DictValue>(v)) {
-        auto type = dict_string_or_empty(*dict, "type");
-
-        if (type == "text") {
-            auto text = dict_string_or_empty(*dict, "text");
-            if (!text.empty()) {
-                // Find the captured text in source. `origin` is where
-                // sv_pp_text_line started consuming — usually AFTER any
-                // whitespace the grammar's `ignore linespace` policy
-                // already ate. To preserve indentation in the output,
-                // back up to the start of the current line (previous
-                // `\n` + 1, or 0 if we're on the first line) and emit
-                // everything from there through origin + text length.
-                std::size_t origin = locate_item(source, src_cursor, text);
-                std::size_t line_start = origin;
-                while (line_start > src_cursor && line_start > 0
-                       && source[line_start - 1] != '\n'
-                       && source[line_start - 1] != '\r') {
-                    --line_start;
-                }
-                std::size_t end = origin + text.size();
-                std::size_t emit_len = end - line_start;
-                record_span(parent_span_id, line_start,
-                            emit_len, out.size(), "text");
-                out.append(source, line_start, emit_len);
-                src_cursor = end;
-            }
-            return;
-        }
-        if (type == "text_line") {
-            // systemverilog.rawast TEXT_LINE produces
-            //   { type:"text_line", segments:[ ...mixed... ] }
-            // where each segment is either a bare StringValue (a
-            // run of literal text) or a DictValue for an embedded
-            // `\`NAME[(args)]` invocation. Iterate in order: text
-            // runs are appended verbatim, macro_use dicts go
-            // through handle_macro_use in mid-line mode (no line
-            // grab, no trailing newline). After the segments come
-            // the line's terminating `\n`, which we emit explicitly
-            // since the grammar's "\n" Key isn't preserved in the
-            // dict the way `segments` is.
-            auto segments_val = dict_value_or_null(*dict, "segments");
-            auto segments = std::dynamic_pointer_cast<ArrayValue>(segments_val);
-            if (segments) {
-                const auto& segs = segments->data();
-                for (std::size_t i = 0; i < segs.size(); ++i) {
-                    const auto& seg = segs[i];
-                    if (auto s = std::dynamic_pointer_cast<StringValue>(seg)) {
-                        if (s->data().empty()) continue;
-                        std::size_t origin =
-                            locate_item(source, src_cursor, s->data());
-                        record_span(parent_span_id, origin,
-                                    s->data().size(), out.size(),
-                                    "text");
-                        out.append(s->data());
-                        src_cursor = origin + s->data().size();
-                    } else if (auto sd = std::dynamic_pointer_cast<DictValue>(seg)) {
-                        auto seg_type = dict_string_or_empty(*sd, "type");
-                        if (seg_type != "macro_use") continue;
-                        // Function-like CALL with whitespace before `(`
-                        // (`\`uvm_field_int (saw_error)`). At file-scope
-                        // TEXT_LINE the grammar parses `\`name` as an
-                        // object-like use (no args) and the ` (args)` as a
-                        // following text segment — the LRM permits the
-                        // space for a function-like call. If the macro IS
-                        // function-like and the next segment begins with
-                        // `(`, lift those args into the call before it
-                        // expands (object-like macros keep the verbatim
-                        // text, so `\`A + \`B` is unaffected).
-                        bool has_args = false;
-                        if (auto av = dict_value_or_null(*sd, "args")) {
-                            if (auto aa = std::dynamic_pointer_cast<ArrayValue>(av))
-                                has_args = !aa->data().empty();
-                        }
-                        auto nm = dict_string_or_empty(*sd, "name");
-                        auto mit = state_.macros.find(nm);
-                        bool fn_like = mit != state_.macros.end()
-                                       && mit->second.is_function_like;
-                        if (!has_args && fn_like && i + 1 < segs.size()) {
-                            auto ns = std::dynamic_pointer_cast<StringValue>(
-                                segs[i + 1]);
-                            if (ns) {
-                                const std::string& nt = ns->data();
-                                std::size_t p = 0;
-                                while (p < nt.size()
-                                       && (nt[p] == ' ' || nt[p] == '\t')) ++p;
-                                std::vector<std::string> arglist;
-                                std::size_t past = (p < nt.size() && nt[p] == '(')
-                                    ? scan_args(nt, p, arglist) : p;
-                                if (past > p && !arglist.empty()) {
-                                    auto with_args =
-                                        std::make_shared<DictValue>();
-                                    for (const auto& [k, v] : sd->data())
-                                        with_args->data()[k] = v;
-                                    auto aa = std::make_shared<ArrayValue>();
-                                    for (auto& a : arglist)
-                                        aa->data().push_back(make_string(a));
-                                    with_args->data()["args"] = aa;
-                                    handle_macro_use(*with_args, out, src_cursor,
-                                                     source, parent_span_id,
-                                                     /*consume_line=*/false);
-                                    std::string trailing = nt.substr(past);
-                                    if (!trailing.empty()) {
-                                        std::size_t o = locate_item(
-                                            source, src_cursor, trailing);
-                                        record_span(parent_span_id, o,
-                                                    trailing.size(), out.size(),
-                                                    "text");
-                                        out.append(trailing);
-                                        src_cursor = o + trailing.size();
-                                    }
-                                    ++i;  // skip the consumed `(args)` segment
-                                    continue;
-                                }
-                            }
-                        }
-                        handle_macro_use(*sd, out, src_cursor,
-                                         source, parent_span_id,
-                                         /*consume_line=*/false);
-                    }
-                }
-            }
-            // Emit the trailing "\n" the grammar's sibling Key
-            // consumed. Source cursor lands at the next line.
-            std::size_t nl = source.find('\n', src_cursor);
-            if (nl != std::string::npos) {
-                out += '\n';
-                src_cursor = nl + 1;
-            }
-            return;
-        }
-        if (type == "define") {
-            // Position the cursor at the start of the directive
-            // before consuming the line — leading whitespace
-            // that ignore-policy ate isn't part of the AST.
-            src_cursor = locate_item(source, src_cursor, "`define");
-            handle_define(*dict);
-            src_cursor = scan_past_directive_line(source, src_cursor);
-            return;
-        }
-        if (type == "undef") {
-            src_cursor = locate_item(source, src_cursor, "`undef");
-            handle_undef(*dict);
-            src_cursor = scan_past_directive_line(source, src_cursor);
-            return;
-        }
-        if (type == "ifdef") {
-            handle_ifdef(*dict, out, src_cursor, source,
-                         parent_span_id, /*invert=*/false);
-            return;
-        }
-        if (type == "ifndef") {
-            handle_ifdef(*dict, out, src_cursor, source,
-                         parent_span_id, /*invert=*/true);
-            return;
-        }
-        if (type == "if") {
-            handle_if(*dict, out, src_cursor, source, parent_span_id);
-            return;
-        }
-        if (type == "macro_use") {
-            handle_macro_use(*dict, out, src_cursor, source,
-                             parent_span_id);
-            return;
-        }
-        if (type == "include") {
-            handle_include(*dict, out, src_cursor, source,
-                           parent_span_id);
-            return;
-        }
-        // Unknown type — recurse into the dict's values so wrapper
-        // dicts (no role of their own) still propagate their contents.
-        for (const auto& [_, child] : dict->data()) {
-            walk(child, out, src_cursor, source, parent_span_id);
-        }
-        return;
-    }
-
-    if (auto sv = std::dynamic_pointer_cast<StringValue>(v)) {
-        auto& s = sv->data();
-        if (!s.empty()) {
-            std::size_t origin = locate_item(source, src_cursor, s);
-            record_span(parent_span_id, origin,
-                        s.size(), out.size(), "text");
-            out += s;
-            src_cursor = origin + s.size();
-        }
-        return;
-    }
-    // Other value kinds (null/int/float/bool) don't appear in a
-    // well-formed preprocessor AST; ignore rather than fail.
 }
 
 namespace {
@@ -1528,12 +1105,9 @@ std::string render_segment(const ValuePtr& seg) {
 } // namespace
 
 void Preprocessor::handle_define(const DictValue& d) {
-    // Suppressed when walking a not-taken `\`ifdef` branch — the
-    // grammar/walker still see the directive (so src_cursor advances
-    // and source-map machinery stays consistent), but the macro table
-    // is not mutated.
-    if (suppress_side_effects_) return;
-
+    // The scan driver only calls this in an emitting branch, so a
+    // not-taken `\`ifdef` never reaches here — no suppression guard
+    // needed.
     MacroDef m;
 
     // systemverilog.rawast nests name + params under a `decl` field
@@ -1825,223 +1399,22 @@ void Preprocessor::handle_define(const DictValue& d) {
 }
 
 void Preprocessor::handle_undef(const DictValue& d) {
-    if (suppress_side_effects_) return;
     auto name = dict_string_or_empty(d, "name");
     if (!name.empty()) state_.macros.erase(name);
 }
 
-void Preprocessor::handle_macro_use(const DictValue& d, std::string& out,
-                                    std::size_t& src_cursor,
-                                    const std::string& source,
-                                    std::uint32_t parent_span_id,
-                                    bool consume_line) {
-    auto name = dict_string_or_empty(d, "name");
-    if (name.empty()) return;
-
-    // Pull args out of the AST as ValuePtrs — the substitution path
-    // splices them directly into the body AST at ref positions.
-    // For source-mapped emission we also keep a string view of each
-    // arg (most are identifier StringValues from MACRO_ARGS, so the
-    // string view is the same data without conversion).
-    std::vector<ValuePtr> args;
-    std::vector<std::string> args_text;
-    if (auto args_val = dict_value_or_null(d, "args")) {
-        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(args_val)) {
-            for (const auto& a : arr->data()) {
-                args.push_back(a);
-                if (auto s = std::dynamic_pointer_cast<StringValue>(a)) {
-                    args_text.push_back(s->data());
-                } else {
-                    args_text.push_back(render_segment(a));
-                }
-            }
-        }
-    }
-
-    // Locate the `\`NAME` site in the source. PP_MACRO_USE consumes
-    // a full line (including the trailing newline via sv_eol). For
-    // function-like macros the `(...)` argument list may span several
-    // physical lines (sv_balanced_arg tracks paren depth), so we
-    // must balance-scan past the closing `)` before looking for the
-    // line terminator — otherwise scan_past_directive_line stops at
-    // the first embedded newline and the macro's tail lines get
-    // double-emitted on the next walker step.
-    std::size_t use_src_start = locate_item(source, src_cursor, "`" + name);
-    std::size_t after_name = use_src_start + 1 + name.size();
-    std::size_t arg_scan = after_name;
-    while (arg_scan < source.size()
-           && (source[arg_scan] == ' ' || source[arg_scan] == '\t')) {
-        ++arg_scan;
-    }
-    if (!args.empty() && arg_scan < source.size() && source[arg_scan] == '(') {
-        int depth = 0;
-        std::size_t p = arg_scan;
-        while (p < source.size()) {
-            char c = source[p++];
-            if (c == '(') ++depth;
-            else if (c == ')') {
-                if (--depth == 0) break;
-            }
-        }
-        after_name = p;
-    }
-    // Line-based callers (mini_preprocessor, top-level PP_FILE) want
-    // `\`MACRO` to own the trailing newline so handle_macro_use leaves
-    // the cursor on the next line. For mid-text use surfaced by the
-    // systemverilog.rawast text_line iterator, the macro call sits
-    // inside surrounding bytes — consuming the newline would lose any
-    // text after the macro on the same line.
-    std::size_t use_src_end = consume_line
-        ? scan_past_directive_line(source, after_name)
-        : after_name;
-    std::size_t use_src_len = use_src_end - use_src_start;
-    bool consumed_newline = consume_line
-        && use_src_end > use_src_start
-        && (source[use_src_end - 1] == '\n' || source[use_src_end - 1] == '\r');
-
-    auto emit_expansion = [&](const std::string& body, const std::string& span_name) {
-        // PP_MACRO_USE in our line-based grammar consumes the
-        // trailing newline via sv_eol. Replicate it on the
-        // expansion side so the output keeps line structure.
-        record_span(parent_span_id, use_src_start, use_src_len,
-                    out.size(), span_name);
-        out += body;
-        if (consumed_newline
-            && (body.empty() || body.back() != '\n')) {
-            out += '\n';
-        }
-    };
-
-    auto it = state_.macros.find(name);
-    if (it != state_.macros.end()) {
-        const auto& macro = it->second;
-        auto args_filled = args;
-        if (macro.is_function_like
-                && macro.params.size() != args_filled.size()) {
-            auto padded = fill_defaults(macro.params, std::move(args_filled),
-                [](const std::string& d) -> ValuePtr {
-                    return make_string(d);
-                });
-            if (padded) args_filled = std::move(*padded);
-            else args_filled = args;
-        }
-        std::shared_ptr<ArrayValue> substituted;
-        if (macro.is_function_like
-                && macro.params.size() != args_filled.size()) {
-            // Arity mismatch — warn; still substitute (with empty
-            // param/arg lists) so `\`"…\`"` stringification and
-            // `\`\`` token-paste markers fire regardless.
-            state_.warnings.push_back(
-                {"macro `" + name + " expects " +
-                 std::to_string(macro.params.size()) +
-                 " args, got " + std::to_string(args_filled.size()),
-                 state_.current_file, state_.current_line});
-            substituted = substitute_segments(*macro.body_segments, {}, {});
-        } else {
-            // Matching arity OR object-like (no params). Empty
-            // params means identifier-shaped refs in text segments
-            // pass through but stringify / paste markers still
-            // fire, and typed `ref` segments stay verbatim (which
-            // is what we want — they were never parameter refs).
-            substituted = substitute_segments(*macro.body_segments,
-                                              macro.params, args_filled);
-        }
-        // Render the substituted segments. macro_use segments
-        // recurse through render_macro_use_inline — no string
-        // round-trip, no re-parse. Blue-paint guard prevents
-        // `\`A`-in-`\`A`-body infinite recursion.
-        state_.active_expansions.insert(name);
-        ++state_.current_depth;
-        std::string emitted = render_macro_body_segments(*substituted);
-        --state_.current_depth;
-        state_.active_expansions.erase(name);
-        emit_expansion(emitted, "macro " + name + " expansion");
-        src_cursor = use_src_end;
-        return;
-    }
-
-    // Undefined — give the host's undefined_handler first refusal.
-    // If it returns a value, that's the expansion (recursively
-    // re-expanded so the host can return text containing macro
-    // uses). If it returns nullopt, fall through to the static
-    // on_undefined policy.
-    if (opts_.undefined_handler) {
-        if (auto replacement = opts_.undefined_handler(name, args_text)) {
-            state_.active_expansions.insert(name);
-            ++state_.current_depth;
-            std::string emitted = expand_recursive(*replacement);
-            --state_.current_depth;
-            state_.active_expansions.erase(name);
-            emit_expansion(emitted,
-                            "undefined_handler expansion of " + name);
-            src_cursor = use_src_end;
-            return;
-        }
-    }
-
-    auto leave_emit = [&]() {
-        std::string emit = "`" + name;
-        if (!args_text.empty()) {
-            emit += "(";
-            for (std::size_t i = 0; i < args_text.size(); ++i) {
-                if (i > 0) emit += ",";
-                emit += args_text[i];
-            }
-            emit += ")";
-        }
-        emit_expansion(emit, "undefined macro use");
-    };
-
-    switch (opts_.on_undefined) {
-        case PpOnUndefined::Leave:
-            leave_emit();
-            src_cursor = use_src_end;
-            return;
-        case PpOnUndefined::Empty:
-            src_cursor = use_src_end;
-            return;
-        case PpOnUndefined::Warn:
-            state_.warnings.push_back(
-                {"undefined macro `" + name, state_.current_file,
-                 state_.current_line});
-            leave_emit();
-            src_cursor = use_src_end;
-            return;
-        case PpOnUndefined::Error:
-            throw std::runtime_error("undefined macro `" + name);
-    }
-}
-
-void Preprocessor::handle_include(const DictValue& d, std::string& out,
-                                  std::size_t& src_cursor,
-                                  const std::string& source,
-                                  std::uint32_t parent_span_id) {
+void Preprocessor::handle_include(const DictValue& d, std::string& out) {
     auto path = dict_string_or_empty(d, "path");
-    // Advance the source cursor past the `\`include "path"\n` line —
-    // whether we successfully process the included file or not.
-    src_cursor = locate_item(source, src_cursor, "`include");
-    std::size_t directive_end = scan_past_directive_line(source, src_cursor);
-    src_cursor = directive_end;
-
     if (path.empty()) {
         state_.warnings.push_back(
             {"`include: empty path", state_.current_file, state_.current_line});
         return;
     }
 
-    // Suppressed inside a not-taken `\`ifdef` branch: the directive
-    // line was already skipped via src_cursor advance above; we just
-    // need to NOT actually open / parse / walk the included file
-    // (which would mutate the macro table and included_files).
-    if (suppress_side_effects_) return;
-
     std::string canonical;
     std::string include_text;
 
-    // Host-supplied include source takes priority. If the callback
-    // is set and returns a value, we use its (canonical_id, content)
-    // directly — no filesystem walk needed. nullopt means "I can't
-    // resolve this, try the built-in fallback."
+    // Host-supplied include source takes priority.
     if (opts_.include_source) {
         auto host = opts_.include_source(path, state_.current_file);
         if (host) {
@@ -2050,9 +1423,8 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
         }
     }
 
-    // Built-in fallback: walk `include_paths`, then the including
-    // file's directory, then the path as given. Engaged when no
-    // callback was set, or when the callback returned nullopt.
+    // Built-in fallback: include_paths, then including file's dir, then
+    // the path as given.
     if (canonical.empty() && include_text.empty()) {
         namespace fs = std::filesystem;
         fs::path resolved;
@@ -2062,19 +1434,14 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
             fs::path candidate = base.empty() ? requested : (base / requested);
             std::error_code ec;
             if (fs::exists(candidate, ec) && !ec) {
-                resolved = candidate;
-                found = true;
-                return true;
+                resolved = candidate; found = true; return true;
             }
             return false;
         };
-        for (const auto& dir : opts_.include_paths) {
+        for (const auto& dir : opts_.include_paths)
             if (try_candidate(dir)) break;
-        }
-        if (!found && !state_.current_file.empty()) {
-            fs::path parent = fs::path(state_.current_file).parent_path();
-            try_candidate(parent);
-        }
+        if (!found && !state_.current_file.empty())
+            try_candidate(fs::path(state_.current_file).parent_path());
         if (!found) try_candidate(fs::path{});
         if (!found) {
             state_.warnings.push_back(
@@ -2082,9 +1449,7 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
                  state_.current_file, state_.current_line});
             return;
         }
-
         canonical = resolved.lexically_normal().string();
-
         std::ifstream f(resolved);
         if (!f.is_open()) {
             state_.warnings.push_back(
@@ -2092,264 +1457,277 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out,
                  state_.current_file, state_.current_line});
             return;
         }
-        std::ostringstream buf;
-        buf << f.rdbuf();
+        std::ostringstream buf; buf << f.rdbuf();
         include_text = buf.str();
     }
 
-    // `included_files` is a deduped manifest used by build systems
-    // for incremental-rebuild dependency tracking. Same logical
-    // source included multiple times (e.g. with redefines between
-    // them) lists once. This does NOT gate processing — every
-    // `\`include` is parsed + walked freshly with the current macro
-    // table; the dedup is purely about the query result.
     bool already_seen = false;
-    for (const auto& p : state_.included_files) {
+    for (const auto& p : state_.included_files)
         if (p == canonical) { already_seen = true; break; }
-    }
     if (!already_seen) state_.included_files.push_back(canonical);
 
-    // Parse the included file with the same preprocessor grammar.
-    // (No depth-of-includes check yet — Phase 3 polish.)
-    auto include_stream = Stream::from_string(include_text);
-    auto parsed = (pp_grammar_.rule_id("PP_FILE").valid() ? pp_grammar_.parse_from(include_stream, "PP_FILE") : pp_grammar_.parse(include_stream));
-    if (!parsed) {
-        state_.warnings.push_back(
-            {"`include: parse failed in '" + canonical + "': " +
-             parsed.error().message,
-             state_.current_file, state_.current_line});
-        return;
-    }
-
-    // New file context — push/restore so nested directives report
-    // the correct current_file in any warnings they emit.
     auto saved_file = state_.current_file;
     auto saved_line = state_.current_line;
     state_.current_file = canonical;
     state_.current_line = 1;
 
-    // Create a Span describing the included file. The include site
-    // (use_src_start..directive_end in the outer source) is the parent
-    // for hierarchical lookup.
-    std::size_t use_src_start = locate_item(source, /*from=*/src_cursor - 1 - path.size(),
-                                            "`include");
-    if (use_src_start > directive_end) use_src_start = directive_end;
-    std::uint32_t include_span =
-        record_span(parent_span_id, use_src_start,
-                    include_text.size(),
-                    /*out_offset=*/Span::NoOutput, canonical);
-
-    // Walk the included file. In splice mode, output bytes go into
-    // the caller's `out`; in side-effects mode, they go into a
-    // discard buffer (state still mutates — that's the side effect).
-    std::size_t include_src_cursor = 0;
+    // Splice mode: recurse into the scan driver, appending the included
+    // file's expansion to `out`. Side-effects-only mode still scans (so
+    // macros / includes register) but discards the emitted bytes.
     if (opts_.splice) {
-        walk(*parsed, out, include_src_cursor, include_text, include_span);
+        scan_stream(include_text, out);
     } else {
         std::string discard;
-        std::size_t saved_spans = state_.spans.size();
-        walk(*parsed, discard, include_src_cursor, include_text, include_span);
-        // Drop spans that mapped into the discarded output —
-        // they're not reachable from anything in `out`.
-        state_.spans.resize(saved_spans);
+        scan_stream(include_text, discard);
     }
 
     state_.current_file = std::move(saved_file);
     state_.current_line = saved_line;
 }
 
-void Preprocessor::handle_ifdef(const DictValue& d, std::string& out,
-                                std::size_t& src_cursor,
-                                const std::string& source,
-                                std::uint32_t parent_span_id,
-                                bool invert) {
-    auto cond = dict_string_or_empty(d, "cond");
-    bool defined = !cond.empty() &&
-                   state_.macros.find(cond) != state_.macros.end();
-    bool take_body = invert ? !defined : defined;
+std::string Preprocessor::expand_macro_use(const DictValue& d) {
+    auto name = dict_string_or_empty(d, "name");
+    if (name.empty()) return {};
+    if (state_.macros.find(name) != state_.macros.end())
+        return render_macro_use_inline(d);   // defined -> expand
 
-    // Position cursor at the `\`ifdef`/`\`ifndef` keyword, then advance
-    // past the directive line. Same locate_item logic handles
-    // leading whitespace the grammar's ignore policy ate.
-    src_cursor = locate_item(source, src_cursor,
-                             invert ? "`ifndef" : "`ifdef");
-    src_cursor = scan_past_directive_line(source, src_cursor);
-
-    auto walk_or_discard = [&](const ValuePtr& branch, bool emit) {
-        if (!branch) return;
-        if (emit) {
-            walk(branch, out, src_cursor, source, parent_span_id);
-        } else {
-            std::string discard;
-            std::size_t saved = state_.spans.size();
-            // Suppress state mutations (macro register/erase,
-            // included_files push) for the not-taken branch — SV LRM
-            // says directives inside an untaken `\`ifdef` don't
-            // execute. Save and restore on top of any outer suppress
-            // already in effect (nested ifdef inside a skipped block
-            // must stay suppressed regardless of inner take/skip).
-            bool saved_suppress = suppress_side_effects_;
-            suppress_side_effects_ = true;
-            walk(branch, discard, src_cursor, source, parent_span_id);
-            suppress_side_effects_ = saved_suppress;
-            // Discarded branch's spans aren't in the output stream.
-            state_.spans.resize(saved);
-        }
-    };
-
-    walk_or_discard(dict_value_or_null(d, "body"), take_body);
-    bool any_taken = take_body;
-
-    // `\`elsif` chain. Unlike `\`if`/`\`elsif` (expr_eval), `\`ifdef`/
-    // `\`elsif` selects by DEFINEDNESS — each elsif takes its branch iff
-    // its macro is defined and no earlier branch was taken. The grammar's
-    // IFDEF_ELSIF captures cond as a clean identifier (no trimming needed).
-    if (auto ev = dict_value_or_null(d, "elsif_branches")) {
-        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(ev)) {
-            for (const auto& b : arr->data()) {
-                auto bd = std::dynamic_pointer_cast<DictValue>(b);
-                if (!bd) continue;
-                src_cursor = locate_item(source, src_cursor, "`elsif");
-                src_cursor = scan_past_directive_line(source, src_cursor);
-                std::string ec = dict_string_or_empty(*bd, "cond");
-                bool edef = !ec.empty() &&
-                            state_.macros.find(ec) != state_.macros.end();
-                bool etake = edef && !any_taken;
-                walk_or_discard(dict_value_or_null(*bd, "body"), etake);
-                if (edef) any_taken = true;
+    std::vector<std::string> args_text;
+    if (auto av = dict_value_or_null(d, "args")) {
+        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(av))
+            for (const auto& a : arr->data()) {
+                if (auto s = std::dynamic_pointer_cast<StringValue>(a))
+                    args_text.push_back(s->data());
+                else
+                    args_text.push_back(render_segment(a));
             }
+    }
+    // Undefined: host handler first, then the on_undefined policy.
+    if (opts_.undefined_handler) {
+        if (auto rep = opts_.undefined_handler(name, args_text)) {
+            state_.active_expansions.insert(name);
+            ++state_.current_depth;
+            std::string e = expand_recursive(*rep);
+            --state_.current_depth;
+            state_.active_expansions.erase(name);
+            return e;
         }
     }
-
-    if (auto eb = dict_value_or_null(d, "else_branch")) {
-        // Position past the `\`else` line.
-        src_cursor = locate_item(source, src_cursor, "`else");
-        src_cursor = scan_past_directive_line(source, src_cursor);
-        walk_or_discard(eb, !any_taken);
+    auto verbatim = [&]() {
+        std::string s = "`" + name;
+        if (!args_text.empty()) {
+            s += "(";
+            for (std::size_t i = 0; i < args_text.size(); ++i) {
+                if (i) s += ",";
+                s += args_text[i];
+            }
+            s += ")";
+        }
+        return s;
+    };
+    switch (opts_.on_undefined) {
+        case PpOnUndefined::Leave: return verbatim();
+        case PpOnUndefined::Empty: return {};
+        case PpOnUndefined::Warn:
+            state_.warnings.push_back(
+                {"undefined macro `" + name, state_.current_file,
+                 state_.current_line});
+            return verbatim();
+        case PpOnUndefined::Error:
+            throw std::runtime_error("undefined macro `" + name);
     }
-
-    // Position past `\`endif`.
-    src_cursor = locate_item(source, src_cursor, "`endif");
-    src_cursor = scan_past_directive_line(source, src_cursor);
+    return verbatim();
 }
 
-void Preprocessor::handle_if(const DictValue& d, std::string& out,
-                              std::size_t& src_cursor,
-                              const std::string& source,
-                              std::uint32_t parent_span_id) {
-    // Branches AST shape (flat):
-    //   { type:"if",
-    //     branches: [ {cond:"EXPR", body:[...]},
-    //                 {cond:"EXPR", body:[...]} ],
-    //     else_branch: [...] }
-    // The first `if` is branches[0]; subsequent entries are `elsif`s.
-    // Grammar producers normalize their nested `\`if/\`elsif/\`else/
-    // \`endif` syntax into this shape so the walker stays linear.
+void Preprocessor::scan_stream(const std::string& text, std::string& out) {
+    NodeId pc = pp_grammar_.rule_id("PP_CONSTRUCT");
+    if (!pc.valid()) { out += text; return; }
 
-    src_cursor = locate_item(source, src_cursor, "`if");
-    src_cursor = scan_past_directive_line(source, src_cursor);
+    struct CondFrame {
+        bool emitting;         // this branch active AND parent emitting
+        bool any_taken;        // some branch in this group has matched
+        bool parent_emitting;  // was output live when this group opened
+        bool is_ifdef;         // ifdef-family: `elsif` tests definedness
+    };
+    std::vector<CondFrame> cstack;
+    auto emitting = [&]() { return cstack.empty() || cstack.back().emitting; };
 
-    auto walk_or_discard = [&](const ValuePtr& branch, bool emit) {
-        if (!branch) return;
-        if (emit) {
-            walk(branch, out, src_cursor, source, parent_span_id);
-        } else {
-            std::string discard;
-            std::size_t saved = state_.spans.size();
-            // Same side-effect suppression as handle_ifdef — not-taken
-            // branches must not register/erase macros or push includes.
-            bool saved_suppress = suppress_side_effects_;
-            suppress_side_effects_ = true;
-            walk(branch, discard, src_cursor, source, parent_span_id);
-            suppress_side_effects_ = saved_suppress;
-            state_.spans.resize(saved);
+    auto stream = Stream::from_string(text);
+    StreamReader& sr = stream.reader();
+    ValuePool pool;
+    const std::size_t n = text.size();
+
+    auto eval_expr = [&](const ValuePtr& cond) -> bool {
+        std::string s;
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(cond)) s = sv->data();
+        trim_horiz(s);
+        // A custom expr_eval receives the raw condition text; the built-in
+        // eval_cond_default subparses it through COND_EXPR itself.
+        ValuePtr c = make_string(s);
+        ValuePtr v = opts_.expr_eval ? opts_.expr_eval(c) : eval_cond_default(c);
+        if (v && v->type() == ValueType::Bool)
+            return static_cast<const BoolValue*>(v.get())->data();
+        switch (opts_.on_undecidable) {
+        case PpOnUndecidable::TreatAsFalse:
+            state_.warnings.push_back(
+                {"`if condition undecidable; treating as false",
+                 state_.current_file, state_.current_line});
+            return false;
+        case PpOnUndecidable::TreatAsTrue:
+            state_.warnings.push_back(
+                {"`if condition undecidable; treating as true",
+                 state_.current_file, state_.current_line});
+            return true;
+        case PpOnUndecidable::Error:
+            throw std::runtime_error("`if condition undecidable");
         }
+        return false;
+    };
+    auto defined_ident = [&](const ValuePtr& cond) -> bool {
+        std::string s;
+        if (auto sv = std::dynamic_pointer_cast<StringValue>(cond)) s = sv->data();
+        trim_horiz(s);
+        std::size_t k = 0;
+        while (k < s.size()
+               && (std::isalnum((unsigned char)s[k]) || s[k] == '_')) ++k;
+        s = s.substr(0, k);
+        return !s.empty() && state_.macros.find(s) != state_.macros.end();
     };
 
-    bool any_taken = false;
-    if (auto branches_val = dict_value_or_null(d, "branches")) {
-        if (auto arr = std::dynamic_pointer_cast<ArrayValue>(branches_val)) {
-            std::size_t branch_idx = 0;
-            for (const auto& b : arr->data()) {
-                auto bd = std::dynamic_pointer_cast<DictValue>(b);
-                if (!bd) continue;
-                auto cond = dict_value_or_null(*bd, "cond");
-                // systemverilog.rawast captures cond with `*:cond=@`
-                // (Raw). Raw bypasses the ignore-set, so the leading
-                // space between the keyword and the expression lands
-                // inside cond. Trim before handing to expr_eval.
-                if (auto sv = std::dynamic_pointer_cast<StringValue>(cond)) {
-                    const auto& s = sv->data();
-                    std::size_t i = 0;
-                    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
-                    std::size_t j = s.size();
-                    while (j > i && (s[j-1] == ' ' || s[j-1] == '\t')) --j;
-                    if (i > 0 || j < s.size()) {
-                        cond = make_string(s.substr(i, j - i));
+    // Skip a stand-alone directive line's tail (trailing hspace + `//`
+    // comment + newline) so it leaves no output; leave inline content.
+    auto skip_line_tail = [&]() {
+        while (!sr.eof()) {
+            std::size_t i = sr.position().bytes;
+            char c = text[i];
+            if (c == ' ' || c == '\t' || c == '\r') { sr.get(); continue; }
+            if (c == '/' && i + 1 < n && text[i + 1] == '/') {
+                while (!sr.eof() && text[sr.position().bytes] != '\n') sr.get();
+                continue;
+            }
+            break;
+        }
+        if (!sr.eof() && text[sr.position().bytes] == '\n') sr.get();
+    };
+
+    while (!sr.eof()) {
+        std::size_t i = sr.position().bytes;
+        char c = text[i];
+        bool emit = emitting();
+
+        if (c == '`') {
+            sr.mark();
+            auto r = pp_grammar_.parse_from(sr, pool, pc,
+                                            /*require_full=*/false, nullptr);
+            if (r && sr.position().bytes > i) {
+                sr.accept();
+                auto dd = std::dynamic_pointer_cast<DictValue>(*r);
+                std::string type = dd ? dict_string_or_empty(*dd, "type") : "";
+                if (type == "define") {
+                    if (emit) handle_define(*dd);      // grammar ate the `\n`
+                } else if (type == "undef") {
+                    if (emit) handle_undef(*dd);
+                    skip_line_tail();
+                } else if (type == "include") {
+                    if (emit) handle_include(*dd, out);
+                    skip_line_tail();
+                } else if (type == "ifdef" || type == "ifndef") {
+                    std::string cond = dict_string_or_empty(*dd, "cond");
+                    bool def = state_.macros.find(cond) != state_.macros.end();
+                    bool raw = (type == "ifndef") ? !def : def;
+                    cstack.push_back({emit && raw, raw, emit, true});
+                    skip_line_tail();
+                } else if (type == "pp_if") {
+                    bool raw = eval_expr(dict_value_or_null(*dd, "cond"));
+                    cstack.push_back({emit && raw, raw, emit, false}); // ate `\n`
+                } else if (type == "elsif") {
+                    if (!cstack.empty()) {
+                        auto& f = cstack.back();
+                        bool take = false;
+                        if (f.parent_emitting && !f.any_taken) {
+                            take = f.is_ifdef
+                                ? defined_ident(dict_value_or_null(*dd, "cond"))
+                                : eval_expr(dict_value_or_null(*dd, "cond"));
+                        }
+                        f.emitting = take;
+                        if (take) f.any_taken = true;
+                    }                                            // ate `\n`
+                } else if (type == "else") {
+                    if (!cstack.empty()) {
+                        auto& f = cstack.back();
+                        f.emitting = f.parent_emitting && !f.any_taken;
+                        f.any_taken = true;
                     }
-                }
-                bool take = false;
-                {
-                    // `\`if` evaluation is on by default: with no custom
-                    // expr_eval, the engine evaluates the condition itself
-                    // (eval_cond_default — parses the raw cond through
-                    // PP_EXPR and applies C `#if` semantics). Because that
-                    // parse is on-demand and falls back to Undefined, a
-                    // condition outside the PP_EXPR subset is undecidable,
-                    // not a hard failure. A host-set expr_eval overrides it.
-                    ValuePtr v = opts_.expr_eval ? opts_.expr_eval(cond)
-                                                 : eval_cond_default(cond);
-                    if (v && v->type() == ValueType::Bool) {
-                        take = static_cast<const BoolValue*>(v.get())->data();
-                    } else {
-                        // Undecidable: expr_eval returned Undefined (or null).
-                        // Apply the host's on_undecidable policy.
-                        switch (opts_.on_undecidable) {
-                        case PpOnUndecidable::TreatAsFalse:
-                            state_.warnings.push_back(
-                                {"`if condition is undecidable; treating as "
-                                 "false", state_.current_file,
-                                 state_.current_line});
-                            take = false;
-                            break;
-                        case PpOnUndecidable::TreatAsTrue:
-                            state_.warnings.push_back(
-                                {"`if condition is undecidable; treating as "
-                                 "true", state_.current_file,
-                                 state_.current_line});
-                            take = true;
-                            break;
-                        case PpOnUndecidable::Error:
-                            throw std::runtime_error(
-                                "undecidable `if condition");
+                    skip_line_tail();
+                } else if (type == "endif") {
+                    if (!cstack.empty()) cstack.pop_back();
+                    skip_line_tail();
+                } else if (type == "macro_use") {
+                    if (emit) {
+                        out += expand_macro_use(*dd);
+                        // A no-args use eats trailing linespace while the
+                        // optional `(args)` boundary looks for `(`. Re-emit
+                        // it so object-like `\`A + \`B` keeps its spacing.
+                        bool has_args = false;
+                        if (auto av = dict_value_or_null(*dd, "args"))
+                            if (auto aa =
+                                std::dynamic_pointer_cast<ArrayValue>(av))
+                                has_args = !aa->data().empty();
+                        if (!has_args) {
+                            std::string nm = dict_string_or_empty(*dd, "name");
+                            std::size_t tok_end = i + 1 + nm.size();
+                            std::size_t here = sr.position().bytes;
+                            if (here > tok_end)
+                                out.append(text, tok_end, here - tok_end);
                         }
                     }
+                } else {
+                    if (emit) out.append(text, i, sr.position().bytes - i);
                 }
-                // Position past `\`elsif` line for branches beyond the
-                // first — only walks if the first branch hasn't
-                // already taken; otherwise the locator scan will
-                // skip ahead through suppressed text.
-                if (branch_idx > 0) {
-                    src_cursor = locate_item(source, src_cursor, "`elsif");
-                    src_cursor = scan_past_directive_line(source, src_cursor);
-                }
-                bool emit = take && !any_taken;
-                walk_or_discard(dict_value_or_null(*bd, "body"), emit);
-                if (take) any_taken = true;
-                ++branch_idx;
+            } else {
+                sr.reject();
+                if (emit) out.push_back('`');
+                sr.get();
             }
+            continue;
         }
-    }
 
-    if (auto eb = dict_value_or_null(d, "else_branch")) {
-        src_cursor = locate_item(source, src_cursor, "`else");
-        src_cursor = scan_past_directive_line(source, src_cursor);
-        walk_or_discard(eb, !any_taken);
-    }
+        if (c == '"') {                                     // string literal
+            std::size_t start = i;
+            sr.get();
+            while (!sr.eof()) {
+                char q = text[sr.position().bytes];
+                sr.get();
+                if (q == '\\' && !sr.eof()) { sr.get(); continue; }
+                if (q == '"') break;
+            }
+            if (emit) out.append(text, start, sr.position().bytes - start);
+            continue;
+        }
+        if (c == '/' && i + 1 < n && text[i + 1] == '/') {   // line comment
+            std::size_t start = i;
+            while (!sr.eof() && text[sr.position().bytes] != '\n') sr.get();
+            if (emit) out.append(text, start, sr.position().bytes - start);
+            continue;
+        }
+        if (c == '/' && i + 1 < n && text[i + 1] == '*') {   // block comment
+            std::size_t start = i;
+            sr.get(); sr.get();
+            while (!sr.eof()) {
+                std::size_t k = sr.position().bytes;
+                if (text[k] == '*' && k + 1 < n && text[k + 1] == '/') {
+                    sr.get(); sr.get(); break;
+                }
+                sr.get();
+            }
+            if (emit) out.append(text, start, sr.position().bytes - start);
+            continue;
+        }
 
-    src_cursor = locate_item(source, src_cursor, "`endif");
-    src_cursor = scan_past_directive_line(source, src_cursor);
+        sr.get();
+        if (emit) out.push_back(c);
+    }
 }
+
 
 std::string Preprocessor::process_file(const std::string& path) {
     std::ifstream f(path);

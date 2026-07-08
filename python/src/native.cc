@@ -865,36 +865,6 @@ NB_MODULE(_rawast, m) {
             "duplicates suppressed) and sets the internal current-file "
             "context for warning attribution.")
 
-        // Three-mode API ------------------------------------------------
-        // Mode 1: parse only — return the preprocessor AST without
-        // expanding macros, includes, or conditionals.
-        .def("parse",
-            [](rawast::Preprocessor& pp, const std::string& source) {
-                auto r = pp.parse(source);
-                if (!r) throw std::runtime_error(format_parse_error(r.error()));
-                return value_to_python(*r);
-            },
-            nb::arg("source"),
-            "Mode 1: parse the source through the preprocessor grammar "
-            "and return the raw AST as a Python value, without expanding "
-            "directives. Useful for tooling that wants to inspect macro / "
-            "include / ifdef structure.")
-
-        // Mode 2: expand a Python-shaped AST into a Stream — same
-        // canonical handoff type as the C++ API. Feed it to
-        // Grammar.parse_stream for Mode 3.
-        .def("preprocess",
-            [](rawast::Preprocessor& pp, nb::handle ast,
-               const std::string& source) {
-                auto v = python_to_value(ast);
-                return pp.preprocess(v, source);
-            },
-            nb::arg("ast"), nb::arg("source"),
-            "Mode 2: expand a preprocessor AST (as returned by parse()) "
-            "and return the expanded bytes as a Stream. `source` is the "
-            "original input text the AST was parsed from. State (macros, "
-            "includes, warnings, spans) accumulates on this instance.")
-
         .def("is_defined",
             [](const rawast::Preprocessor& pp, const std::string& name) {
                 return pp.is_defined(name);

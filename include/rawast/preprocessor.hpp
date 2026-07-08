@@ -411,52 +411,6 @@ public:
     // duplicates suppressed). Returns the preprocessed text.
     std::string process_file(const std::string& path);
 
-    // ─── Three-mode API ─────────────────────────────────────────────
-    //
-    // Mode 1: parse the source through the preprocessor grammar and
-    // return the raw AST, without expanding `\`define / \`include /
-    // \`ifdef ...`. Useful for tooling that wants to inspect macro
-    // and include structure without paying expansion cost (or without
-    // having the surrounding source resolvable at all).
-    //
-    // No mutation of state_ macros / included_files / spans — pure
-    // parse. Returns ParseError on grammar failure; a no-top-rule
-    // grammar yields ParseError too (degenerate construction).
-    tl::expected<ValuePtr, ParseError>
-    parse(const std::string& source);
-
-    // Mode 2: expand a preprocessor AST into a Stream of expanded
-    // bytes ready to feed to a host Grammar::parse. State accumulates
-    // on the instance same as process_ast — macros, includes,
-    // warnings, and spans are all populated.
-    //
-    // The returned Stream owns the expanded byte buffer (via Stream's
-    // shared_ptr<void> owner_ slot); the buffer outlives this call,
-    // so callers can hold the Stream and consume it later.
-    //
-    // `source` is the original input text spans should reference; see
-    // process_ast() for the contract.
-    Stream
-    preprocess(const ValuePtr& ast, const std::string& source);
-
-    // Walk a pre-built AST. Bypasses the grammar layer entirely —
-    // useful for unit-testing the walker (and the dynamic_macros /
-    // expr_eval / undefined_handler callbacks) against synthesized
-    // ASTs, and for tooling that builds the AST through some other
-    // mechanism (programmatic, deserialized from JSON, etc.).
-    //
-    // `source` is the byte string the walker should treat as the
-    // original input — used by `locate_item` to position spans and
-    // emit text. For synthesized ASTs that don't correspond to a
-    // real source file, pass a synthetic string containing each
-    // referenced token (the helpers `synth_text` etc. in the test
-    // file build conforming sources). For ASTs deserialized from a
-    // real file, pass that file's contents.
-    //
-    // Returns the preprocessed text. State accumulates on the
-    // instance across calls, same as process().
-    std::string process_ast(const ValuePtr& ast, const std::string& source);
-
     // ─── Inspection ─────────────────────────────────────────────────
 
     const std::unordered_map<std::string, MacroDef>&
@@ -513,34 +467,25 @@ private:
     // standard evaluation with no host wiring.
     ValuePtr eval_cond_default(const ValuePtr& cond);
 
-    // Walk the value tree produced by parsing through pp_grammar_,
-    // dispatching on the `type` field that role-bearing rules emit.
-    // Appends emitted text to `out`. Tracks the cursor into the
-    // ORIGINAL source so each emitted run can record its provenance
-    // span. `parent_span_id` is the parent Span every emitted span
-    // should reference (the root input span for top-level walks; a
-    // macro-body span when expansion lands in Phase 2.1).
-    void walk(const ValuePtr& v, std::string& out,
-              std::size_t& src_cursor,
-              const std::string& source,
-              std::uint32_t parent_span_id);
+    // The scan driver: the preprocessor's core mechanism. Walks `text`
+    // once, and at each backtick matches ONE construct via the grammar's
+    // PP_CONSTRUCT rule (parse_from). Strings, comments, and plain text
+    // are passed through verbatim to `out`; recognised directives are
+    // evaluated and macro uses expanded. A conditional emit/skip stack
+    // (local to the call) gates output through `\`ifdef`/`\`else` chains.
+    // `\`include` recurses into scan_stream on the included text.
+    void scan_stream(const std::string& text, std::string& out);
+
+    // Expand a single `\`NAME[(args)]` use at the top level: defined →
+    // render its (recursively-expanded) body; undefined → apply the
+    // undefined_handler then the on_undefined policy. Returns the text
+    // to emit.
+    std::string expand_macro_use(const class DictValue& d);
 
     // Per-role handlers. Defined here rather than as free functions
     // so they have direct access to state_ and opts_.
     void handle_define(const class DictValue& d);
     void handle_undef(const class DictValue& d);
-    // `consume_line=true` (default) is the line-based form used by
-    // mini_preprocessor where a `\`MACRO` call owns the whole line —
-    // src_cursor advances past the trailing newline and the
-    // expansion appends a `\n` to preserve line structure. With
-    // `consume_line=false` (text_line iterator) only the `\`NAME`
-    // (+ optional `(args)`) is consumed, so the macro use can sit
-    // mid-line surrounded by other text.
-    void handle_macro_use(const class DictValue& d, std::string& out,
-                          std::size_t& src_cursor,
-                          const std::string& source,
-                          std::uint32_t parent_span_id,
-                          bool consume_line = true);
 
     // Expand a `\`MACRO` use whose AST sits inside a substituted
     // macro body — no source-mapped cursor or span tracking, just
@@ -558,19 +503,12 @@ private:
     // recurse through `render_macro_use_inline`; other typed
     // segments fall back to `render_segment` for leaf text.
     std::string render_macro_body_segments(const class ArrayValue& segs);
-    void handle_ifdef(const class DictValue& d, std::string& out,
-                      std::size_t& src_cursor,
-                      const std::string& source,
-                      std::uint32_t parent_span_id,
-                      bool invert);
-    void handle_if(const class DictValue& d, std::string& out,
-                   std::size_t& src_cursor,
-                   const std::string& source,
-                   std::uint32_t parent_span_id);
-    void handle_include(const class DictValue& d, std::string& out,
-                        std::size_t& src_cursor,
-                        const std::string& source,
-                        std::uint32_t parent_span_id);
+
+    // `\`include "path"` — resolve the file (include_source callback,
+    // then include_paths, then the including file's dir), and, in splice
+    // mode, recursively scan_stream the included text into `out`. Macro
+    // and included-files state mutate regardless of splice.
+    void handle_include(const class DictValue& d, std::string& out);
 
     // Recursively expand inline `\`MACRO` / `\`MACRO(args)` references
     // within a body string, applying parameter substitution and
@@ -599,17 +537,6 @@ private:
     const Grammar&    pp_grammar_;
     PpOptions         opts_;
     PreprocessorState state_;
-
-    // Scoped guard set by `\`ifdef`/`\`ifndef`/`\`if` handlers when
-    // walking a NOT-TAKEN branch. The walker still traverses the
-    // branch (so src_cursor advances over the source bytes and
-    // nested directives' shapes are visited), but per-directive
-    // handlers check this flag and skip state mutations: handle_define
-    // doesn't register the macro, handle_undef doesn't erase, etc.
-    // Source-map spans and output bytes are also discarded by
-    // walk_or_discard, but those are already routed through a
-    // disposable buffer; this flag closes the macro-table gap.
-    bool suppress_side_effects_ = false;
 };
 
 } // namespace rawast

@@ -29,37 +29,29 @@ Grammar load_grammar() {
     return g;
 }
 
-// Full PP_FILE parse result (an ArrayValue of PP_ITEMs). The preprocessor
-// rules live in the merged SV grammar, reached via the PP_FILE start rule.
-ValuePtr parse_file(Grammar& g, const std::string& src) {
+// Parse a SINGLE preprocessor construct (one directive / macro use) via
+// the PP_CONSTRUCT rule and return its AST dict. This is what the scan
+// driver applies at each backtick; there's no whole-file PP_FILE rule
+// anymore. Inputs here are one construct (its own trailing `\n` where the
+// rule consumes it).
+ValuePtr parse(Grammar& g, const std::string& src) {
     auto stream = Stream::from_string(src);
-    auto r = g.parse_from(stream, "PP_FILE");
+    ValuePool pool;
+    // require_full_consume=false: the scan driver skips a directive's
+    // trailing newline itself, so the flat rules (undef/ifdef/…) don't
+    // consume it — a standalone parse leaves it behind.
+    auto r = g.parse_from(stream, pool, g.rule_id("PP_CONSTRUCT"),
+                          /*require_full_consume=*/false);
     REQUIRE_MESSAGE(r, "parse failed for '" << src << "': "
                        << (r ? "" : r.error().message));
     return *r;
 }
 
-// Convenience: for tests that expect a single PP_ITEM, extract it
-// from the PP_FILE wrapper.
-ValuePtr parse(Grammar& g, const std::string& src) {
-    auto pp_file = parse_file(g, src);
-    auto arr = std::dynamic_pointer_cast<ArrayValue>(pp_file);
-    REQUIRE(arr);
-    REQUIRE(arr->data().size() == 1);
-    return arr->data()[0];
-}
-
 std::string save(Grammar& g, ValuePtr v) {
-    // The grammar's top is PP_FILE (an ArrayValue). When tests pass
-    // a single PP_ITEM dict via the `parse()` shortcut, wrap it back
-    // up so save sees the PP_FILE shape it expects.
-    if (std::dynamic_pointer_cast<DictValue>(v)) {
-        auto wrapped = std::make_shared<ArrayValue>();
-        wrapped->data().push_back(std::move(v));
-        v = std::move(wrapped);
-    }
+    // Save one construct back through PP_CONSTRUCT (the choice dispatches
+    // on the dict's `type` discriminator).
     std::ostringstream out;
-    auto r = g.save(out, std::move(v), true, g.rule_id("PP_FILE"));
+    auto r = g.save(out, std::move(v), true, g.rule_id("PP_CONSTRUCT"));
     REQUIRE_MESSAGE(r, "save failed: " << (r ? "" : r.error().message));
     return out.str();
 }
@@ -444,16 +436,16 @@ TEST_CASE("sv_pp define: body MACRO_USE multi arg round-trips") {
 // on save. Regression guard: a top-level macro-use line previously
 // round-tripped with a spurious "`endif`else`elsif" prefix because the
 // save engine emitted negative-lookahead Key literals verbatim.
-TEST_CASE("sv_pp TEXT_LINE: top-level macro-use line round-trips clean") {
+TEST_CASE("scan driver: undefined macro-use line passes through (Leave)") {
     auto g = load_grammar();
-    auto ast = parse(g, "`OTHER(x,y,z)\n");
-    CHECK(save(g, ast) == "`OTHER(x,y,z)\n");
+    Preprocessor pp(g);  // default on_undefined = Leave
+    CHECK(pp.process("`OTHER(x,y,z)\n") == "`OTHER(x,y,z)\n");
 }
 
-TEST_CASE("sv_pp TEXT_LINE: plain text line round-trips clean") {
+TEST_CASE("scan driver: plain text passes through verbatim") {
     auto g = load_grammar();
-    auto ast = parse(g, "some plain text\n");
-    CHECK(save(g, ast) == "some plain text\n");
+    Preprocessor pp(g);
+    CHECK(pp.process("some plain text\n") == "some plain text\n");
 }
 
 // ─── Richer MACRO_ARGS — LRM §22.5.1 balanced-token args ───────────────
@@ -690,12 +682,14 @@ TEST_CASE("Preprocessor::process: pure text input passes through") {
     CHECK(out.find("just some text") != std::string::npos);
 }
 
-TEST_CASE("PP_FILE: parse_file returns array of PP_ITEMs") {
+TEST_CASE("scan driver: directives register, plain text passes through") {
     auto g = load_grammar();
-    auto pp_file = parse_file(g, "`define FOO 1\nhello\n`define BAR 2\n");
-    auto arr = std::dynamic_pointer_cast<ArrayValue>(pp_file);
-    REQUIRE(arr);
-    CHECK(arr->data().size() == 3);
+    Preprocessor pp(g);
+    auto out = pp.process("`define FOO 1\nhello\n`define BAR 2\n");
+    CHECK(pp.is_defined("FOO"));
+    CHECK(pp.is_defined("BAR"));
+    CHECK(out.find("hello") != std::string::npos);   // pass-through
+    CHECK(out.find("`define") == std::string::npos);  // directives consumed
 }
 
 // ─── `\`include` end-to-end ──────────────────────────────────────────
@@ -970,42 +964,33 @@ TEST_CASE("Preprocessor::process: nested ifdef inside skipped body is skipped") 
 // wiring. A cond outside the PP_EXPR subset is undecidable, not a parse
 // failure. The tests below drive that built-in path with real conditions.
 
-// cond ValuePtr of branch i (the `if/`elsif condition, a structured AST).
-static ValuePtr if_cond(const ValuePtr& ast, std::size_t i) {
-    auto d = std::dynamic_pointer_cast<DictValue>(ast);
-    auto branches = std::dynamic_pointer_cast<ArrayValue>(
-        d->data().find("branches")->second);
-    auto br = std::dynamic_pointer_cast<DictValue>(branches->data()[i]);
-    return br->data().find("cond")->second;
+// Raw `*` cond capture keeps the leading space after the directive
+// keyword (the driver / eval_cond_default trim it). Compare trimmed.
+static std::string trimmed_cond(const ValuePtr& ast) {
+    std::string s = str_field(ast, "cond");
+    std::size_t b = s.find_first_not_of(" \t");
+    std::size_t e = s.find_last_not_of(" \t");
+    return b == std::string::npos ? "" : s.substr(b, e - b + 1);
 }
 
-TEST_CASE("sv_pp if: grammar parses cond into a structured COND_EXPR AST") {
+TEST_CASE("sv_pp if: `if parses as a flat construct with raw cond text") {
     auto g = load_grammar();
-    auto ast = parse(g, "`if FOO\n`endif\n");
-    CHECK(str_field(ast, "type") == "if");
-    // cond is no longer raw text — it's subparsed through the SV COND_EXPR,
-    // whose ref node uses `name` (not PP_EXPR's `value`).
-    auto cond = if_cond(ast, 0);
-    CHECK(str_field(cond, "type") == "ref");
-    CHECK(str_field(cond, "name") == "FOO");
+    auto ast = parse(g, "`if FOO\n");
+    CHECK(str_field(ast, "type") == "pp_if");
+    // Flat scan model: cond is RAW TEXT; the built-in evaluator subparses
+    // it through PP_COND on demand (no #subparse at grammar time).
+    CHECK(trimmed_cond(ast) == "FOO");
 }
 
-TEST_CASE("sv_pp if: grammar parses `\\`if ... \\`elsif ... \\`endif` conds") {
+TEST_CASE("sv_pp: `if / `elsif / `endif each parse as flat constructs") {
     auto g = load_grammar();
-    auto ast = parse(g,
-        "`if FOO\n"
-        "`elsif defined(BAR)\n"
-        "`elsif BAZ > 1\n"
-        "`endif\n");
-    auto d = std::dynamic_pointer_cast<DictValue>(ast);
-    REQUIRE(d);
-    auto branches = std::dynamic_pointer_cast<ArrayValue>(
-        d->data().find("branches")->second);
-    REQUIRE(branches);
-    REQUIRE(branches->data().size() == 3);
-    CHECK(str_field(if_cond(ast, 0), "name") == "FOO");      // ref
-    CHECK(str_field(if_cond(ast, 1), "name") == "defined");  // func_call
-    CHECK(str_field(if_cond(ast, 2), "op") == ">");          // op chain
+    // Each conditional directive is its own PP_CONSTRUCT; the scan driver
+    // pairs them via its emit/skip stack (no BODY nesting in the grammar).
+    CHECK(str_field(parse(g, "`if FOO\n"), "type") == "pp_if");
+    CHECK(str_field(parse(g, "`elsif defined(BAR)\n"), "type") == "elsif");
+    CHECK(str_field(parse(g, "`endif\n"), "type") == "endif");
+    CHECK(trimmed_cond(parse(g, "`if FOO\n")) == "FOO");
+    CHECK(trimmed_cond(parse(g, "`elsif defined(BAR)\n")) == "defined(BAR)");
 }
 
 TEST_CASE("Preprocessor::process: `if takes first branch when cond true") {
@@ -1296,65 +1281,34 @@ TEST_CASE("Preprocessor::process: macro use after `\\`ifdef-taken branch") {
     CHECK(out.find("x = 42;") != std::string::npos);
 }
 
-// ─── Three-mode API ──────────────────────────────────────────────────
+// ─── process() → Stream handoff ──────────────────────────────────────
+// (The old Mode-1 parse()->AST / Mode-2 preprocess(ast)->Stream API is
+// gone with the whole-file-AST walker; the preprocessor is a scan pass.)
 
-TEST_CASE("Preprocessor::parse returns AST without expanding") {
+TEST_CASE("Preprocessor::process expands macros in a declaration") {
     auto g = load_grammar();
     Preprocessor pp(g);
-    auto r = pp.parse(
+    auto out = pp.process(
         "`define WIDTH 32\n"
         "wire [`WIDTH-1:0] x;\n"
     );
-    REQUIRE(r);
-    REQUIRE(*r);
-    // No state mutation — parse does not run the walker, so macros
-    // are still empty.
-    CHECK(pp.macros().empty());
-    // The AST is a PP_FILE (ArrayValue) of items including the
-    // \`define directive.
-    auto arr = std::dynamic_pointer_cast<ArrayValue>(*r);
-    REQUIRE(arr);
-    CHECK(arr->data().size() >= 1);
-}
-
-TEST_CASE("Preprocessor::preprocess: AST → Stream round-trips through Grammar") {
-    auto g = load_grammar();
-    Preprocessor pp(g);
-    std::string src =
-        "`define WIDTH 32\n"
-        "wire [`WIDTH-1:0] x;\n";
-    auto ast = pp.parse(src);
-    REQUIRE(ast);
-
-    // Mode 2: expand the AST to a Stream. The Stream owns the
-    // expanded buffer — it survives past this scope into the next
-    // grammar-parse step.
-    Stream s = pp.preprocess(*ast, src);
-
-    // Mode 2 walker mutates state — the macro should now be visible.
+    // Macro registered; `define line consumed; WIDTH replaced by 32.
     CHECK(pp.macros().count("WIDTH") == 1);
-
-    // The Stream's bytes should be the expanded text (no \`define
-    // line, WIDTH replaced by 32). Drain the reader to verify.
-    std::string out;
-    while (auto c = s.reader().get()) out.push_back(*c);
     CHECK(out.find("`define") == std::string::npos);
     CHECK(out.find("wire [32-1:0] x;") != std::string::npos);
 }
 
-TEST_CASE("Preprocessor::preprocess: returned Stream survives Stream move") {
-    // The expanded buffer is owned via Stream::owner_; moving the
-    // Stream must keep the istream's source bytes alive.
+TEST_CASE("Preprocessor::process output feeds a Stream that survives a move") {
+    // The expanded text can be handed to a host grammar via a Stream;
+    // moving the Stream keeps its source bytes alive.
     auto g = load_grammar();
     Preprocessor pp(g);
-    std::string src = "`define X 7\n`X\n";
-    auto ast = pp.parse(src);
-    REQUIRE(ast);
-
-    Stream s1 = pp.preprocess(*ast, src);
-    Stream s2 = std::move(s1);
-
-    std::string out;
-    while (auto c = s2.reader().get()) out.push_back(*c);
+    auto out = pp.process("`define X 7\n`X\n");
     CHECK(out.find("7") != std::string::npos);
+
+    Stream s1 = Stream::from_string(out);
+    Stream s2 = std::move(s1);
+    std::string drained;
+    while (auto c = s2.reader().get()) drained.push_back(*c);
+    CHECK(drained.find("7") != std::string::npos);
 }

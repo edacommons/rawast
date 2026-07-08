@@ -306,8 +306,12 @@ ValuePtr Preprocessor::eval_cond_default(const ValuePtr& cond) {
     // outside the PP_EXPR subset (sized literals, shifts, ternary, macro
     // calls, …) fails to parse and is reported as undecidable — the engine
     // then applies on_undecidable, rather than the whole preprocess failing.
+    // Subparse via PP_COND (not COND_EXPR directly): PP_COND declares the
+    // `ignore whitespace line_comment block_comment` that COND_EXPR's
+    // children need but don't inherit through a bare parse_from entry — so
+    // spaced conditions like `defined(A) && defined(B)` parse.
     auto stream = Stream::from_string(as_string(cond)->data());
-    auto r = pp_grammar_.parse_from(stream, "COND_EXPR");
+    auto r = pp_grammar_.parse_from(stream, "PP_COND");
     if (!r) return undefined_value();
     return default_pp_expr_eval(*r, resolver);
 }

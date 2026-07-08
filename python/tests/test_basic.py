@@ -379,28 +379,25 @@ def test_stream_from_string_round_trips_through_grammar():
     assert g.parse_stream(stream) == g.parse_string(text)
 
 
-def test_preprocessor_three_mode_pipeline():
-    """Mode 1 (pp.parse → AST), Mode 2 (pp.preprocess(ast, src) →
-    Stream), Mode 3 (g.parse_stream(stream) → host value) compose
-    end-to-end."""
+def test_preprocessor_process_then_parse_stream_pipeline():
+    """The preprocessor is a scan-driven text pass: `pp.process(src)`
+    expands directives/macros to text, which a host grammar then parses
+    via `parse_stream`. (The old Mode-1 `parse`→AST / Mode-2
+    `preprocess(ast)`→Stream API is gone — the preprocessor no longer
+    builds a whole-file AST.)"""
     pp_g = rawast.Grammar("systemverilog")
     pp = rawast.Preprocessor(pp_g)
 
     src = "`define X 7\n`X\n"
 
-    # Mode 1: parse only, no state mutation.
-    ast = pp.parse(src)
-    assert isinstance(ast, list)            # PP_FILE is an ArrayValue
-    assert pp.macros == {}                  # walker did not run
+    # Scan-driven expansion: macros register and `\`X` expands to 7.
+    expanded = pp.process(src)
+    assert "X" in pp.macros                 # `define registered it
+    assert "7" in expanded and "`X" not in expanded
 
-    # Mode 2: AST → Stream; walker runs, macros now populated.
-    stream = pp.preprocess(ast, src)
-    assert isinstance(stream, rawast.Stream)
-    assert "X" in pp.macros
-
-    # Mode 3: pretend any text grammar consumes the Stream. We use a
-    # simple JSON-style smoke since we don't have a host SV grammar
-    # to hand here — but the same shape works for any consumer.
+    # Hand the expanded text to any host grammar via a Stream. We use a
+    # JSON smoke since there's no host SV grammar to hand here — the same
+    # shape works for any consumer.
     smoke = rawast.Stream.from_string("42")
     json_g = rawast.Grammar("json")
     assert json_g.parse_stream(smoke) == 42
