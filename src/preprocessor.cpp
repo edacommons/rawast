@@ -795,6 +795,20 @@ std::size_t scan_args(const std::string& text, std::size_t cursor,
 
 std::string render_segment(const ValuePtr& seg);   // forward decl
 
+// Escape a string for embedding inside a `\`"…`"` stringification literal:
+// `"` and `\` are backslash-escaped (IEEE 1800-2017 §22.5.1). Without this a
+// stringified expression that itself contains a string/comment (e.g. a
+// `DV_CHECK` condition `foo() // note "x"`) produces an unbalanced literal.
+inline std::string stringify_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '"' || c == '\\') out.push_back('\\');
+        out.push_back(c);
+    }
+    return out;
+}
+
 // AST-level body substitution. Walks `body_segments` and produces a
 // new ArrayValue with parameter references replaced by arg ASTs.
 // Substitution rule:
@@ -972,7 +986,7 @@ std::shared_ptr<ArrayValue> substitute_segments(
                                 for (const auto& is : segs->data())
                                     inner += spell(is);
                             }
-                            return "\"" + inner + "\"";
+                            return "\"" + stringify_escape(inner) + "\"";
                         }
                         return render_segment(s);
                     }
@@ -1330,11 +1344,13 @@ std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
             // already had parameter substitution applied at
             // substitute_segments time.
             if (type == "stringify") {
-                out += '"';
+                std::string inner_text;
                 if (auto inner = std::dynamic_pointer_cast<ArrayValue>(
                         dict_value_or_null(*d, "segments"))) {
-                    out += render_macro_body_segments(*inner);
+                    inner_text = render_macro_body_segments(*inner);
                 }
+                out += '"';
+                out += stringify_escape(inner_text);
                 out += '"';
                 continue;
             }
