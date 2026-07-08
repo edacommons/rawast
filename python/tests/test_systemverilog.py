@@ -148,6 +148,26 @@ def test_param_port_keyword_inheritance(sv_grammar):
         assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
 
 
+def test_empty_param_override_and_port_list(sv_grammar):
+    """An empty `#()` parameter list is legal SV — an explicit
+    "override nothing" both at instantiation (`picorv32 #() uut (...)`,
+    IEEE 1800 §23.3.2) and on a module declaration (`module m #() (...)`).
+    The binding/port lists were `repeat+` (one-or-more); now `repeat`.
+    Found via picorv32 torture/testbench.v + testbench_ez.v."""
+    for src in [
+        # instantiation with empty override — the corpus case
+        "module t; picorv32 #() uut (.clk(clk)); endmodule\n",
+        "module t; picorv32 #(\n) uut (\n.clk(clk)\n); endmodule\n",
+        # declaration with empty param-port list
+        "module m #() (input clk); endmodule\n",
+        # non-empty forms still work (regression guard)
+        "module t; picorv32 #(.W(1)) uut (.clk(clk)); endmodule\n",
+        "module m #(parameter W = 8) (input clk); endmodule\n",
+    ]:
+        r = sv_grammar.parse_string(src)
+        assert sv_grammar.parse_string(sv_grammar.save(r).decode()) == r
+
+
 def test_tf_port_shared_type_multi_name(sv_grammar):
     """Function/task ports sharing a type across comma-separated names —
     `function f(input [3:0] s1, s2, s3)` is three same-typed ports (IEEE

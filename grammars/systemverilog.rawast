@@ -230,9 +230,10 @@ MODULE_KEYWORD: choice {
 // `#(parameter A = 4, parameter B = 8)`. `localparam` may also appear
 // inside the port list for derived parameters that can't be
 // overridden by the instantiator. Each entry is `<PARAM_DECL_OR_LOCAL>`.
+// `repeat` (not `repeat+`): an empty `#()` param-port list is legal SV.
 PARAM_PORT_LIST: sequence dict {
   "#", "(" newline,
-  repeat+ <PARAM_DECL_OR_LOCAL>:params[]=@ indent tab separator "," newline,
+  repeat <PARAM_DECL_OR_LOCAL>:params[]=@ indent tab separator "," newline,
   "" newline, ")"
 }
 
@@ -1410,9 +1411,12 @@ MODULE_INSTANTIATION: sequence dict {
   ";"
 }
 
+// `repeat` (not `repeat+`): an empty `#()` override is legal SV — an
+// explicit "override nothing" (`picorv32 #() uut (...)`). Zero bindings
+// saves back as `#()`.
 PARAM_OVERRIDE: sequence dict {
   "#", "(",
-  repeat+ <PARAM_BINDING>:bindings[]=@ separator ",",
+  repeat <PARAM_BINDING>:bindings[]=@ separator ",",
   ")"
 }
 
