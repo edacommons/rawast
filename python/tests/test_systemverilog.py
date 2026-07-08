@@ -333,147 +333,17 @@ def test_module_with_comments(sv_grammar):
     assert r["descriptions"][0]["name"] == "r"
 
 
-# ─── Preprocessor — recognition only, no expansion ────────────────────
+# ─── Macros are a preprocessor concern, not an SV parse concern ───────
 
 
+# The SV parse grammar no longer tolerates un-expanded `\`MACRO` tokens in
+# any position (expression, number size, port/module/wire/instance name,
+# statement). They are fully expanded by the preprocessor (PP_FILE rule of
+# the merged grammar) before SV parse — a leftover `\`MACRO` reaching the
+# parser is an honest parse failure, not a silently-accepted token.
 # Preprocessor directives (`define / `undef / `include / `ifdef / `ifndef)
-# are no longer parsed by the SV grammar — they're handled by the
-# preprocessor (PP_FILE rule of the merged grammar) before SV parse.
-# Coverage for those lives in tests/test_preprocessor.cpp and
+# and macro expansion coverage live in tests/test_preprocessor.cpp and
 # python/tests/test_preprocessor.py.
-
-
-def test_macro_use_in_expression(sv_grammar):
-    """Bare `MACRO at expression position emits a macro_use AST
-    node — distinguished from numeric/identifier literals by the
-    `type: macro_use` discriminator. MACRO_HIER_REF wraps it as
-    `{type: macro_ref, macro: {type: macro_use, ...}}` so the
-    path/selector chain can extend after the macro name."""
-    src = "module m (output y); assign y = `WIDTH; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    cont = [i for i in r["descriptions"][0]["items"]
-            if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
-    # Unwrap precedence-passthrough layers
-    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
-        if rhs.get("tail"):
-            break
-        rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "macro_ref"
-    assert rhs["macro"]["type"] == "macro_use"
-    assert rhs["macro"]["name"] == "WIDTH"
-
-
-def test_macro_use_in_number_size(sv_grammar):
-    """`WIDTH'd42 is recognized as a based number whose size IS a
-    macro_use node. The token form (`MACRO immediately followed
-    by `'d42`) is unambiguous: NUMBER_PRIMARY is tried before
-    bare MACRO_USE in PRIMARY's Choice."""
-    src = "module m (output y); assign y = `WIDTH'd42; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    cont = [i for i in r["descriptions"][0]["items"]
-            if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
-    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
-        if rhs.get("tail"):
-            break
-        rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "based_num"
-    assert rhs["base"] == "d"
-    assert rhs["value"] == "42"
-    assert rhs["size"]["type"] == "macro_use"
-    assert rhs["size"]["name"] == "WIDTH"
-
-
-def test_macro_call_with_args(sv_grammar):
-    """Function-like macro call `MACRO(a, b) captures args as an
-    array of strings, with nested parens balanced via the
-    sv_balanced_arg parser."""
-    src = "module m (output y); assign y = `MAX(a, b); endmodule\n"
-    r = sv_grammar.parse_string(src)
-    cont = [i for i in r["descriptions"][0]["items"]
-            if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
-    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
-        if rhs.get("tail"):
-            break
-        rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "macro_ref"
-    assert rhs["macro"]["type"] == "macro_use"
-    assert rhs["macro"]["name"] == "MAX"
-    # MACRO_ARGS uses `ignore linespace`, so the leading space inside
-    # each arg is eaten by the outer policy before the per-arg scope
-    # starts. Args appear as their trimmed text.
-    assert rhs["macro"]["args"] == ["a", "b"]
-
-
-def test_macro_call_with_nested_parens(sv_grammar):
-    """Nested parens inside macro args are balanced by the
-    depth-tracking sv_balanced_arg parser: `FOO(g(a, b), c)
-    yields two args, not three."""
-    src = "module m (output y); assign y = `FOO(g(a, b), c); endmodule\n"
-    r = sv_grammar.parse_string(src)
-    cont = [i for i in r["descriptions"][0]["items"]
-            if i["type"] == "cont_assign"][0]
-    rhs = cont["assignments"][0]["rhs"]
-    while isinstance(rhs, dict) and set(rhs.keys()) <= {"lhs", "tail"}:
-        if rhs.get("tail"):
-            break
-        rhs = rhs.get("lhs", rhs)
-    assert rhs["type"] == "macro_ref"
-    assert rhs["macro"]["args"] == ["g(a, b)", "c"]
-
-
-def test_macro_use_as_module_name(sv_grammar):
-    """`module `MOD_NAME (...)` — IDENT_OR_MACRO wraps the name slot."""
-    src = "module `MOD_NAME (input a, output y); endmodule\n"
-    r = sv_grammar.parse_string(src)
-    m = r["descriptions"][0]
-    assert m["name"]["type"] == "macro_use"
-    assert m["name"]["name"] == "MOD_NAME"
-
-
-def test_macro_use_as_port_name(sv_grammar):
-    src = "module m (input `CLK_NAME, output y); endmodule\n"
-    r = sv_grammar.parse_string(src)
-    port0 = r["descriptions"][0]["ports"]["ports"][0]
-    assert port0["name"]["type"] == "macro_use"
-    assert port0["name"]["name"] == "CLK_NAME"
-
-
-def test_macro_use_as_wire_name(sv_grammar):
-    src = "module m; wire `SIG_NAME; endmodule\n"
-    r = sv_grammar.parse_string(src)
-    net = [i for i in r["descriptions"][0]["items"]
-           if i["type"] == "net_decl"][0]
-    assert net["names"][0]["name"]["type"] == "macro_use"
-    assert net["names"][0]["name"]["name"] == "SIG_NAME"
-
-
-def test_macro_use_as_instance_name(sv_grammar):
-    """Both the module type and the instance name can be macros."""
-    src = "module m; `MOD_TYPE `U0(.clk(clk)); endmodule\n"
-    r = sv_grammar.parse_string(src)
-    inst = [i for i in r["descriptions"][0]["items"]
-            if i["type"] == "instance"][0]
-    assert inst["module_name"]["type"] == "macro_use"
-    assert inst["module_name"]["name"] == "MOD_TYPE"
-    assert inst["instances"][0]["name"]["type"] == "macro_use"
-    assert inst["instances"][0]["name"]["name"] == "U0"
-
-
-def test_macro_statement(sv_grammar):
-    """A bare `MACRO; at statement position parses as a macro_stmt,
-    consuming the optional trailing semicolon. Useful for assertion
-    macros: `ASSERT_CLOCKED(clk, req, gnt); etc."""
-    src = "module m (input clk); always @(*) `MY_ASSERT(clk);\nendmodule\n"
-    r = sv_grammar.parse_string(src)
-    always = [i for i in r["descriptions"][0]["items"]
-              if i["type"] == "always"][0]
-    body = always["body"]
-    assert body["type"] == "macro_stmt"
-    assert body["macro"]["type"] == "macro_use"
-    assert body["macro"]["name"] == "MY_ASSERT"
 
 
 def test_save_produces_output(sv_grammar):
@@ -511,12 +381,6 @@ def test_save_produces_output(sv_grammar):
         "module m; parameter W = 8; endmodule\n",
         "module m; localparam X = 1; endmodule\n",
         "module m; counter u0(.clk(clk), .q(q)); endmodule\n",
-        # macro use in various positions (inline `\`MACRO` references
-        # the SV grammar still recognizes via MACRO_USE — these aren't
-        # full preprocessor directives, just identifier-shaped tokens)
-        "module m (output y); assign y = `WIDTH; endmodule\n",
-        "module m (output y); assign y = `WIDTH'd42; endmodule\n",
-        "module m (output y); assign y = `MAX(a, b); endmodule\n",
     ]
     failures = []
     for src in sources:
@@ -1196,23 +1060,29 @@ endmodule
 
 
 def test_define_then_module_use(sv_grammar):
-    """Real-world common case: a module that uses a macro in a port
-    range and an assignment. The `\`define` directive used to live at
-    top level here; it now belongs in the preprocessor pipeline.
-    What the SV grammar still has to handle is the inline
-    `\`MACRO`/`\`MACRO()` references inside expressions."""
+    r"""Real-world common case: a module that uses a macro in a port
+    range and an assignment. Macros are a preprocessor concern — the
+    `\`define` is expanded first, and the SV grammar only ever sees the
+    fully-expanded module (no `\`WIDTH` token survives to parse)."""
     src = (
+        "`define WIDTH 8\n"
         "module m (output [`WIDTH-1:0] y);\n"
         "  assign y = `WIDTH;\n"
         "endmodule\n"
     )
-    r = sv_grammar.parse_string(src)
+    pp = rawast.Preprocessor(sv_grammar, predefined="", include_paths=[],
+                             on_undefined="leave")
+    expanded = pp.process(src)
+    expanded = (expanded.decode("utf-8")
+                if isinstance(expanded, (bytes, bytearray)) else expanded)
+    assert "`WIDTH" not in expanded and "8" in expanded
+    r = sv_grammar.parse_string(expanded)
     d0 = r["descriptions"][0]
     assert d0["type"] == "module"
     port = d0["ports"]["ports"][0]
     range_msb_str = str(port["range"])
-    assert "macro_use" in range_msb_str
-    assert "WIDTH" in range_msb_str
+    assert "macro_use" not in range_msb_str
+    assert "8" in range_msb_str
 
 
 # ─── Save pretty-print: word-token spacing round-trip ───────────────────
@@ -2312,16 +2182,16 @@ def test_sv_const_ref_direction_spacing_saves(sv_grammar):
 
 
 def test_sv_keywords_never_parse_as_module_names(sv_grammar):
-    """`begin \`A(x,clk); end` must stay a generate/gen block on reparse —
+    """A `begin … end` generate block must stay a gen_block on reparse —
     without a keyword guard MODULE_INSTANTIATION accepted `begin`/`end` as
-    module names, flipping a saved macro-in-generate-if into an instance of
-    a module literally named `begin`. Found via the broad SV round-trip
-    sweep (ibex_icache_ram_if.sv)."""
+    module names, flipping a saved generate-if into an instance of a module
+    literally named `begin`. Found via the broad SV round-trip sweep
+    (ibex_icache_ram_if.sv)."""
     src = ("interface i;\n"
            "if (X) begin\n"
-           "  `A(x, clk)\n"
+           "  foo u(x, clk);\n"
            "end\n"
-           "`B(y, clk)\n"
+           "bar v(y, clk);\n"
            "endinterface\n")
     a = sv_grammar.parse_string(src)
     out = sv_grammar.save(a).decode("utf-8")

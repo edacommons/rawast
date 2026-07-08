@@ -34,13 +34,19 @@ def find_uvm():
     return None
 
 
+# Full macro config: the SV grammar no longer tolerates un-expanded `\`MACRO`
+# tokens (they belong to the preprocessor), so the harness must define
+# everything a real Ibex build supplies. `prim_assert.sv` defines `\`ASSERT`
+# etc.; `dv_fcov_macros.svh` defines `\`DV_FCOV_SIGNAL`; and the *_ADDR /
+# BOOT_ADDR macros are build-config `+define+`s given representative bare-hex
+# values (they appear inside literals, e.g. `32'h\`BOOT_ADDR`).
 EXPAND_PREDEF = ('`include "uvm_macros.svh"\n`include "dv_macros.svh"\n'
-                 # prim_assert.sv's ifdef guards pick the standard macros in a
-                 # normal (non-synthesis/non-yosys) build — include them
-                 # directly so `ASSERT(...)` expands to real assert property
-                 # instead of an opaque, undefined macro-use.
-                 '`include "prim_assert_standard_macros.svh"\n'
-                 '`define __FILE__ "f"\n`define __LINE__ 0\n')
+                 '`include "prim_assert.sv"\n`include "dv_fcov_macros.svh"\n'
+                 '`define __FILE__ "f"\n`define __LINE__ 0\n'
+                 '`define BOOT_ADDR 80000000\n`define DM_ADDR 1a110000\n'
+                 '`define DM_ADDR_MASK fffff000\n'
+                 '`define DEBUG_MODE_HALT_ADDR 800\n'
+                 '`define DEBUG_MODE_EXCEPTION_ADDR 808\n')
 
 # One merged grammar: the Preprocessor enters at PP_FILE; SV parse uses the
 # default start. No separate preprocessor grammar.
