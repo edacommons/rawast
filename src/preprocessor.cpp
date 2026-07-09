@@ -1063,6 +1063,27 @@ std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
     }
     const auto& macro = it->second;
 
+    // Object-like macros take NO arguments: a `(...)` after the name is
+    // following TEXT, not an argument list (the grammar captured it as
+    // args syntactically, but only the table knows the macro is
+    // object-like — LRM §22.5.1). Expand the body, then re-emit the
+    // parens as text: `\`W(3)` with `\`define W 8` → `8(3)`, not `8`.
+    if (!macro.is_function_like && !args.empty()) {
+        state_.active_expansions.insert(name);
+        ++state_.current_depth;
+        std::string body = render_macro_body_segments(
+            *substitute_segments(*macro.body_segments, {}, {}));
+        --state_.current_depth;
+        state_.active_expansions.erase(name);
+        body += "(";
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            if (i) body += ",";
+            body += render_segment(args[i]);
+        }
+        body += ")";
+        return body;
+    }
+
     auto args_filled = args;
     if (macro.is_function_like
             && macro.params.size() != args_filled.size()) {
