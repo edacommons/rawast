@@ -154,7 +154,8 @@ std::uint32_t Preprocessor::record_span(std::uint32_t parent_id,
                                        std::size_t parent_offset,
                                        std::size_t length,
                                        std::size_t out_offset,
-                                       std::string name) {
+                                       std::string name,
+                                       bool collapse) {
     Span s;
     s.id = static_cast<std::uint32_t>(state_.spans.size());
     s.parent_id = parent_id;
@@ -162,6 +163,7 @@ std::uint32_t Preprocessor::record_span(std::uint32_t parent_id,
     s.length = length;
     s.out_offset = out_offset;
     s.name = std::move(name);
+    s.collapse = collapse;
     state_.spans.push_back(s);
     return s.id;
 }
@@ -192,9 +194,13 @@ Preprocessor::stack_at(std::size_t out_offset) const {
         frames.push_back({cur->name, cur_offset});
         if (cur->parent_id == Span::NoParent) break;
         if (cur->parent_id >= state_.spans.size()) break;
-        // The byte at `cur_offset` within `cur` maps to
-        // `cur->parent_offset + cur_offset` within the parent.
-        cur_offset = cur->parent_offset + cur_offset;
+        // The byte at `cur_offset` within `cur` maps into the parent.
+        // Normally linearly (`parent_offset + cur_offset`); for a
+        // collapse span (a macro expansion) every byte maps to the
+        // single use-site position `parent_offset`, so an error deep
+        // in the expansion points at the use site, not drifted past it.
+        cur_offset = cur->collapse ? cur->parent_offset
+                                   : cur->parent_offset + cur_offset;
         cur = &state_.spans[cur->parent_id];
     }
     return frames;
@@ -818,9 +824,9 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
                  std::to_string(macro.params.size()) +
                  " args, got " + std::to_string(args_ast.size()),
                  state_.current_file, state_.current_line});
-            substituted = substitute_segments(*macro.body_segments, {}, {});
+            substituted = substitute_segments(segments_of(macro), {}, {});
         } else {
-            substituted = substitute_segments(*macro.body_segments,
+            substituted = substitute_segments(segments_of(macro),
                                               macro.params, args_ast);
         }
 
@@ -839,12 +845,42 @@ std::string Preprocessor::expand_recursive(const std::string& text) {
 namespace { std::string render_segment(const ValuePtr& seg); }
 
 std::string MacroDef::body_text() const {
+    // Grammar macros defer segmentation, so before first expansion
+    // `body_segments` is null — the raw body IS the flat text. Once
+    // segmented, render the bare text runs (typed segments skipped),
+    // preserving the prior contract for callers that see a cached body.
+    if (!body_segments) return body_raw;
     std::string out;
-    if (!body_segments) return out;
     for (const auto& seg : body_segments->data()) {
         out += render_segment(seg);
     }
     return out;
+}
+
+std::shared_ptr<ArrayValue> Preprocessor::segment_body(
+        const std::string& raw) const {
+    NodeId mb = pp_grammar_.rule_id("MACRO_BODY");
+    if (!mb.valid()) return std::make_shared<ArrayValue>();
+    // MACRO_BODY's scope stops at a `\n`; append one as the sentinel so
+    // the stored (newline-free) body always terminates.
+    auto stream = Stream::from_string(raw + "\n");
+    StreamReader& sr = stream.reader();
+    ValuePool pool;
+    auto r = pp_grammar_.parse_from(sr, pool, mb, /*require_full=*/false,
+                                    nullptr);
+    if (r) {
+        if (auto d = std::dynamic_pointer_cast<DictValue>(*r)) {
+            if (auto it = d->data().find("segments"); it != d->data().end()) {
+                if (auto arr = as_array(it->second)) return arr;
+            }
+        }
+    }
+    return std::make_shared<ArrayValue>();
+}
+
+const ArrayValue& Preprocessor::segments_of(const MacroDef& m) const {
+    if (!m.body_segments) m.body_segments = segment_body(m.body_raw);
+    return *m.body_segments;
 }
 
 std::string Preprocessor::render_macro_body_segments(const ArrayValue& segs) {
@@ -1078,7 +1114,7 @@ std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
         state_.active_expansions.insert(name);
         ++state_.current_depth;
         std::string body = render_macro_body_segments(
-            *substitute_segments(*macro.body_segments, {}, {}));
+            *substitute_segments(segments_of(macro), {}, {}));
         --state_.current_depth;
         state_.active_expansions.erase(name);
         body += "(";
@@ -1108,9 +1144,9 @@ std::string Preprocessor::render_macro_use_inline(const DictValue& d) {
              std::to_string(macro.params.size()) +
              " args, got " + std::to_string(args_filled.size()),
              state_.current_file, state_.current_line});
-        substituted = substitute_segments(*macro.body_segments, {}, {});
+        substituted = substitute_segments(segments_of(macro), {}, {});
     } else {
-        substituted = substitute_segments(*macro.body_segments,
+        substituted = substitute_segments(segments_of(macro),
                                           macro.params, args_filled);
     }
 
@@ -1352,7 +1388,17 @@ void Preprocessor::handle_define(const DictValue& d) {
                 // captured text (notably a nested call's multi-line args).
                 rewritten->data().push_back(strip_deep(seg));
             }
-            m.body_segments = rewritten;
+            // `rewritten` is now text runs + null LINE_CONT markers
+            // (DEFINE_BODY is LINE_CONT-only — no typed segments at
+            // define time). Join the text (nulls drop, matching the
+            // render path's continuation fusion) into the raw body.
+            // Interior segmentation is deferred to first expansion via
+            // segments_of(); a defined-but-unused macro never pays it.
+            std::string body_raw;
+            for (const auto& seg : rewritten->data()) {
+                if (auto vs = as_string(seg)) body_raw += vs->data();
+            }
+            m.body_raw = std::move(body_raw);
             state_.macros[m.name] = std::move(m);
             return;
         }
@@ -1647,7 +1693,7 @@ void Preprocessor::scan_stream(const std::string& text, std::string& out,
     auto emit_expansion = [&](const std::string& exp, std::size_t use_off) {
         if (exp.empty()) return;
         record_span(parent_span, use_off, exp.size(), out.size(),
-                    "macro expansion");
+                    "macro expansion", /*collapse=*/true);
         out += exp;
     };
 

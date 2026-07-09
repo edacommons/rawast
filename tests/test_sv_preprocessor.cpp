@@ -125,6 +125,30 @@ std::shared_ptr<ArrayValue> body_of(const ValuePtr& ast) {
     return std::dynamic_pointer_cast<ArrayValue>(it->second);
 }
 
+// DEFINE_BODY now captures the body raw (text runs + null LINE_CONT
+// markers) and defers segmentation to first expansion, which parses the
+// body through the MACRO_BODY rule. These shape tests exercise that same
+// segmenter: reconstruct the raw body text and run MACRO_BODY over it
+// (with the trailing `\n` sentinel MACRO_BODY's scope stops on), and
+// return the resulting `segments` array — the shape the tests assert on.
+std::shared_ptr<ArrayValue> body_segments_of(Grammar& g, const ValuePtr& ast) {
+    auto raw = body_of(ast);
+    REQUIRE(raw);
+    std::string text;
+    for (auto& seg : raw->data())
+        if (auto s = as_string(seg)) text += s->data();
+    auto stream = Stream::from_string(text + "\n");
+    ValuePool pool;
+    auto r = g.parse_from(stream, pool, g.rule_id("MACRO_BODY"),
+                          /*require_full_consume=*/false);
+    REQUIRE_MESSAGE(r, "MACRO_BODY parse failed for body '" << text << "'");
+    auto d = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(d);
+    auto it = d->data().find("segments");
+    REQUIRE(it != d->data().end());
+    return std::dynamic_pointer_cast<ArrayValue>(it->second);
+}
+
 } // namespace
 
 // ─── Top-level shape ──────────────────────────────────────────────
@@ -134,7 +158,7 @@ TEST_CASE("sv_pp define: empty body → {type:'define', name, body:[]}") {
     auto ast = parse(g, "`define FOO\n");
     CHECK(str_field(ast, "type") == "define");
     CHECK(name_of(ast) == "FOO");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     CHECK(body->data().empty());
 }
@@ -143,7 +167,7 @@ TEST_CASE("sv_pp define: simple text body → one StringValue segment") {
     auto g = load_grammar();
     auto ast = parse(g, "`define FOO bar\n");
     CHECK(name_of(ast) == "FOO");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     // PARAM_REF picks up the identifier `bar` as a typed segment.
     REQUIRE(body->data().size() == 1);
@@ -156,7 +180,7 @@ TEST_CASE("sv_pp define: simple text body → one StringValue segment") {
 TEST_CASE("sv_pp define: param-like identifier followed by text") {
     auto g = load_grammar();
     auto ast = parse(g, "`define FOO x + 1\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     // Layout: {ref:x}, " + 1"   — text gap after PARAM_REF coalesces
     REQUIRE(body->data().size() == 2);
@@ -172,7 +196,7 @@ TEST_CASE("sv_pp define: param-like identifier followed by text") {
 TEST_CASE("sv_pp define: string literal inside body is atomic") {
     auto g = load_grammar();
     auto ast = parse(g, "`define MSG \"hello world\"\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(body->data().size() == 1);
     auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -184,7 +208,7 @@ TEST_CASE("sv_pp define: string literal inside body is atomic") {
 TEST_CASE("sv_pp define: macro_use inside body emits typed segment") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `B\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(body->data().size() == 1);
     auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -196,7 +220,7 @@ TEST_CASE("sv_pp define: macro_use inside body emits typed segment") {
 TEST_CASE("sv_pp define: mixed body — ref + text + string + macro_use") {
     auto g = load_grammar();
     auto ast = parse(g, "`define COMBO x = \"v\" + `OTHER\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     // Layout: {ref:x}, " = ", {string:"v"}, " + ", {macro_use:OTHER}
     REQUIRE(body->data().size() == 5);
@@ -263,7 +287,7 @@ TEST_CASE("sv_pp define: macro with one parameter") {
     // so a `= default_text` clause can hang off the same node.
     auto p0 = std::dynamic_pointer_cast<DictValue>(params->data()[0]);
     REQUIRE(p0); CHECK(str_field(p0, "name") == "x");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(body->data().size() == 1);
     auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -335,7 +359,7 @@ TEST_CASE("sv_pp define: macro with no parameter list when `(` not adjacent") {
     CHECK(name_of(ast) == "FOO");
     // No `params` field expected (PARAMS optional was skipped).
     CHECK_FALSE(has_params(ast));
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     // Body has the `(x) y` content.
     bool found_paren = false;
@@ -366,7 +390,7 @@ TEST_CASE("sv_pp define: macro with multiple parameters round-trips") {
 TEST_CASE("sv_pp define: body MACRO_USE with one argument") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(x)\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(body->data().size() == 1);
     auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -382,7 +406,7 @@ TEST_CASE("sv_pp define: body MACRO_USE with one argument") {
 TEST_CASE("sv_pp define: body MACRO_USE with multiple arguments") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(x,y,z)\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(body->data().size() == 1);
     auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -404,7 +428,7 @@ TEST_CASE("sv_pp define: body MACRO_USE does NOT bind space-separated args at pa
     // content. The expander binds it at expansion time when NAME is known
     // function-like (see the process() test below).
     auto ast = parse(g, "`define A `OTHER (x)\n");
-    auto body = body_of(ast);
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(body->data().size() >= 1);
     auto seg0 = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -467,8 +491,8 @@ TEST_CASE("scan driver: plain text passes through verbatim") {
 // Helper: pull the args array out of a body whose first segment is a
 // macro_use dict.
 namespace {
-std::shared_ptr<ArrayValue> macro_use_args(const ValuePtr& ast) {
-    auto body = body_of(ast);
+std::shared_ptr<ArrayValue> macro_use_args(Grammar& g, const ValuePtr& ast) {
+    auto body = body_segments_of(g, ast);
     REQUIRE(body);
     REQUIRE(!body->data().empty());
     auto seg = std::dynamic_pointer_cast<DictValue>(body->data()[0]);
@@ -485,7 +509,7 @@ std::shared_ptr<ArrayValue> macro_use_args(const ValuePtr& ast) {
 TEST_CASE("sv_pp MACRO_ARGS: numeric literal args") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(5, 10)\n");
-    auto args = macro_use_args(ast);
+    auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
     CHECK(as_string(args->data()[0])->data() == "5");
     CHECK(as_string(args->data()[1])->data() == "10");
@@ -494,7 +518,7 @@ TEST_CASE("sv_pp MACRO_ARGS: numeric literal args") {
 TEST_CASE("sv_pp MACRO_ARGS: string literal arg") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(\"hello, world\")\n");
-    auto args = macro_use_args(ast);
+    auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 1);
     // The arg span captures the string literal verbatim; the embedded
     // `,` inside the quotes does NOT split the args list (sv_balanced_arg
@@ -505,7 +529,7 @@ TEST_CASE("sv_pp MACRO_ARGS: string literal arg") {
 TEST_CASE("sv_pp MACRO_ARGS: expression arg with operators") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(a + 1, b * 2)\n");
-    auto args = macro_use_args(ast);
+    auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
     CHECK(as_string(args->data()[0])->data() == "a + 1");
     CHECK(as_string(args->data()[1])->data() == "b * 2");
@@ -514,7 +538,7 @@ TEST_CASE("sv_pp MACRO_ARGS: expression arg with operators") {
 TEST_CASE("sv_pp MACRO_ARGS: nested parens — `,` inside `()` doesn't split") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER((a, b), c)\n");
-    auto args = macro_use_args(ast);
+    auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
     CHECK(as_string(args->data()[0])->data() == "(a, b)");
     CHECK(as_string(args->data()[1])->data() == "c");
@@ -523,7 +547,7 @@ TEST_CASE("sv_pp MACRO_ARGS: nested parens — `,` inside `()` doesn't split") {
 TEST_CASE("sv_pp MACRO_ARGS: nested function call arg") {
     auto g = load_grammar();
     auto ast = parse(g, "`define A `OTHER(foo(1, 2), 3)\n");
-    auto args = macro_use_args(ast);
+    auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
     CHECK(as_string(args->data()[0])->data() == "foo(1, 2)");
     CHECK(as_string(args->data()[1])->data() == "3");
@@ -1366,4 +1390,35 @@ TEST_CASE("Preprocessor: stack_at backtraces through an `\\`include`") {
     }
     CHECK(in_include);
     CHECK(in_root);
+}
+
+// A macro expansion's bytes have no per-byte source; an error anywhere
+// inside the expanded text should point at the `\`NAME` use site, not
+// drift linearly past it into following source. The expansion span is
+// `collapse`, so stack_at maps every byte in it to the single use-site
+// offset.
+TEST_CASE("Preprocessor: stack_at collapses a macro expansion to its use site") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    // Expansion (20 bytes) is far longer than the `\`LONG` token, so a
+    // linear map would overshoot the use site by up to 20 bytes.
+    std::string src = "`define LONG averylongreplacement\n`LONG x;\n";
+    auto out = pp.process(src);
+    auto e = out.find("averylongreplacement");
+    REQUIRE(e != std::string::npos);
+    auto deep = e + 15;                         // 15 bytes into the expansion
+    auto use = src.find("`LONG");               // the use site in source
+    REQUIRE(use != std::string::npos);
+    auto frames = pp.stack_at(deep);
+    REQUIRE(!frames.empty());
+    // The source-file frame must land EXACTLY on the use site — not
+    // `use + 15` (the pre-collapse linear drift).
+    bool checked = false;
+    for (const auto& f : frames) {
+        if (f.where == "<input>") {
+            CHECK(f.offset == use);
+            checked = true;
+        }
+    }
+    CHECK(checked);
 }

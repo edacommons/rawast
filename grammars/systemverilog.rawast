@@ -4793,8 +4793,26 @@ PP_DEFINE: sequence dict {
 // `linespace` is kept so MACRO_USE inside a body still matches
 // `\`OTHER (x)` (LRM §22.5.1 allows whitespace between macro name
 // and the opening `(` at the use site).
+// Define-time: bound the body only. `LINE_CONT` keeps `\`-newline
+// continuations from tripping the terminating `\n`; everything else is
+// captured raw. The interior substitution points (macro uses, params,
+// paste, stringify) are NOT segmented here — that's deferred to first
+// expansion via MACRO_BODY, so a macro that's defined-but-never-used
+// never pays for segmenting its body.
 DEFINE_BODY ignore linespace: scope array {
-  <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>, <LINE_CONT>
+  <LINE_CONT>
+}
+
+// Expansion-time: segment a stored (continuation-joined, comment-
+// stripped) body string into substitution points. Invoked on demand
+// by Preprocessor::segments_of() via parse_from over `body_raw + "\n"`
+// — the trailing `\n` is the scope's stop literal. No `LINE_CONT`
+// INNER: the stored body is already line-joined, so none remain.
+MACRO_BODY ignore linespace: sequence dict {
+  scope array {
+    <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
+  }:segments=@,
+  "\n"
 }
 
 // `\`\`` — token paste operator (IEEE 1800-2017 §22.5.1). Adjacent

@@ -82,7 +82,19 @@ struct MacroParam {
 struct MacroDef {
     std::string name;
     std::vector<MacroParam> params;
-    std::shared_ptr<ArrayValue> body_segments;
+
+    // The macro body as a raw string — continuation-joined and
+    // comment-stripped, but NOT segmented. This is what's stored at
+    // definition time. Interior substitution points are computed
+    // lazily from this on first expansion (see below).
+    std::string body_raw;
+
+    // Lazily-computed segmentation of `body_raw` (macro uses, param
+    // refs, paste, stringify). Null until the macro is first expanded;
+    // filled + cached by Preprocessor::segments_of(). `mutable` because
+    // it's a pure cache — segmenting a body doesn't change the macro.
+    // Legacy (non-grammar) define paths still fill it eagerly.
+    mutable std::shared_ptr<ArrayValue> body_segments;
     bool is_function_like = false;
 
     // Convenience: text representation of the body's flat text
@@ -134,6 +146,14 @@ struct Span {
     std::size_t   length        = 0;
     std::size_t   out_offset    = NoOutput; // byte in preprocessed output (or NoOutput)
     std::string   name;                     // "original.sv", "macro UVM_INFO body", etc.
+
+    // When true, every byte in this span maps to the SINGLE parent
+    // position `parent_offset` — not `parent_offset + offset_within`.
+    // Set for macro expansions: the expanded bytes have no per-byte
+    // source correspondence, so any error inside the expansion should
+    // point at the use site (`\`NAME` used here), C-preprocessor style,
+    // rather than drifting linearly past it into following source.
+    bool          collapse      = false;
 };
 
 // One layer in a source-provenance stack. `where` is the span's
@@ -492,6 +512,16 @@ private:
     void handle_define(const class DictValue& d);
     void handle_undef(const class DictValue& d);
 
+    // Segment a raw macro body string into substitution points by
+    // re-parsing it through the grammar's MACRO_BODY rule (over
+    // `raw + "\n"`, the sentinel stop). Pure function of the text.
+    std::shared_ptr<ArrayValue> segment_body(const std::string& raw) const;
+
+    // Return `m`'s body segments, computing + caching them on first
+    // call (lazy). Legacy macros that pre-fill `body_segments` skip the
+    // parse. This is the single access point the expansion path uses.
+    const class ArrayValue& segments_of(const MacroDef& m) const;
+
     // Expand a `\`MACRO` use whose AST sits inside a substituted
     // macro body — no source-mapped cursor or span tracking, just
     // produce the text the use site would emit. Used by
@@ -538,7 +568,8 @@ private:
                               std::size_t parent_offset,
                               std::size_t length,
                               std::size_t out_offset,
-                              std::string name);
+                              std::string name,
+                              bool collapse = false);
 
     const Grammar&    pp_grammar_;
     PpOptions         opts_;

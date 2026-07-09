@@ -285,16 +285,11 @@ ValuePtr Preprocessor::eval_cond_default(const ValuePtr& cond) {
             if (auto m = get_macro(name)) {
                 // The resolver needs a string view of the body (the
                 // default expr-eval parses it as an int in arithmetic
-                // context). Render the segments back to text — no
-                // expansion, just leaf representation.
-                if (!m->body_segments) return std::nullopt;
-                std::string s;
-                for (auto& seg : m->body_segments->data()) {
-                    if (auto sv = std::dynamic_pointer_cast<StringValue>(seg)) {
-                        s += sv->data();
-                    }
-                }
-                return s;
+                // context). body_text() returns the raw body when the
+                // macro hasn't been segmented yet (the usual case for a
+                // macro referenced in a `\`if` before any expansion) and
+                // the rendered leaf text once it has.
+                return m->body_text();
             }
             return std::nullopt;
         };
