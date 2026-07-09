@@ -137,8 +137,14 @@ std::string Preprocessor::process(const std::string& text) {
     // constructs — pass text through unchanged.
     if (!pp_grammar_.top().valid()) return text;
     state_.spans.clear();
+    // Root provenance span: the whole input file. Source-structure only
+    // (no output offset); emitted runs become its descendants so `stack_at`
+    // can walk output → source.
+    std::uint32_t root = record_span(
+        Span::NoParent, /*parent_offset=*/0, text.size(), Span::NoOutput,
+        state_.current_file.empty() ? "<input>" : state_.current_file);
     std::string out;
-    scan_stream(text, out);
+    scan_stream(text, out, root);
     return out;
 }
 // scan_stream / expand_macro_use are defined lower down, after the
@@ -1475,7 +1481,9 @@ void Preprocessor::handle_undef(const DictValue& d) {
     if (!name.empty()) state_.macros.erase(name);
 }
 
-void Preprocessor::handle_include(const DictValue& d, std::string& out) {
+void Preprocessor::handle_include(const DictValue& d, std::string& out,
+                                  std::uint32_t parent_span,
+                                  std::size_t use_offset) {
     auto path = dict_string_or_empty(d, "path");
     if (path.empty()) {
         state_.warnings.push_back(
@@ -1543,14 +1551,22 @@ void Preprocessor::handle_include(const DictValue& d, std::string& out) {
     state_.current_file = canonical;
     state_.current_line = 1;
 
+    // Child provenance span for the included file, parented to the
+    // `\`include` site in the including file. The recursive scan attaches
+    // the included file's runs beneath it, so an error inside the include
+    // backtraces: run → included file → `\`include` site → … → root.
+    std::uint32_t include_span = record_span(
+        parent_span, /*parent_offset=*/use_offset, include_text.size(),
+        Span::NoOutput, canonical);
+
     // Splice mode: recurse into the scan driver, appending the included
     // file's expansion to `out`. Side-effects-only mode still scans (so
     // macros / includes register) but discards the emitted bytes.
     if (opts_.splice) {
-        scan_stream(include_text, out);
+        scan_stream(include_text, out, include_span);
     } else {
         std::string discard;
-        scan_stream(include_text, discard);
+        scan_stream(include_text, discard, include_span);
     }
 
     state_.current_file = std::move(saved_file);
@@ -1610,9 +1626,30 @@ std::string Preprocessor::expand_macro_use(const DictValue& d) {
     return verbatim();
 }
 
-void Preprocessor::scan_stream(const std::string& text, std::string& out) {
+void Preprocessor::scan_stream(const std::string& text, std::string& out,
+                               std::uint32_t parent_span) {
     NodeId pc = pp_grammar_.rule_id("PP_CONSTRUCT");
     if (!pc.valid()) { out += text; return; }
+
+    // Emit a pass-through run [src_off, src_off+len) and record a mapping
+    // span: its output range maps linearly back to source, and its parent
+    // chain names the file (and any including file). Named "text" so the
+    // named file/include spans above it are distinguishable in stack_at.
+    auto emit_text = [&](std::size_t src_off, std::size_t len) {
+        if (!len) return;
+        record_span(parent_span, src_off, len, out.size(), "text");
+        out.append(text, src_off, len);
+    };
+    // Emit a macro expansion. Its bytes come from the macro body, not the
+    // source at the use site, so the whole run is attributed to the use
+    // site (`use_off`) — "error in expansion of `\`NAME` used here", the
+    // standard preprocessor diagnostic.
+    auto emit_expansion = [&](const std::string& exp, std::size_t use_off) {
+        if (exp.empty()) return;
+        record_span(parent_span, use_off, exp.size(), out.size(),
+                    "macro expansion");
+        out += exp;
+    };
 
     struct CondFrame {
         bool emitting;         // this branch active AND parent emitting
@@ -1700,7 +1737,7 @@ void Preprocessor::scan_stream(const std::string& text, std::string& out) {
                     if (emit) handle_undef(*dd);
                     skip_line_tail();
                 } else if (type == "include") {
-                    if (emit) handle_include(*dd, out);
+                    if (emit) handle_include(*dd, out, parent_span, i);
                     skip_line_tail();
                 } else if (type == "ifdef" || type == "ifndef") {
                     std::string cond = dict_string_or_empty(*dd, "cond");
@@ -1768,18 +1805,18 @@ void Preprocessor::scan_stream(const std::string& text, std::string& out) {
                                 for (auto& a : arglist)
                                     aa->data().push_back(make_string(a));
                                 with->data()["args"] = aa;
-                                out += expand_macro_use(*with);
+                                emit_expansion(expand_macro_use(*with), i);
                                 lifted = true;
                             }
                         }
-                        if (!lifted) out += expand_macro_use(*dd);
+                        if (!lifted) emit_expansion(expand_macro_use(*dd), i);
                     }
                 } else {
-                    if (emit) out.append(text, i, sr.position().bytes - i);
+                    if (emit) emit_text(i, sr.position().bytes - i);
                 }
             } else {
                 sr.reject();
-                if (emit) out.push_back('`');
+                if (emit) emit_text(i, 1);   // stray backtick, verbatim
                 sr.get();
             }
             continue;
@@ -1794,13 +1831,13 @@ void Preprocessor::scan_stream(const std::string& text, std::string& out) {
                 if (q == '\\' && !sr.eof()) { sr.get(); continue; }
                 if (q == '"') break;
             }
-            if (emit) out.append(text, start, sr.position().bytes - start);
+            if (emit) emit_text(start, sr.position().bytes - start);
             continue;
         }
         if (c == '/' && i + 1 < n && text[i + 1] == '/') {   // line comment
             std::size_t start = i;
             while (!sr.eof() && text[sr.position().bytes] != '\n') sr.get();
-            if (emit) out.append(text, start, sr.position().bytes - start);
+            if (emit) emit_text(start, sr.position().bytes - start);
             continue;
         }
         if (c == '/' && i + 1 < n && text[i + 1] == '*') {   // block comment
@@ -1813,12 +1850,23 @@ void Preprocessor::scan_stream(const std::string& text, std::string& out) {
                 }
                 sr.get();
             }
-            if (emit) out.append(text, start, sr.position().bytes - start);
+            if (emit) emit_text(start, sr.position().bytes - start);
             continue;
         }
 
-        sr.get();
-        if (emit) out.push_back(c);
+        // Plain-byte run — extend to the next special char and emit as ONE
+        // span (avoids a span per byte). A lone `/` (division) stays in the
+        // run; only `//` / `/*` break it.
+        std::size_t start = i;
+        while (!sr.eof()) {
+            std::size_t k = sr.position().bytes;
+            char cc = text[k];
+            if (cc == '`' || cc == '"') break;
+            if (cc == '/' && k + 1 < n
+                && (text[k + 1] == '/' || text[k + 1] == '*')) break;
+            sr.get();
+        }
+        if (emit) emit_text(start, sr.position().bytes - start);
     }
 }
 

@@ -1319,3 +1319,51 @@ TEST_CASE("Preprocessor::process output feeds a Stream that survives a move") {
     while (auto c = s2.reader().get()) drained.push_back(*c);
     CHECK(drained.find("7") != std::string::npos);
 }
+
+// ─── Provenance / source maps ─────────────────────────────────────────
+// The scan driver records emit-time spans so stack_at can map an output
+// offset back to its source origin — through includes. Regression guard:
+// the scan-driven rewrite once silently dropped every record_span call.
+
+TEST_CASE("Preprocessor: stack_at maps output offsets back to source") {
+    auto g = load_grammar();
+    Preprocessor pp(g);
+    std::string src = "`define W 8\nwire [`W-1:0] x = zork;\n";
+    auto out = pp.process(src);
+    auto z = out.find("zork");
+    REQUIRE(z != std::string::npos);
+    auto frames = pp.stack_at(z);
+    REQUIRE(!frames.empty());
+    // Some frame must land exactly on `zork` in the ORIGINAL source — the
+    // `\`W` expansion shifts offsets, so a raw output offset wouldn't.
+    bool mapped = false;
+    for (const auto& f : frames)
+        if (f.offset + 4 <= src.size() && src.compare(f.offset, 4, "zork") == 0)
+            mapped = true;
+    CHECK(mapped);
+}
+
+TEST_CASE("Preprocessor: stack_at backtraces through an `\\`include`") {
+    auto g = load_grammar();
+    PpOptions opts;
+    opts.splice = true;
+    opts.include_source = [](const std::string& req, const std::string&)
+        -> std::optional<PpIncludeSource> {
+        if (req == "hdr.svh")
+            return PpIncludeSource{"hdr.svh", "wire hdr_sig;\nBADTOK\n"};
+        return std::nullopt;
+    };
+    Preprocessor pp(g, std::move(opts));
+    auto out = pp.process("`include \"hdr.svh\"\nassign top = q;\n");
+    auto b = out.find("BADTOK");
+    REQUIRE(b != std::string::npos);
+    auto frames = pp.stack_at(b);
+    // The chain names the included file AND the including root — a backtrace.
+    bool in_include = false, in_root = false;
+    for (const auto& f : frames) {
+        if (f.where == "hdr.svh")  in_include = true;
+        if (f.where == "<input>")  in_root = true;
+    }
+    CHECK(in_include);
+    CHECK(in_root);
+}

@@ -474,7 +474,12 @@ private:
     // evaluated and macro uses expanded. A conditional emit/skip stack
     // (local to the call) gates output through `\`ifdef`/`\`else` chains.
     // `\`include` recurses into scan_stream on the included text.
-    void scan_stream(const std::string& text, std::string& out);
+    // `parent_span` is the provenance span that emitted regions attach to
+    // (the root file span, or an `\`include`d file's span). Every emitted
+    // run records a child span so `stack_at` can map an output offset back
+    // to its source origin — through includes and macro uses.
+    void scan_stream(const std::string& text, std::string& out,
+                     std::uint32_t parent_span);
 
     // Expand a single `\`NAME[(args)]` use at the top level: defined →
     // render its (recursively-expanded) body; undefined → apply the
@@ -508,7 +513,8 @@ private:
     // then include_paths, then the including file's dir), and, in splice
     // mode, recursively scan_stream the included text into `out`. Macro
     // and included-files state mutate regardless of splice.
-    void handle_include(const class DictValue& d, std::string& out);
+    void handle_include(const class DictValue& d, std::string& out,
+                        std::uint32_t parent_span, std::size_t use_offset);
 
     // Recursively expand inline `\`MACRO` / `\`MACRO(args)` references
     // within a body string, applying parameter substitution and
