@@ -140,6 +140,31 @@ These are dialect-specific sub-languages best handled by downstream passes; the 
 
 **"Structurally equivalent"** means `parse → save → reparse` yields the same value tree. The output bytes may differ from the input in whitespace, comment positions, or clause ordering where the grammar makes the form irrelevant. **"Byte-equivalent"** means the output bytes match the input exactly.
 
+## Preprocessor grammars — the driver contract
+
+The C++ `Preprocessor` (scan-driven; `src/preprocessor.cpp`) is **grammar-agnostic across the backtick / Verilog family**. It is coupled only to a small contract, not to `systemverilog.rawast` — any backtick-triggered grammar that satisfies it drives the same engine unchanged. (`systemverilog.rawast` is one such grammar; `tests/backtick_pp.rawast` is a second, minimal one that exists to prove the decoupling and guard it in CI.)
+
+The contract has three parts:
+
+**1. Two rule names (by convention):**
+
+| Rule | Role |
+|---|---|
+| `PP_CONSTRUCT` | The per-backtick construct entry — a `choice` of the directive / macro-use alternatives. The scan driver runs `parse_from(PP_CONSTRUCT)` at each `` ` ``. |
+| `MACRO_BODY` | Segments a stored raw macro body on first expansion. Shape: `sequence dict { scope array { … }:segments=@, "\n" }` — the trailing `"\n"` is the sentinel stop. |
+
+**2. A `:type="…"` role tag** on each construct, which the driver dispatches on. The vocabulary is **universal, not SV-specific**: `define`, `undef`, `include`, `ifdef`, `ifndef`, `pp_if`, `elsif`, `else`, `endif`, `macro_use` (plus body-segment tags `ref`, `string`, `macro_use`, `stringify`, `token_paste`). Dispatch keys on the role *value*, not the keyword spelling — the fixture uses `` `def `` (not `` `define ``) and still expands.
+
+**3. Value shapes** the driver reads:
+
+```
+define    → { type, decl:{ name, params:[{name, default?}] }, body:[raw text / LINE_CONT] }
+macro_use → { type:"macro_use", name, args?:[raw] }
+segments  → [ {type:"ref",value} | {type:"string",value} | {type:"macro_use",…} | raw text ]
+```
+
+What is **not** generic: the scan driver hardcodes the backtick trigger and the `"` / `//` / `/*` pass-through lexis. A `#`-directive, bare-identifier-macro shape (C/C++/M4) would need scan-model changes and is out of scope. See `tests/backtick_pp.rawast` for a complete worked example and `tests/test_preprocessor.cpp` (`generic driver: …`) for the regression that enforces this contract.
+
 ## Adding a new grammar
 
 Write a `.rawast` (DSL) or `.json` (data) file using the conventions in [`rawast-format.md`](rawast-format.md). Drop it in `grammars/`. Load it with `Grammar.load("grammars/myformat.rawast")` or address by short-name if you also stage a copy under `python/rawast/grammars/`.

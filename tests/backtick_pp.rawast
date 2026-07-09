@@ -1,0 +1,97 @@
+// Regression fixture — a SECOND backtick preprocessor grammar, distinct
+// from systemverilog.rawast, used to prove the C++ Preprocessor driver
+// is grammar-agnostic across the backtick/Verilog family. If someone
+// re-hardcodes an SV assumption into the scan driver, the test that
+// loads this file breaks.
+//
+// ─── The Preprocessor grammar contract (what the driver requires) ───
+// The driver (src/preprocessor.cpp) is coupled ONLY to this contract,
+// never to a specific grammar:
+//
+//   1. Rule names — two, by convention:
+//        PP_CONSTRUCT : the per-backtick construct entry (a `choice` of
+//                       the directive/macro-use alternatives). The scan
+//                       driver runs parse_from(PP_CONSTRUCT) at each `.
+//        MACRO_BODY   : segments a stored raw macro body on first
+//                       expansion. `sequence dict { scope array {...}
+//                       :segments=@, "\n" }` — the `\n` is the sentinel.
+//
+//   2. Role vocabulary — each construct carries a `:type="..."` tag the
+//        driver dispatches on. Values are UNIVERSAL, not SV-specific:
+//        define, undef, include, ifdef, ifndef, pp_if, elsif, else,
+//        endif, macro_use  (+ body-segment tags: ref, string, macro_use,
+//        stringify, token_paste). Dispatch keys on the ROLE VALUE, not
+//        the keyword spelling — this file uses `\`def`, not `\`define`,
+//        and still expands, proving that.
+//
+//   3. Value shapes the driver reads:
+//        define    -> { type, decl:{ name, params:[{name, default?}] },
+//                       body:[raw text/LINE_CONT] }
+//        macro_use -> { type:"macro_use", name, args?:[raw] }
+//        segments  -> [ {type:"ref",value} | {type:"string",value}
+//                       | {type:"macro_use",...} | raw text ]
+//
+// Any grammar satisfying the above drives the same engine unchanged.
+// Terminals are reused from the std + sv parser groups.
+use: std, sv
+start: <PP_CONSTRUCT>
+ignore: whitespace
+
+PP_CONSTRUCT ignore linespace line_comment: choice {
+  <PP_DEFINE>, <PP_UNDEF>, <PP_MACRO_USE>
+}
+
+PP_DEFINE: sequence dict {
+  "`def":type="define" space,
+  <DECL>:decl=@ space,
+  <DEFINE_BODY>:body=@,
+  "\n"
+}
+
+PP_UNDEF ignore linespace: sequence dict {
+  "`undef":type="undef" space,
+  identifier:name=@
+}
+
+// Define-time: bound the body only; segmentation is deferred to
+// MACRO_BODY at first expansion (same lazy shape as SV).
+DEFINE_BODY ignore linespace: scope array { <LINE_CONT> }
+
+MACRO_BODY ignore linespace: sequence dict {
+  scope array { <PP_MACRO_USE>, <STRING>, <PARAM_REF> }:segments=@,
+  "\n"
+}
+
+LINE_CONT ignore: sequence { "\\", "\n" }
+
+DECL ignore: sequence dict {
+  identifier:name=@,
+  ?<PARAMS>:params=@
+}
+
+PARAMS ignore linespace: sequence array {
+  "(", repeat <PARAM_FORMAL> separator ",", ")"
+}
+PARAM_FORMAL: sequence dict {
+  identifier:name=@,
+  ?<PARAM_FORMAL_DEFAULT>:default=@
+}
+PARAM_FORMAL_DEFAULT: sequence dict {
+  "=", sv_balanced_arg:value=@
+}
+
+PP_MACRO_USE ignore: sequence dict {
+  "`":type="macro_use",
+  identifier:name=@,
+  ?<MACRO_ARGS>:args=@
+}
+MACRO_ARGS ignore linespace: sequence array {
+  "(", repeat sv_balanced_arg separator ",", ")"
+}
+
+STRING: sequence dict {
+  std.string:type="string":value=@
+}
+PARAM_REF: sequence dict {
+  identifier:type="ref":value=@
+}

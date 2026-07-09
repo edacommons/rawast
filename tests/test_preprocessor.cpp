@@ -41,6 +41,20 @@ Grammar make_mini_preprocessor() {
     return g;
 }
 
+// A SECOND backtick preprocessor grammar (tests/backtick_pp.rawast),
+// distinct from systemverilog.rawast. Proves the scan driver is coupled
+// to the grammar CONTRACT (PP_CONSTRUCT + MACRO_BODY rule names, the
+// `type=` role vocabulary, the value shapes) — not to the SV grammar.
+Grammar make_backtick_pp() {
+    register_std_parser_group();
+    register_sv_parser_group();  // reuse the shared sv_* terminals
+    Grammar g;
+    auto r = load_rawast_grammar_from_file(g, "tests/backtick_pp.rawast");
+    REQUIRE_MESSAGE(r, "loading tests/backtick_pp.rawast failed: "
+                       << (r ? "" : r.error()));
+    return g;
+}
+
 } // namespace
 
 TEST_CASE("Preprocessor: default-constructed options carry the documented defaults") {
@@ -455,6 +469,33 @@ TEST_CASE("pp: expr_eval receives the raw condition text") {
     CHECK(out.find("BODY") != std::string::npos);
 }
 
+
+// ─── Grammar-agnostic driver: a non-SV backtick grammar drives it ───
+// If the scan driver ever re-hardcodes an SV assumption (a rule name,
+// a keyword, a value shape beyond the documented contract), these break.
+
+TEST_CASE("generic driver: a second backtick grammar drives the same Preprocessor") {
+    auto g = make_backtick_pp();
+
+    SUBCASE("object-like define + macro use (keyword is `def, not `define)") {
+        Preprocessor pp(g);
+        // Dispatch keys on type="define" (the ROLE), not the spelling.
+        CHECK(pp.process("`def FOO 1\nint x = `FOO;\n") == "int x = 1;\n");
+    }
+    SUBCASE("function-like define with arguments") {
+        Preprocessor pp(g);
+        CHECK(pp.process("`def ADD(a,b) (a+b)\ny = `ADD(2,3);\n") == "y = (2+3);\n");
+    }
+    SUBCASE("nested / recursive expansion") {
+        Preprocessor pp(g);
+        CHECK(pp.process("`def W hello\n`def MSG `W world\nm = `MSG;\n")
+              == "m = hello world;\n");
+    }
+    SUBCASE("undefined macro passes through (Leave)") {
+        Preprocessor pp(g);  // default on_undefined = Leave
+        CHECK(pp.process("y = `NOPE;\n") == "y = `NOPE;\n");
+    }
+}
 
 TEST_CASE("Preprocessor: enum round-trips") {
     CHECK(parse_pp_on_undefined("leave").value() == PpOnUndefined::Leave);
