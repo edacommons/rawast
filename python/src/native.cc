@@ -881,7 +881,12 @@ NB_MODULE(_rawast, m) {
                 d["name"] = m->name;
                 d["body"] = m->body_text();
                 nb::list params;
-                for (const auto& p : m->params) params.append(p);
+                for (const auto& p : m->params) {
+                    nb::dict pd;
+                    pd["name"] = p.name;
+                    pd["default"] = p.default_text;
+                    params.append(pd);
+                }
                 d["params"] = params;
                 d["is_function_like"] = m->is_function_like;
                 return d;
@@ -903,7 +908,12 @@ NB_MODULE(_rawast, m) {
                     d["name"] = m.name;
                     d["body"] = m.body_text();
                     nb::list params;
-                    for (const auto& p : m.params) params.append(p);
+                    for (const auto& p : m.params) {
+                        nb::dict pd;
+                        pd["name"] = p.name;
+                        pd["default"] = p.default_text;
+                        params.append(pd);
+                    }
                     d["params"] = params;
                     d["is_function_like"] = m.is_function_like;
                     out[nb::str(name.c_str())] = d;

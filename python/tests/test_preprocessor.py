@@ -12,6 +12,31 @@ def _expand(src: str) -> str:
     return out.decode("utf-8") if isinstance(out, (bytes, bytearray)) else out
 
 
+def test_get_macro_on_function_like_returns_params():
+    """get_macro() / .macros must expose a function-like macro's parameters
+    as data, not throw. Regression: the binding appended raw MacroParam
+    structs (no nanobind caster) so any macro WITH params raised
+    std::bad_cast; object-like macros happened to work only because the
+    params loop never ran."""
+    pp = rawast.Grammar("systemverilog")
+    p = rawast.Preprocessor(pp, on_undefined="leave")
+    p.process("`define FOO 1\n`define ADD(a, b) (a + b)\n")
+
+    foo = p.get_macro("FOO")
+    assert foo is not None
+    assert foo["is_function_like"] is False
+    assert foo["params"] == []
+
+    add = p.get_macro("ADD")
+    assert add is not None
+    assert add["is_function_like"] is True
+    assert [param["name"] for param in add["params"]] == ["a", "b"]
+
+    # the .macros property walks the same conversion — must not throw either
+    assert set(p.macros) == {"FOO", "ADD"}
+    assert [x["name"] for x in p.macros["ADD"]["params"]] == ["a", "b"]
+
+
 def test_line_continuation_in_nested_macro_call_args():
     r"""`\<newline>` line-continuations inside a NESTED macro call's argument
     list (within a macro body) must be joined, like top-level body
