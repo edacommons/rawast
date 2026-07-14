@@ -142,14 +142,14 @@ MAXVIASTACK_RANGE: sequence {
 // follows is what tells the engine where to stop scanning. Round-
 // trips byte-for-byte even when the inner content is in a vendor-
 // specific language the grammar doesn't model.
-BEGINEXT_BLOCK: sequence dict {
-  "BEGINEXT":type="BeginExt" space,
+// Empty ignore so `*:body` is VERBATIM (design (c): a `*` in an empty-
+// ignore rule trims nothing — the body keeps its exact leading/trailing
+// whitespace, required for byte-exact round-trip). The header whitespace
+// is consumed explicitly by `linespace` since the empty ignore skips
+// nothing. The body's first byte is the newline after the name.
+BEGINEXT_BLOCK ignore: sequence dict {
+  "BEGINEXT":type="BeginExt" space, linespace,
   string:name=@,
-  // The body's first byte is the newline after the name (since `*`
-  // bypasses the ignore-set and starts at whatever raw cursor
-  // position it inherits). No `newline` attr on the name above —
-  // otherwise save would emit a doubled `\n` that re-parse would
-  // capture as a leading newline in the body, breaking round-trip.
   *:body=@,
   "ENDEXT" newline
 }

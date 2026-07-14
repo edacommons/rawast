@@ -66,30 +66,11 @@ private:
     bool decimal_ = false;
 };
 
-// Consume one argument of a function-like macro call: bytes up to
-// the next top-level `,` or `)`, with nested `()` properly balanced.
-// `(a, foo(x, y), c)` yields three args: `a`, ` foo(x, y)`, ` c`.
-//
-// Depth-tracked in the parser itself (it counts `(`/`)`) rather than
-// expressed via grammar recursion. Grammar recursion would also
-// solve nesting, but only yields each arg as a tree of (text +
-// nested-paren) chunks the host has to flatten. The depth-tracking
-// scan returns each arg as a single string — simpler IR for the
-// most common host use case (textual macro expansion).
-//
-// Returns the matched arg text. Always succeeds — for an empty arg
-// (e.g. `MACRO()` or `MACRO(,)`), returns an empty string.
-//
-// Future generalization: a `text_until_delim` parser configurable
-// with stop/depth chars would cover macro args, brace-balanced
-// blocks, bracket-balanced array refs, etc. Saved for whenever a
-// second use case lands.
-class SvBalancedArgParser final : public Parser {
-public:
-    SvBalancedArgParser();
-    WalkResult walk(StreamReader& sr) override;
-    SaveResult  unparse(const Value& value) const override;
-};
+// NOTE: SvBalancedArgParser (`sv_balanced_arg`) was retired. Balanced
+// argument text — macro args, port lists, param defaults, type params,
+// assert bodies — is now captured by a grammar `scope` whose INNERs
+// (ARG_PARENS/BRACES/BRACKETS + std.string + line/block comment) declare
+// the lexical policy, rather than a hardcoded depth-tracking scanner.
 
 // Consume text until the closing `}` at OUTERMOST depth. Tracks
 // nesting of `{}`, `()`, AND `[]` so commas, semicolons, and

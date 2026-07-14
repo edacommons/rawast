@@ -173,6 +173,20 @@ public:
     std::string_view first_bytes() const override { return INC_CHAR("/"); }
 };
 
+// `// …` line comment that STOPS at a line-continuation `\<newline>` — it
+// consumes to end of line like line_comment, but if the line ends in a
+// `\` immediately before the newline, the comment ends BEFORE that `\`,
+// leaving `\<newline>` for a continuation rule to consume. This is the
+// macro-body rule: `\`define M // cmt \<newline> body` — the comment is
+// `// cmt`, and the macro CONTINUES to `body`. A bare `\` not before a
+// newline stays regular comment content.
+class LineCommentContParser final : public Parser {
+public:
+    LineCommentContParser();
+    WalkResult walk(StreamReader& sr) override;
+    std::string_view first_bytes() const override { return INC_CHAR("/"); }
+};
+
 // `/* ... */` block comment. Spans multiple lines. accum_ holds the full
 // comment text including the `/*` and `*/` delimiters; default value()
 // returns it as a StringValue.

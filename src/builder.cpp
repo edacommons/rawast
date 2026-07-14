@@ -60,6 +60,11 @@ SharedPtrBuilder::SharedPtrBuilder()
     levels_.push_back({Container::None, {}});   // root
 }
 
+void SharedPtrBuilder::reset() {
+    levels_.clear();                            // retains buffer capacity
+    levels_.push_back({Container::None, {}});   // root
+}
+
 void SharedPtrBuilder::push(ValuePtr v, bool is_name) {
     levels_.back().emitted.push_back({std::move(v), is_name});
 }

@@ -212,9 +212,9 @@ PARSE_EXPR: sequence { qualified_identifier:type=@ }
 //            VALUE_BIND for plain user fields.
 //
 // The `#name` namespace is reserved for engine directives. Currently
-// recognized: `#subparse` (re-parse hook), `#role` (preprocessor
-// semantic role), `#field` (override conventional field name).
-// Unknown `#name` annotations are rejected by the loader.
+// recognized: `#subparse` (re-parse hook), `#field` (override
+// conventional field name), `#opchain` (operator-chain compaction flag,
+// rule-level). Unknown `#name` annotations are rejected by the loader.
 
 BINDINGS: sequence array { repeat+ <BINDING> }
 
@@ -238,8 +238,8 @@ RESERVED_VALUE_BIND: sequence {
 
 // Optional value tail. Bare `:#name` (no `=value`) is a flag-style
 // annotation; the loader's per-annotation dispatch decides whether
-// each particular name requires a value (`#subparse`, `#role`,
-// `#field`) or is a pure flag (`#opchain`).
+// each particular name requires a value (`#subparse`, `#field`) or is
+// a pure flag (`#opchain`).
 RESERVED_VALUE_TAIL: sequence {
   "=",
   <BIND_VAL>:value=@

@@ -61,13 +61,21 @@ def measure(label, files, expand, show_fails=0):
         if uvm:
             inc.append(uvm)
         predef = EXPAND_PREDEF
+        # Cross-subtree include dirs a real ibex build puts on -I (cosim DPI,
+        # per-agent seq_lib, the `common` dir). With these every dv/uvm file
+        # resolves its `includes, so on_missing_include="error" is clean.
+        extra = ([BASE + "/dv/cosim"]
+                 + glob.glob(BASE + "/dv/uvm/**/seq_lib", recursive=True)
+                 + glob.glob(BASE + "/dv/uvm/**/common", recursive=True))
+        inc += [d for d in extra if os.path.isdir(d)]
     pok = rok = total = 0
     fails = []
     for f in files:
         total += 1
         try:
-            src = rawast.Preprocessor(sv, predefined=predef, include_paths=inc,
-                                      on_undefined="leave").process_file(f)
+            src = rawast.Preprocessor(
+                sv, predefined=predef, include_paths=inc,
+                on_undefined="leave").process_file(f)   # on_missing_include=error (default)
             a = sv.parse_string(src)
             pok += 1
         except Exception as e:  # noqa: BLE001

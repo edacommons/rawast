@@ -32,41 +32,40 @@ Frame::Frame(const Grammar& g, NodeId node_id) : node_id_(node_id) {
     is_backtrack_   = (kind_ == NodeKind::Choice) || n.backtrack;
     min_            = n.min;
 
-    // All children — including Value-kind — go into children_ for the
-    // driver to iterate. This preserves positional interleaving between
-    // Value-kind name markers and value-producing siblings within a
-    // dict-container Sequence (the .rawast `name=@` binding pattern).
-    for (NodeId child_id : n.children) {
-        children_.push_back(child_id);
-    }
+    // All children — including Value-kind — are iterated (via child_idx_),
+    // preserving positional interleaving between Value-kind name markers and
+    // value-producing siblings within a dict-container Sequence (the .rawast
+    // `name=@` binding pattern). Point at the node's list rather than copying
+    // it: children_ is a read-only 1:1 view and the Node outlives the Frame.
+    children_ = &n.children;
 
     // Repeat-with-separator: children_[0] is the separator. Start past it
     // so the first iteration matches an item, not a separator.
-    if (kind_ == NodeKind::Repeat && has_separator_ && !children_.empty()) {
+    if (kind_ == NodeKind::Repeat && has_separator_ && !children_->empty()) {
         child_idx_ = 1;
     }
 }
 
 bool Frame::has_current() const noexcept {
-    return child_idx_ < children_.size();
+    return child_idx_ < children_->size();
 }
 
 NodeId Frame::current_child() const {
     assert(has_current());
-    return children_[child_idx_];
+    return (*children_)[child_idx_];
 }
 
 bool Frame::step_next() {
-    if (child_idx_ < children_.size()) {
+    if (child_idx_ < children_->size()) {
         ++child_idx_;
     }
-    if (child_idx_ >= children_.size()) {
+    if (child_idx_ >= children_->size()) {
         if (kind_ == NodeKind::Repeat) {
             ++iter_count_;
             // Restart after a full pass. With a separator at children_[0]
             // it must be matched between iterations, so don't skip it.
             child_idx_ = 0;
-            return !children_.empty();
+            return !children_->empty();
         }
         return false;
     }

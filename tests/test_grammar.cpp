@@ -252,3 +252,59 @@ TEST_CASE("Value-kind nodes honour is_name in the catcher absorber") {
     CHECK(std::dynamic_pointer_cast<StringValue>(d->data().at("type"))->data() == "integer");
     CHECK(std::dynamic_pointer_cast<IntValue>(d->data().at("value"))->data() == 42);
 }
+
+// ─── #linenum / #filename engine bindings ────────────────────────────────
+// A grammar can re-sync the stream reader's line cursor on a
+// `\`line N "file" 0`-style directive with no host code: the reserved
+// bindings `#linenum` / `#filename` feed the parsed token values back
+// into the reader. Verifies the line-directive convention (the line
+// FOLLOWING the directive reads N) via a downstream parse-failure
+// position, and that the values also land as ordinary AST fields.
+namespace {
+Grammar make_linedir_grammar() {
+    register_std_parser_group();
+    Grammar g;
+    const char* src = R"RAW(
+use: std
+start: <TOP>
+TOP ignore whitespace: sequence dict {
+  <LINE_DIRECTIVE>:ld=@,
+  "END":@:type="end"
+}
+LINE_DIRECTIVE ignore linespace: sequence dict {
+  "`line":type="line" space,
+  std.int:#linenum=@ space,
+  std.string:#filename=@ space,
+  std.int:level=@
+}
+)RAW";
+    auto r = load_rawast_grammar_from_string(g, src);
+    REQUIRE_MESSAGE(r, r.error());
+    return g;
+}
+} // namespace
+
+TEST_CASE("#linenum re-syncs reader line; error after directive reports renumbered line") {
+    auto g = make_linedir_grammar();
+    // Line 1: the directive renumbering the next line to 100.
+    // Line 2 (physically): "XXX" — does not match "END", so parse fails.
+    // With the renumber, the failure position should read line 100.
+    auto stream = Stream::from_string("`line 100 \"f.sv\" 0\nXXX");
+    auto r = g.parse(stream);
+    REQUIRE(!r);
+    CHECK(r.error().position.line == 100);
+}
+
+TEST_CASE("#linenum / #filename values also land as AST fields") {
+    auto g = make_linedir_grammar();
+    auto stream = Stream::from_string("`line 42 \"foo.sv\" 0\nEND");
+    auto r = g.parse(stream);
+    REQUIRE(r);
+    auto top = std::dynamic_pointer_cast<DictValue>(*r);
+    REQUIRE(top);
+    auto ld = std::dynamic_pointer_cast<DictValue>(top->data().at("ld"));
+    REQUIRE(ld);
+    CHECK(std::dynamic_pointer_cast<IntValue>(ld->data().at("linenum"))->data() == 42);
+    CHECK(std::dynamic_pointer_cast<StringValue>(ld->data().at("filename"))->data() == "foo.sv");
+    CHECK(std::dynamic_pointer_cast<IntValue>(ld->data().at("level"))->data() == 0);
+}

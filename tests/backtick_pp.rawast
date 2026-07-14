@@ -37,25 +37,36 @@ use: std, sv
 start: <PP_CONSTRUCT>
 ignore: whitespace
 
-PP_CONSTRUCT ignore linespace line_comment: choice {
-  <PP_DEFINE>, <PP_UNDEF>, <PP_MACRO_USE>
+PP_CONSTRUCT ignore: choice {
+  <PP_DIRECTIVE>, <PP_MACRO_USE>
+}
+
+// Sigil factored into an empty-ignore prefix. The scan-driven driver tries
+// PP_CONSTRUCT at EVERY byte, so the top rule must reach the sigil WITHOUT
+// skipping leading whitespace — otherwise a space before `\`FOO` would be
+// consumed by the ignore and dropped from the output. Macro use keeps its
+// own sigil (referenced standalone inside MACRO_BODY / MACRO_ARGS).
+PP_DIRECTIVE ignore: sequence { "`", <PP_DIRECTIVE_KW> }
+
+PP_DIRECTIVE_KW ignore linespace line_comment: choice {
+  <PP_DEFINE>, <PP_UNDEF>
 }
 
 PP_DEFINE: sequence dict {
-  "`def":type="define" space,
+  "def":type="define" space,
   <DECL>:decl=@ space,
   <DEFINE_BODY>:body=@,
   "\n"
 }
 
 PP_UNDEF ignore linespace: sequence dict {
-  "`undef":type="undef" space,
+  "undef":type="undef" space,
   identifier:name=@
 }
 
 // Define-time: bound the body only; segmentation is deferred to
 // MACRO_BODY at first expansion (same lazy shape as SV).
-DEFINE_BODY ignore linespace: scope array { <LINE_CONT> }
+DEFINE_BODY ignore line_comment block_comment: scope array { <LINE_CONT>, <STRING> }
 
 MACRO_BODY ignore linespace: sequence dict {
   scope array { <PP_MACRO_USE>, <STRING>, <PARAM_REF> }:segments=@,
@@ -77,7 +88,8 @@ PARAM_FORMAL: sequence dict {
   ?<PARAM_FORMAL_DEFAULT>:default=@
 }
 PARAM_FORMAL_DEFAULT: sequence dict {
-  "=", sv_balanced_arg:value=@
+  "=", scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+               std.string, std.line_comment, std.block_comment }:value=@
 }
 
 PP_MACRO_USE ignore: sequence dict {
@@ -86,7 +98,26 @@ PP_MACRO_USE ignore: sequence dict {
   ?<MACRO_ARGS>:args=@
 }
 MACRO_ARGS ignore linespace: sequence array {
-  "(", repeat sv_balanced_arg separator ",", ")"
+  "(",
+  repeat scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+                 std.string, std.line_comment, std.block_comment
+               } separator ",",
+  ")"
+}
+
+// Balanced-bracket helpers (same pattern as systemverilog.rawast) — the
+// grammar-scope replacement for the retired sv_balanced_arg terminal.
+ARG_PARENS: sequence {
+  "(", scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+               std.string, std.line_comment, std.block_comment }, ")"
+}
+ARG_BRACES: sequence {
+  "{", scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+               std.string, std.line_comment, std.block_comment }, "}"
+}
+ARG_BRACKETS: sequence {
+  "[", scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+               std.string, std.line_comment, std.block_comment }, "]"
 }
 
 STRING: sequence dict {

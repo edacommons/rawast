@@ -461,8 +461,9 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 }
 
                 bool set_var = false;
+                bool set_reader_line = false;
+                bool set_reader_file = false;
                 std::string subparse_name;
-                PpRole pp_role = PpRole::None;
                 std::vector<std::pair<std::string, ValuePtr>> at_bindings;
                 std::vector<std::pair<std::string, ValuePtr>> const_bindings;
 
@@ -487,23 +488,6 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                             subparse_name = sv->data();
                             continue;
                         }
-                        if (e.name == "role") {
-                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
-                            if (!sv) {
-                                return tl::unexpected(
-                                    "#role: value must be a string");
-                            }
-                            auto parsed = parse_pp_role(sv->data());
-                            if (!parsed) {
-                                return tl::unexpected(
-                                    "#role: unknown role '" + sv->data() +
-                                    "' (valid: define, undef, ifdef, ifndef, "
-                                    "if, elsif, else, endif, include, "
-                                    "macro_use, paste, stringify, text)");
-                            }
-                            pp_role = *parsed;
-                            continue;
-                        }
                         if (e.name == "field") {
                             // Field-name override; validated here, wired
                             // when the preprocessor walker lands.
@@ -514,9 +498,28 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                             }
                             continue;
                         }
+                        // #linenum / #filename: after this terminal parses,
+                        // feed its value back into the reader's cursor so a
+                        // grammar can implement `\`line`-style renumbering
+                        // without host code. Value must be the `@` sentinel.
+                        // The value ALSO binds as a normal field (under the
+                        // bare reserved name) so it lands cleanly in the AST
+                        // instead of orphaning in the parent scope.
+                        if (e.name == "linenum" || e.name == "filename") {
+                            auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
+                            if (!sv || sv->data() != "@") {
+                                return tl::unexpected(
+                                    "#" + e.name + ": value must be '@' "
+                                    "(binds to the parsed value)");
+                            }
+                            if (e.name == "linenum") set_reader_line = true;
+                            else                     set_reader_file = true;
+                            at_bindings.push_back({e.name, e.value});
+                            continue;
+                        }
                         return tl::unexpected(
                             "unknown engine annotation '#" + e.name +
-                            "'; valid: #subparse, #role, #field");
+                            "'; valid: #subparse, #field, #linenum, #filename");
                     }
                     // Catch unmigrated `:subparse="RULE"` (no `#` prefix)
                     // since 0.2.0 — the directive moved to the reserved
@@ -557,9 +560,8 @@ append_items_array(Grammar& g, NodeId target, const ValuePtr& items_val,
                 if (!subparse_name.empty()) {
                     g.set_pending_subparse(*expr_child, subparse_name);
                 }
-                if (pp_role != PpRole::None) {
-                    g.node(*expr_child).pp_role = pp_role;
-                }
+                if (set_reader_line) g.node(*expr_child).sets_reader_line = true;
+                if (set_reader_file) g.node(*expr_child).sets_reader_file = true;
 
                 // Conditional bindings: when the expr is optional AND
                 // there are any bindings (at-binding `:name=@` or
@@ -886,23 +888,6 @@ populate(Grammar& g, NodeId target, const Value& body) {
         if (!entries_r) return tl::unexpected(entries_r.error());
         for (const auto& e : *entries_r) {
             if (!e.reserved) continue;
-            if (e.name == "role") {
-                auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
-                if (!sv) {
-                    return tl::unexpected(
-                        "#role: value must be a string");
-                }
-                auto parsed = parse_pp_role(sv->data());
-                if (!parsed) {
-                    return tl::unexpected(
-                        "#role: unknown role '" + sv->data() +
-                        "' (valid: define, undef, ifdef, ifndef, if, "
-                        "elsif, else, endif, include, macro_use, paste, "
-                        "stringify, text)");
-                }
-                g.node(target).pp_role = *parsed;
-                continue;
-            }
             if (e.name == "field") {
                 auto sv = std::dynamic_pointer_cast<StringValue>(e.value);
                 if (!sv) {
@@ -939,9 +924,16 @@ populate(Grammar& g, NodeId target, const Value& body) {
                 g.set_opchain(target);
                 continue;
             }
+            if (e.name == "linenum" || e.name == "filename") {
+                // Meaningful on a Parse-kind child binding (a terminal
+                // inside a sequence). Reaches here for flat-form items
+                // for the same reason as #subparse above — already wired
+                // by append_items_array at the item level. Skip silently.
+                continue;
+            }
             return tl::unexpected(
                 "unknown engine annotation '#" + e.name +
-                "' on rule body; valid: #role, #field, #opchain");
+                "' on rule body; valid: #field, #opchain");
         }
     }
 

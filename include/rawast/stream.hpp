@@ -112,6 +112,21 @@ public:
     // so this is always satisfied there.
     std::string bytes_from(const Position& start) const;
 
+    // Line-directive support. A grammar token bound with the engine
+    // annotation `#linenum` calls set_line() with its integer value;
+    // `#filename` calls set_file(). This lets a `\`line N "f" 0`-style
+    // directive re-sync the reader's line counter so downstream error
+    // positions track the ORIGINAL source, not the preprocessed stream.
+    //
+    // set_line is a literal setter (line_ = n). The line-directive
+    // convention ("the line FOLLOWING the directive is N") is applied
+    // by the caller, which passes N-1: the directive line's own
+    // terminating newline then bumps line_ from N-1 to N. This is
+    // robust to trailing blank lines (each counts), matching `\`line.
+    void set_line(std::size_t n) noexcept { line_ = n; column_ = 1; }
+    void set_file(std::string f) { current_file_ = std::move(f); }
+    const std::string& current_file() const noexcept { return current_file_; }
+
 private:
     struct MarkData {
         std::size_t pos;
@@ -125,6 +140,7 @@ private:
     std::size_t consumed_ = 0;
     std::size_t line_     = 1;
     std::size_t column_   = 1;
+    std::string current_file_;
     std::vector<MarkData> marks_;
 
     void advance_position(char c) noexcept;

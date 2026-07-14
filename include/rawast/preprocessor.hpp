@@ -14,17 +14,6 @@
 
 namespace rawast {
 
-// String-form name for a PpRole enumerator. Matches the lowercase
-// identifier used in `:#role="..."` grammar bindings. PpRole::None
-// returns an empty string (it has no surface form). Total — covers
-// every enumerator.
-std::string_view to_string(PpRole role) noexcept;
-
-// Parse a string into a PpRole. Accepts the lowercase identifiers
-// listed in node.hpp's PpRole declaration. Returns std::nullopt for
-// any unknown name; the loader maps that to a clear user error.
-std::optional<PpRole> parse_pp_role(std::string_view name) noexcept;
-
 // Policy for an undefined macro use. The default (Leave) emits the
 // directive verbatim — the host parser then handles the token however
 // it sees fit, which matches typical SystemVerilog behavior where
@@ -53,6 +42,24 @@ enum class PpOnUndecidable {
 
 std::string_view to_string(PpOnUndecidable v) noexcept;
 std::optional<PpOnUndecidable> parse_pp_on_undecidable(std::string_view name) noexcept;
+
+// Policy for a `\`include` whose file can't be resolved (not on
+// include_paths, not next to the including file, not the path as-given).
+// Default Error: a missing include means the preprocessed output is
+// INCOMPLETE — that's a hard failure, not something to paper over (matches
+// verilator and every real SV compiler). Warn/Leave exist for lenient
+// tooling that processes code out of its full build context (an IDE, a
+// single file without the complete -I list): Warn records a PpWarning and
+// skips; Leave skips silently.
+enum class PpOnMissingInclude {
+    Error,   // stop processing with a PpError — default
+    Warn,    // record a warning and skip the include
+    Leave,   // silently skip the include
+};
+
+std::string_view to_string(PpOnMissingInclude v) noexcept;
+std::optional<PpOnMissingInclude> parse_pp_on_missing_include(
+    std::string_view name) noexcept;
 
 // One macro definition. Function-like macros carry a non-empty
 // `params` list AND `is_function_like = true`; an empty `params`
@@ -265,6 +272,20 @@ struct PpOptions {
     // Policy applied when a `\`if` / `\`elsif` condition is undecidable
     // (expr_eval returned `Undefined`). Default: treat as not-taken.
     PpOnUndecidable on_undecidable = PpOnUndecidable::TreatAsFalse;
+
+    // What to do when a `\`include` file can't be found. Default Error:
+    // a missing include is a hard failure (incomplete output). Lenient
+    // callers can set Warn/Leave.
+    PpOnMissingInclude on_missing_include = PpOnMissingInclude::Error;
+
+    // If non-empty, emit line-number directives into the output wherever a
+    // stripped directive / collapsed multi-line call / skipped branch /
+    // include boundary makes an output line no longer match its source line,
+    // so a directive-aware downstream (a compiler, or rawast's own re-parse)
+    // can report diagnostics at true source positions. The string is the
+    // directive PREFIX — "`line" for SV (emits `\`line N "file" 0`), "#line"
+    // for C-style. Empty (default) emits nothing (raw text).
+    std::string emit_linenum_prefix;
 
     // Host-supplied evaluator for `\`if` / `\`elsif` expressions.
     // Called with the AST node the grammar produced for the
@@ -545,15 +566,6 @@ private:
     // and included-files state mutate regardless of splice.
     void handle_include(const class DictValue& d, std::string& out,
                         std::uint32_t parent_span, std::size_t use_offset);
-
-    // Recursively expand inline `\`MACRO` / `\`MACRO(args)` references
-    // within a body string, applying parameter substitution and
-    // blue-paint cycle protection. Returns the fully expanded text.
-    // Adds macro names to state_.active_expansions while their bodies
-    // are being expanded; bumps state_.current_depth for the duration
-    // and aborts (with a warning + verbatim passthrough) if the
-    // configured max_expansion_depth is reached.
-    std::string expand_recursive(const std::string& text);
 
     // Helpers for advancing src_cursor past consumed-but-not-emitted
     // source spans (directives like \`define / \`undef, dropped

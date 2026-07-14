@@ -789,6 +789,8 @@ NB_MODULE(_rawast, m) {
                bool splice,
                const std::string& on_undefined,
                const std::string& on_undecidable,
+               const std::string& on_missing_include,
+               std::optional<std::string> emit_linenum_prefix,
                int max_expansion_depth,
                bool trace) {
                 rawast::PpOptions opts;
@@ -809,6 +811,15 @@ NB_MODULE(_rawast, m) {
                         on_undecidable + "' (valid: false, true, error)");
                 }
                 opts.on_undecidable = *od;
+                auto omi = rawast::parse_pp_on_missing_include(on_missing_include);
+                if (!omi) {
+                    throw std::runtime_error(
+                        "Preprocessor: unknown on_missing_include '" +
+                        on_missing_include + "' (valid: error, warn, leave)");
+                }
+                opts.on_missing_include = *omi;
+                // None (or omitted) → empty → no line directives emitted.
+                opts.emit_linenum_prefix = emit_linenum_prefix.value_or("");
                 opts.max_expansion_depth = max_expansion_depth;
                 opts.trace = trace;
                 // expr_eval is wired AFTER construction via the `expr_eval`
@@ -822,6 +833,8 @@ NB_MODULE(_rawast, m) {
             nb::arg("splice") = false,
             nb::arg("on_undefined") = std::string{"leave"},
             nb::arg("on_undecidable") = std::string{"false"},
+            nb::arg("on_missing_include") = std::string{"error"},
+            nb::arg("emit_linenum_prefix") = nb::none(),
             nb::arg("max_expansion_depth") = 200,
             nb::arg("trace") = false,
             nb::keep_alive<1, 2>(),

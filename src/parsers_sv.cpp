@@ -224,68 +224,11 @@ SaveResult SvBasedDigitsParser::unparse(const Value& v) const {
         "SvBasedDigitsParser::unparse expects StringValue"});
 }
 
-// --- SvBalancedArgParser ------------------------------------------------
-
-SvBalancedArgParser::SvBalancedArgParser()
-    : Parser("sv_balanced_arg") {}
-
-WalkResult SvBalancedArgParser::walk(StreamReader& sr) {
-    sr.mark();
-    std::string out;
-    int paren = 0;
-    int brace = 0;
-    int brack = 0;
-    while (auto c = sr.peek()) {
-        // String literal — consume the whole `"…"` (honouring `\"`
-        // escapes) so a `,` or `)` inside it doesn't end the arg.
-        // Without this, `\`FOO("a, b")` would split at the inner
-        // comma, and a `\`define FOO(x = "a, b")` default would
-        // truncate. Brackets inside the string are also ignored.
-        if (*c == '"') {
-            out.push_back(*c);
-            sr.get();
-            while (auto sc = sr.peek()) {
-                out.push_back(*sc);
-                sr.get();
-                if (*sc == '\\') {
-                    // Escaped char (e.g. `\"`, `\\`) — take the next
-                    // byte verbatim, it can't close the string.
-                    if (auto esc = sr.peek()) {
-                        out.push_back(*esc);
-                        sr.get();
-                    }
-                    continue;
-                }
-                if (*sc == '"') break;  // closing quote
-            }
-            continue;
-        }
-        // At outermost depth (zero of every bracket), a `,` or `)`
-        // ends this argument. Inside nested `()`/`{}`/`[]` they're
-        // regular content — so `x inside {1, 2}` and `arr[0, 1]`
-        // capture as one arg, and `assert (x inside {a, b}) else …`
-        // doesn't truncate at the inside-set comma.
-        if (paren == 0 && brace == 0 && brack == 0
-            && (*c == ',' || *c == ')')) break;
-        if      (*c == '(') ++paren;
-        else if (*c == ')') --paren;
-        else if (*c == '{') ++brace;
-        else if (*c == '}') --brace;
-        else if (*c == '[') ++brack;
-        else if (*c == ']') --brack;
-        out.push_back(*c);
-        sr.get();
-    }
-    sr.accept();
-    accum_ = std::move(out);
-    return {};
-}
-
-SaveResult SvBalancedArgParser::unparse(const Value& v) const {
-    if (auto sv = dynamic_cast<const StringValue*>(&v)) return sv->data();
-    return tl::unexpected(SaveError{
-        "SvBalancedArgParser::unparse expects StringValue"});
-}
+// NOTE: the former SvBalancedArgParser terminal (`sv_balanced_arg`) was
+// retired — macro args, port lists, param defaults, type params, and
+// assert bodies now capture balanced text via a grammar `scope` whose
+// INNERs (ARG_PARENS/BRACES/BRACKETS + std.string + line/block comment)
+// declare the lexical policy. See MACRO_ARG in systemverilog.rawast.
 
 // --- SvBalancedBracesParser ---------------------------------------------
 
@@ -820,9 +763,6 @@ ParserGroup make_sv_group() {
         }},
         ParserSpec{"sv_qualified_type", []() {
             return std::make_unique<SvQualifiedTypeParser>();
-        }},
-        ParserSpec{"sv_balanced_arg", []() {
-            return std::make_unique<SvBalancedArgParser>();
         }},
         ParserSpec{"sv_balanced_braces", []() {
             return std::make_unique<SvBalancedBracesParser>();

@@ -86,6 +86,22 @@ struct ScanConfig {
     // optional checks see raw whitespace instead of the eaten policy.
     // nullptr → no inheritance (treated as empty).
     const std::vector<Parser*>* caller_ignore = nullptr;
+
+    // Raw `*` only: end the raw run as soon as the in-place ignore
+    // (caller_ignore) matches — the ignore bytes are LEFT for the next
+    // sibling (the stop Key) to skip and match. A `*` in an empty-ignore
+    // rule never splits (nothing to match), so it captures a multi-token
+    // body to the Key; a `*` in a whitespace-ignore rule captures exactly
+    // one run up to the ignore, and if what follows the ignore isn't the
+    // Key the surrounding sequence fails — which is the intended contract.
+    bool stop_on_ignore = false;
+
+    // Parsers to CONSUME-AND-DISCARD inside the scan — the scope's OWN
+    // declared ignore set (e.g. `scope … ignore line_comment`). At each
+    // byte a match here is skipped WITHOUT being captured, so a scope can
+    // drop comments declaratively while capturing everything else. Opt-in:
+    // nullptr for raw-capture scopes, so they stay byte-exact.
+    const std::vector<Parser*>* discard = nullptr;
 };
 
 } // namespace rawast

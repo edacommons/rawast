@@ -639,6 +639,54 @@ WalkResult LineCommentParser::walk(StreamReader& sr) {
     return {};
 }
 
+// LineCommentContParser ---------------------------------------------------
+
+LineCommentContParser::LineCommentContParser()
+    : Parser("line_comment_cont") {}
+
+WalkResult LineCommentContParser::walk(StreamReader& sr) {
+    sr.mark();
+    const Position start = sr.position();
+
+    auto c1 = sr.get();
+    if (!c1 || *c1 != '/') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '//'"});
+    }
+    auto c2 = sr.get();
+    if (!c2 || *c2 != '/') {
+        sr.reject();
+        return tl::unexpected(ParseError{start, "expected '//'"});
+    }
+
+    accum_ = "//";
+    while (true) {
+        auto c = sr.peek();
+        if (!c || *c == '\n' || *c == '\r') break;
+        if (*c == '\\') {
+            // Line-continuation lookahead: a `\` immediately before a
+            // newline ends the macro line's continuation — stop BEFORE
+            // it so LINE_CONT can consume `\<newline>`. A `\` not before
+            // a newline is ordinary comment content.
+            sr.mark();
+            sr.get();                       // consume the '\'
+            auto nx = sr.peek();
+            if (nx && (*nx == '\n' || *nx == '\r')) {
+                sr.reject();                // put the '\' back
+                break;
+            }
+            sr.accept();
+            accum_.push_back('\\');
+            continue;
+        }
+        accum_.push_back(*c);
+        sr.get();
+    }
+
+    sr.accept();
+    return {};
+}
+
 // BlockCommentParser ------------------------------------------------------
 
 BlockCommentParser::BlockCommentParser() : Parser("block_comment") {}
@@ -697,6 +745,8 @@ void register_std_parser_group() {
         {"whitespace",     [] { return std::make_unique<WhitespaceParser>(); }},
         {"linespace",      [] { return std::make_unique<LinespaceParser>(); }},
         {"line_comment",   [] { return std::make_unique<LineCommentParser>(); }},
+        {"line_comment_cont",
+                           [] { return std::make_unique<LineCommentContParser>(); }},
         {"block_comment",  [] { return std::make_unique<BlockCommentParser>(); }},
     };
     register_parser_group(std::move(g));

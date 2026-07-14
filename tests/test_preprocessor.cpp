@@ -470,6 +470,122 @@ TEST_CASE("pp: expr_eval receives the raw condition text") {
 }
 
 
+// ─── IEEE 1800-2017 §22 directive coverage (active + pass-through) ───
+TEST_CASE("SV preprocessor: §22 directives") {
+    auto g = make_mini_preprocessor();
+
+    SUBCASE("`undefineall clears the entire macro table") {
+        Preprocessor pp(g);
+        CHECK(pp.process("`define A 1\n`undefineall\nx=`A;\n") == "x=`A;\n");
+    }
+    SUBCASE("`__LINE__ expands to the physical source line") {
+        Preprocessor pp(g);
+        CHECK(pp.process("a\nl=`__LINE__;\n") == "a\nl=2;\n");
+    }
+    SUBCASE("`__FILE__ expands to a string literal") {
+        Preprocessor pp(g);
+        CHECK(pp.process("f=`__FILE__;\n") == "f=\"<input>\";\n");
+    }
+    SUBCASE("`line renumbers subsequent `__LINE__") {
+        Preprocessor pp(g);
+        CHECK(pp.process("`line 10 \"x.sv\" 0\nl=`__LINE__;\n") == "l=10;\n");
+    }
+    SUBCASE("`__LINE__ inside a macro body reports the INVOCATION line") {
+        Preprocessor pp(g);
+        // `M defined line 1, invoked line 3 -> body `__LINE__ is 3 (§22.10),
+        // not the definition line. Matches `verilator -E`.
+        CHECK(pp.process("`define M `__LINE__\na\nx=`M;\n") == "a\nx=3;\n");
+    }
+    SUBCASE("compiler directives pass through verbatim (default Leave)") {
+        Preprocessor pp(g);
+        CHECK(pp.process("`timescale 1ns/1ps\nm\n") == "`timescale 1ns/1ps\nm\n");
+        CHECK(pp.process("`default_nettype none\nm\n")
+              == "`default_nettype none\nm\n");
+        CHECK(pp.process("`pragma protect\nm\n") == "`pragma protect\nm\n");
+    }
+    SUBCASE("pass-through survives on_undefined=Empty (the point of PP_PASSTHROUGH)") {
+        PpOptions o;
+        o.on_undefined = PpOnUndefined::Empty;
+        Preprocessor pp(g, std::move(o));
+        // A real undefined macro is stripped, but a compiler directive is a
+        // directive, not a macro — it must survive regardless of the policy.
+        CHECK(pp.process("`timescale 1ns/1ps\n") == "`timescale 1ns/1ps\n");
+    }
+}
+
+
+// ─── §22.5 macro-semantics edge cases (each output verified to token-match
+// `verilator -E` via local_tests/pp_micro.py) ───
+TEST_CASE("SV preprocessor: §22.5 macro semantics vs Verilator") {
+    auto g = make_mini_preprocessor();
+    // Fresh Preprocessor per case — macro state must not leak across checks.
+    auto run = [&](const char* s) { return Preprocessor(g).process(s); };
+    // Token paste building an identifier from an argument.
+    CHECK(run("`define P(n) sig_``n``_q\nx=`P(data);\n") == "x=sig_data_q;\n");
+    // Argument is itself a macro use — expanded, then stringified.
+    CHECK(run("`define N 5\n`define S(x) `\"x`\"\ny=`S(`N);\n") == "y=\"5\";\n");
+    // Nested macro call in an argument.
+    CHECK(run("`define I(x) x\n`define J(y) <y>\nz=`J(`I(q));\n") == "z=<q>;\n");
+    // Multi-level recursive expansion.
+    CHECK(run("`define A `B\n`define B `C\n`define C hi\nx=`A;\n") == "x=hi;\n");
+    // A `define inside a not-taken `ifdef branch must NOT register.
+    CHECK(run("`ifdef NOPE\n`define A 1\n`endif\nx=`A;\n") == "x=`A;\n");
+    // Internal whitespace inside a stringify is preserved.
+    CHECK(run("`define S(a,b) `\"a b`\"\ny=`S(1,2);\n") == "y=\"1 2\";\n");
+}
+
+
+// ─── `include of an unresolvable file: on_missing_include policy ───
+TEST_CASE("SV preprocessor: on_missing_include") {
+    auto g = make_mini_preprocessor();
+    SUBCASE("default is Error — a missing include is a hard failure") {
+        Preprocessor pp(g);
+        CHECK_THROWS(pp.process("`include \"does_not_exist.svh\"\nx\n"));
+    }
+    SUBCASE("Warn records a warning and skips the include") {
+        PpOptions o;
+        o.on_missing_include = PpOnMissingInclude::Warn;
+        Preprocessor pp(g, std::move(o));
+        CHECK(pp.process("`include \"nope.svh\"\nx\n") == "x\n");
+        CHECK_FALSE(pp.warnings().empty());
+    }
+    SUBCASE("Leave skips the include silently") {
+        PpOptions o;
+        o.on_missing_include = PpOnMissingInclude::Leave;
+        Preprocessor pp(g, std::move(o));
+        CHECK(pp.process("`include \"nope.svh\"\nx\n") == "x\n");
+        CHECK(pp.warnings().empty());
+    }
+}
+
+TEST_CASE("SV preprocessor: emit_linenum_prefix re-syncs source lines") {
+    auto g = make_mini_preprocessor();
+    SUBCASE("empty (default) emits no markers") {
+        Preprocessor pp(g);
+        auto out = pp.process("`define X 1\na=`X;\n");
+        CHECK(out == "a=1;\n");
+        CHECK(out.find("`line") == std::string::npos);
+    }
+    SUBCASE("a stripped `define emits a marker so lines still map") {
+        PpOptions o;
+        o.emit_linenum_prefix = "`line";
+        Preprocessor pp(g, std::move(o));
+        // `define is line 1; the next output content is source line 2.
+        CHECK(pp.process("`define X 1\na=`X;\nb=2;\n")
+              == "`line 2 \"<input>\" 0\na=1;\nb=2;\n");
+    }
+    SUBCASE("multi-line call re-syncs after the collapse") {
+        PpOptions o;
+        o.emit_linenum_prefix = "`line";
+        Preprocessor pp(g, std::move(o));
+        // The call spans lines 2-3 but collapses to one output line, so `y=3`
+        // (source line 4) gets a fresh marker.
+        CHECK(pp.process("`define M(a,b) a+b\nx=`M(1,\n2);\ny=3;\n")
+              == "`line 2 \"<input>\" 0\nx=1+2;\n`line 4 \"<input>\" 0\ny=3;\n");
+    }
+}
+
+
 // ─── Grammar-agnostic driver: a non-SV backtick grammar drives it ───
 // If the scan driver ever re-hardcodes an SV assumption (a rule name,
 // a keyword, a value shape beyond the documented contract), these break.

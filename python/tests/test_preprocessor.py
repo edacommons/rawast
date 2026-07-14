@@ -12,6 +12,32 @@ def _expand(src: str) -> str:
     return out.decode("utf-8") if isinstance(out, (bytes, bytearray)) else out
 
 
+def test_formals_not_substituted_inside_plain_string_in_nested_call():
+    r"""Macro formals must NOT be substituted inside a PLAIN string literal
+    (a string is one lexical token; only `\`"…\`"` stringify substitutes).
+    The direct case already works via segmentation, but a nested macro
+    call captures its arg as raw text, and substitute_params crossed the
+    string boundary. Regression: UVM `uvm_field_int(ARG,FLAG)` wraps a
+    warning `"Field macro for ARG uses FLAG ..."` — a plain string whose
+    words happen to match the formals; we rewrote it to the actual args
+    (Verilator, correctly, does not). Found by the Verilator oracle."""
+    src = (
+        "`define INNER(msg) $warning(msg)\n"
+        "`define OUTER(ARG, FLAG) `INNER(\"text ARG uses FLAG here\")\n"
+        "`OUTER(x, y)\n"
+    )
+    out = _expand(src)
+    assert '"text ARG uses FLAG here"' in out, out
+    assert "text x uses y" not in out, out
+
+    # `\`"…\`"` stringify STILL substitutes (must not regress):
+    strf = (
+        "`define S(A) `\"got A`\"\n"
+        "`S(z)\n"
+    )
+    assert '"got z"' in _expand(strf)
+
+
 def test_get_macro_on_function_like_returns_params():
     """get_macro() / .macros must expose a function-like macro's parameters
     as data, not throw. Regression: the binding appended raw MacroParam

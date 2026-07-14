@@ -228,6 +228,88 @@ TEST_CASE("default_pp_expr_eval: division by zero → nullopt") {
     CHECK(is_undef(default_pp_expr_eval(v, r)));
 }
 
+// ─── Extended operators: shifts / bitwise / unary / ternary / sized ──
+// AST shapes match what SV COND_EXPR emits (verified against the real
+// grammar): binary ops → {op, args:[…]}, ternary → {cond, op:"?:",
+// then, else}, sized literal → {type:"based_num", size, base, value}.
+
+namespace {
+ValuePtr tern_(ValuePtr c, ValuePtr t, ValuePtr e) {
+    return dict({{"cond", c}, {"op", str("?:")}, {"then", t}, {"else", e}});
+}
+ValuePtr based_(std::int64_t size, const std::string& base,
+                const std::string& value, bool is_signed = false) {
+    auto d = std::make_shared<DictValue>();
+    d->data().emplace("type", str("based_num"));
+    d->data().emplace("size", i(size));
+    d->data().emplace("base", str(base));
+    d->data().emplace("value", str(value));
+    if (is_signed) d->data().emplace("signed", std::make_shared<BoolValue>(true));
+    return d;
+}
+} // namespace
+
+TEST_CASE("default_pp_expr_eval: shifts (<<, >>, >>> arithmetic)") {
+    auto r = resolver_empty();
+    CHECK(is_true (default_pp_expr_eval(op_("<<", {int_(1), int_(3)}), r)));  // 8
+    CHECK(is_false(default_pp_expr_eval(op_("<<", {int_(0), int_(3)}), r)));
+    CHECK(is_true (default_pp_expr_eval(op_(">>", {int_(16), int_(2)}), r))); // 4
+    CHECK(is_false(default_pp_expr_eval(op_(">>", {int_(1), int_(3)}), r)));  // 0
+    // Arithmetic right shift preserves sign: -8 >>> 1 == -4 (truthy).
+    CHECK(is_true (default_pp_expr_eval(op_(">>>", {int_(-8), int_(1)}), r)));
+    // (2 << 2) == 8
+    CHECK(is_true(default_pp_expr_eval(
+        op_("==", {op_("<<", {int_(2), int_(2)}), int_(8)}), r)));
+}
+
+TEST_CASE("default_pp_expr_eval: bitwise binary (&, |, ^, XNOR)") {
+    auto r = resolver_empty();
+    CHECK(is_false(default_pp_expr_eval(op_("&", {int_(6), int_(1)}), r)));   // 0
+    CHECK(is_true (default_pp_expr_eval(op_("&", {int_(6), int_(2)}), r)));   // 2
+    CHECK(is_true (default_pp_expr_eval(op_("|", {int_(4), int_(1)}), r)));   // 5
+    CHECK(is_false(default_pp_expr_eval(op_("^", {int_(6), int_(6)}), r)));   // 0
+    CHECK(is_true (default_pp_expr_eval(op_("^", {int_(6), int_(3)}), r)));   // 5
+    // XNOR: ~(6 ^ 6) == ~0 == -1 (truthy).
+    CHECK(is_true (default_pp_expr_eval(op_("^~", {int_(6), int_(6)}), r)));
+    // Single-operand reduction (needs bit-width) → undecidable.
+    CHECK(is_undef(default_pp_expr_eval(op_("&", {int_(6)}), r)));
+}
+
+TEST_CASE("default_pp_expr_eval: unary ~, -, + (single operand)") {
+    auto r = resolver_empty();
+    CHECK(is_true (default_pp_expr_eval(op_("~", {int_(0)}), r)));   // -1
+    CHECK(is_false(default_pp_expr_eval(op_("~", {int_(-1)}), r)));  // 0
+    CHECK(is_true (default_pp_expr_eval(op_("-", {int_(5)}), r)));   // -5
+    CHECK(is_false(default_pp_expr_eval(op_("-", {int_(0)}), r)));
+    CHECK(is_true (default_pp_expr_eval(op_("+", {int_(5)}), r)));
+    // Binary minus still folds (≥2 args): 5 - 5 == 0.
+    CHECK(is_false(default_pp_expr_eval(op_("-", {int_(5), int_(5)}), r)));
+}
+
+TEST_CASE("default_pp_expr_eval: ternary selects branch") {
+    auto r = resolver_empty();
+    // cond true → then; cond false → else.
+    CHECK(is_false(default_pp_expr_eval(tern_(int_(1), int_(0), int_(1)), r)));
+    CHECK(is_true (default_pp_expr_eval(tern_(int_(0), int_(0), int_(1)), r)));
+    CHECK(is_true (default_pp_expr_eval(tern_(int_(2), int_(5), int_(0)), r)));
+    // Undecidable condition → undecidable result.
+    CHECK(is_undef(default_pp_expr_eval(
+        tern_(call_("frob", {}), int_(1), int_(0)), r)));
+}
+
+TEST_CASE("default_pp_expr_eval: sized/based literals") {
+    auto r = resolver_empty();
+    CHECK(is_true (default_pp_expr_eval(based_(8, "h", "FF"), r)));      // 255
+    CHECK(is_false(default_pp_expr_eval(based_(8, "h", "00"), r)));
+    CHECK(is_true (default_pp_expr_eval(based_(4, "b", "1010"), r)));    // 10
+    CHECK(is_false(default_pp_expr_eval(based_(4, "h", "10"), r)));      // trunc to 4b → 0
+    // Signed 4-bit 0x8 == -8 (< 0).
+    CHECK(is_true (default_pp_expr_eval(
+        op_("<", {based_(4, "d", "8", /*signed*/true), int_(0)}), r)));
+    // x/z don't-care digit → indeterminate.
+    CHECK(is_undef(default_pp_expr_eval(based_(8, "h", "1x"), r)));
+}
+
 // Integration tests that exercise the built-in eval end-to-end
 // (parse → AST → walker → evaluator → branch selection) live in
 // tests/test_sv_preprocessor.cpp, which composes the real merged

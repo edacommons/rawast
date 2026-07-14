@@ -106,6 +106,12 @@ public:
     // The single accumulated top-level value (after the parse completes).
     ValuePtr result() const;
 
+    // Return to the just-constructed state (only the root level, empty)
+    // WITHOUT freeing the levels_ buffer — retains capacity so a caller
+    // that reuses one builder across many parses (the scan-driven
+    // preprocessor, once per byte) pays no per-parse allocation.
+    void reset();
+
     // Open-level count (1 == only the root; >1 means unclosed begins).
     std::size_t depth() const { return levels_.size(); }
 

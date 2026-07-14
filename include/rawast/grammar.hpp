@@ -280,6 +280,16 @@ public:
     tl::expected<void, ParseError> parse_into(
             Stream& stream, Builder& builder,
             const std::string& start_name) const;
+    // StreamReader form with a caller-owned Builder and require_full /
+    // initial_ignore control — the builder-based sibling of the internal
+    // parse_from(StreamReader&, …). A scan-driven caller (the preprocessor,
+    // once per byte) reuses ONE builder across calls (reset() between) so no
+    // SharedPtrBuilder is constructed per probe. No opchain compaction is
+    // applied (that stays reference-model-bound in parse_from).
+    tl::expected<void, ParseError> parse_into(
+            StreamReader& sr, ValuePool& pool, NodeId start, Builder& builder,
+            bool require_full_consume = true,
+            const std::vector<Parser*>* initial_ignore = nullptr) const;
 
     // Convenience: parse from a rule name. Looks up the named rule's
     // body NodeId via the registry; fails if the rule doesn't exist.
@@ -376,30 +386,6 @@ public:
         return save_from(out, acc, pretty, start);
     }
 
-    // --- Performance: peek-and-skip optional/choice optimization ------
-    //
-    // For each Node, precompute the set of input first-bytes its
-    // first non-nullable terminal can begin with. When the parse
-    // driver is about to push a frame for an *optional* Ref (`?<X>`
-    // pattern) or a Choice alternative, it peeks the next input byte
-    // (after ignore-skip) and bails immediately if the byte isn't in
-    // the node's first-byte set. Saves the frame push + key-parse
-    // attempt + rewind that would otherwise burn cycles on shapes
-    // without MASK_MOD / ITERATE_PREFIX / etc.
-    //
-    // Computed by `compute_first_bytes()`, called once at end of
-    // grammar load. Idempotent — safe to call multiple times.
-    //
-    // The bitset has a "wildcard" semantic when `first_bytes_known_`
-    // is false for that NodeId: the engine falls back to the normal
-    // push-and-try path (correctness preserved when the analysis
-    // can't determine a specific set).
-    void compute_first_bytes() const;
-    bool first_byte_might_match(NodeId id, unsigned char byte) const noexcept {
-        if (id.value() >= first_bytes_known_.size()) return true;
-        if (!first_bytes_known_[id.value()])         return true;
-        return first_bytes_[id.value()].test(byte);
-    }
 
     // --- Profiling -----------------------------------------------------
     //
@@ -455,33 +441,6 @@ private:
     mutable bool          profile_enabled_ = false;
     mutable ProfileReport last_profile_report_;
 
-    // Precomputed per-Node first-byte sets. Indexed by NodeId.value().
-    // first_bytes_known_[i] = true means first_bytes_[i] is the exact
-    // set of input first-bytes the node can begin with; false means
-    // "unknown — fall back to push-and-try". 256 bits = 32 bytes per
-    // entry; reasonable cost for the speed-up. Mutable so
-    // compute_first_bytes() can populate from a `const` Grammar
-    // method (called lazily by parse_from on first use).
-    mutable std::vector<std::bitset<256>> first_bytes_;
-    mutable std::vector<bool>             first_bytes_known_;
-    // Strict CONTENT first-byte set — what bytes the node's body
-    // actually starts with, ignoring nullability. `first_bytes_`
-    // (above) is set-all when the node is nullable so the Choice
-    // peek-and-skip never wrongly rejects a nullable alternative.
-    // `should_skip_optional` uses THIS strict set: an `?<X>` whose
-    // content can't start at the next byte can be cleanly skipped
-    // even if X is nullable (skipping is equivalent to matching
-    // empty in that case).
-    mutable std::vector<std::bitset<256>> strict_first_bytes_;
-    // Per-NodeId flag: this node is at an `?<...>` use-site optional
-    // position (its own is_optional is set, OR it's a Ref into a
-    // chain where some link carries is_optional). The parse-loop
-    // peek-and-skip check uses this as a fast O(1) guard before
-    // doing the run_ignore + peek work; non-optional pushes (the
-    // common case) early-return without touching the input stream.
-    // Computed alongside first_bytes_.
-    mutable std::vector<bool>             is_optional_chain_;
-    mutable bool                          first_bytes_computed_ = false;
 
     // Per-NodeId resolved Ref target. For Ref nodes, this is the
     // final-target NodeId after walking the Ref chain (so `resolve_ref`

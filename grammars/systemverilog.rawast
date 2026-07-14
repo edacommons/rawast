@@ -125,12 +125,28 @@ DESCRIPTION: choice {
 SV_COMPILER_DIRECTIVE: choice {
   <CD_TIMESCALE>,
   <CD_NETTYPE>,
+  <LINE_DIRECTIVE>,
   <DEFINE>,
   <IFDEF>,
   <IFNDEF>,
   <INCLUDE>,
   <UNDEF>,
   <CD_NOARG>
+}
+
+// `line N "filename" level — IEEE 1800 §22.11 line-number renumbering,
+// and the marker emitted by the preprocessor's emit_linenum_prefix. The
+// engine bindings `#linenum` / `#filename` feed the parsed values back
+// into the reader's line cursor (see loader.cpp / grammar.cpp), so error
+// positions in the FOLLOWING source track the original file/line instead
+// of the preprocessed stream. `ignore linespace` keeps the directive
+// single-line (newlines terminate it). The values also land as ordinary
+// `linenum` / `filename` / `level` fields on the node.
+LINE_DIRECTIVE ignore linespace: sequence dict {
+  "`line":type="line" space,
+  std.int:#linenum=@ space,
+  std.string:#filename=@ space,
+  std.int:level=@
 }
 CD_TIMESCALE: sequence dict {
   "`timescale":@:type="timescale" space,
@@ -165,10 +181,13 @@ CD_NOARG_KW: choice {
 // Attributes can appear before nearly any declaration to provide
 // tool-specific hints. Pure parse — body captured raw.
 SV_ATTRIBUTE: sequence dict {
-  "(*":type="attribute",
-  *:body=@,
-  "*)"
+  "(*":type="attribute" space,
+  <RAW_TO_ATTR_CLOSE>
 }
+// Empty-ignore raw bodies (design (b): `*` respects the rule ignore, so a
+// multi-token body lives in an empty-ignore rule that owns its stop Key).
+RAW_TO_ATTR_CLOSE ignore: sequence { *:body=@, "*)" }
+RAW_TO_SEMI       ignore: sequence { *:body=@, ";" }
 
 // `(* attr *) <statement>` — an attribute instance prefixing a statement
 // (IEEE 1800-2017 §5.12 — attributes may precede statements).
@@ -183,17 +202,15 @@ ATTRIBUTED_STMT: sequence dict {
 // values, modifiers like `pure`/`context`) parses uniformly.
 DPI_IMPORT: sequence dict {
   'import':@:type="dpi_import",
-  string:dpi_spec=@,
-  *:body=@,
-  ";"
+  string:dpi_spec=@ space,
+  <RAW_TO_SEMI>
 }
 
 // `export "DPI-C" [c_name =] function|task NAME;` — DPI export.
 DPI_EXPORT: sequence dict {
   'export':@:type="dpi_export",
-  string:dpi_spec=@,
-  *:body=@,
-  ";"
+  string:dpi_spec=@ space,
+  <RAW_TO_SEMI>
 }
 
 // ─── Module declaration ─────────────────────────────────────────────────
@@ -216,9 +233,8 @@ MODULE_DECL: sequence dict {
 // non-import token (`#`, `(`, or `;`).
 MODULE_HEADER_IMPORT: sequence dict {
   "" space,
-  'import':@:type="module_header_import",
-  *:body=@,
-  ";"
+  'import':@:type="module_header_import" space,
+  <RAW_TO_SEMI>
 }
 
 // SV adds `program` and `macromodule` as module-equivalent keywords;
@@ -1172,8 +1188,9 @@ CONT_ASSIGN: sequence dict {
 }
 
 DRIVE_STRENGTH: sequence dict {
-  "(", *:text=@, ")"
+  "(", <RAW_TO_PAREN>
 }
+RAW_TO_PAREN ignore: sequence { *:text=@, ")" }
 
 ASSIGNMENT_PAIR: sequence dict {
   <LVALUE>:lhs=@ space, "=" space, <EXPR>:rhs=@
@@ -3125,16 +3142,19 @@ INCLUDE: sequence dict {
 // body; the host evaluates the condition and re-parses the active
 // branch. Nested `` `ifdef `` is opaque — host's preprocessor
 // handles nesting.
+// The body is a multi-token raw span; per design (b) `*` splits on the
+// rule's ignore, so it lives in an empty-ignore rule (RAW_TO_ENDIF) that
+// captures verbatim up to the `\`endif` Key with no split.
 IFDEF: sequence dict {
   "`ifdef" space,
-  sv_identifier:cond=@:type="ifdef",
+  sv_identifier:cond=@:type="ifdef" space,
   *:body=@,
   "`endif"
 }
 
 IFNDEF: sequence dict {
   "`ifndef" space,
-  sv_identifier:cond=@:type="ifndef",
+  sv_identifier:cond=@:type="ifndef" space,
   *:body=@,
   "`endif"
 }
@@ -3557,7 +3577,9 @@ CLASS_TASK: sequence dict {
 // when it needs structured access.
 METHOD_PORT_LIST: sequence dict {
   "(",
-  repeat sv_balanced_arg:ports[]=@ separator ",",
+  repeat scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+                 std.string, std.line_comment, std.block_comment
+               }:ports[]=@ separator ",",
   ")"
 }
 
@@ -3706,9 +3728,8 @@ BIND_STMT: choice {
     <MODULE_INSTANTIATION>:instance=@
   },
   sequence dict {
-    'bind':@:type="bind_raw",
-    *:body=@,
-    ";"
+    'bind':@:type="bind_raw" space,
+    <RAW_TO_SEMI>
   }
 }
 
@@ -3865,8 +3886,7 @@ SPEC_TC_EMPTY: sequence dict { "":type="empty_arg" }
 SPEC_RAW_ITEM: sequence dict {
   !'endspecify',
   "":type="specify_raw",
-  *:body=@,
-  ";"
+  <RAW_TO_SEMI>
 }
 
 // ─── SystemVerilog Assertions (SVA) — parse-only ──────────────────────
@@ -3922,7 +3942,9 @@ CONCURRENT_ASSERT: sequence dict {
 // The `)` lives INSIDE each alternative so backtracking covers it.
 ASSERT_BODY: choice {
   sequence { <PROPERTY_SPEC>:body=@, ")" },
-  sequence { sv_balanced_arg:body=@, ")" }
+  sequence { scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+                     std.string, std.line_comment, std.block_comment
+                   }:body=@, ")" }
 }
 
 // `action_block` — ONE sequence with two optionals, not a Choice of
@@ -3971,8 +3993,10 @@ PROPERTY_DECL_TAIL: choice {
     "" tab, <PROPERTY_SPEC>:body=@, ?";", "" newline,
     'endproperty', ?<END_LABEL>:end_label=@
   },
-  sequence { *:body=@, 'endproperty', ?<END_LABEL>:end_label=@ }
+  sequence { <RAW_TO_ENDPROPERTY>, ?<END_LABEL>:end_label=@ }
 }
+// Empty-ignore raw body: `*` (no split) up to the `endproperty` Key.
+RAW_TO_ENDPROPERTY ignore: sequence { *:body=@, 'endproperty' }
 
 // `sequence NAME([args]); <body> endsequence [: NAME]`
 SEQUENCE_DECL: sequence dict {
@@ -3987,8 +4011,9 @@ SEQUENCE_DECL_TAIL: choice {
     "" tab, <SEQUENCE_EXPR>:body=@, ?";", "" newline,
     'endsequence', ?<END_LABEL>:end_label=@
   },
-  sequence { *:body=@, 'endsequence' space, ?<END_LABEL>:end_label=@ }
+  sequence { <RAW_TO_ENDSEQUENCE>, ?<END_LABEL>:end_label=@ }
 }
+RAW_TO_ENDSEQUENCE ignore: sequence { *:body=@, 'endsequence' }
 
 // ─── SVA temporal expression cascade (structured; raw fallback above) ──
 // IEEE 1800-2017 §16.7-16.12. PEG precedence cascade. Flat operator
@@ -4316,9 +4341,10 @@ CLOCKING_TAIL: choice {
     "" tab, 'endclocking' space, ?<END_LABEL>:end_label=@
   },
   sequence {
-    *:body=@, 'endclocking' space, ?<END_LABEL>:end_label=@
+    <RAW_TO_ENDCLOCKING>, ?<END_LABEL>:end_label=@
   }
 }
+RAW_TO_ENDCLOCKING ignore: sequence { *:body=@, 'endclocking' }
 
 CLOCKING_ITEM: choice {
   <CLOCKING_DEFAULT_SKEW>,
@@ -4388,11 +4414,11 @@ CHECKER_DECL: sequence dict {
   'checker':@:type="checker" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endchecker' space,
+  ";" newline,
+  <RAW_TO_ENDCHECKER>,
   ?<END_LABEL>:end_label=@
 }
+RAW_TO_ENDCHECKER ignore: sequence { *:body=@, 'endchecker' }
 
 // `fork <stmts> join` / `join_any` / `join_none` — concurrent block.
 // Body is `repeat <BLOCK_ITEM>` so nested `fork ... join_any` inside
@@ -4433,7 +4459,8 @@ IMMEDIATE_ASSERT: sequence dict {
   <ASSERT_KIND>:kind=@:type="assert_immediate",
   ?<ASSERT_DEFER>:defer=@,
   "(",
-  sv_balanced_arg:body=@,
+  scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+          std.string, std.line_comment, std.block_comment }:body=@,
   ")",
   <ASSERT_ACTION>:action=@,
   ?";"
@@ -4453,9 +4480,8 @@ ASSERT_DEFER: choice {
 // `extern function ... NAME;` — forward declarations. Captured as
 // raw text up to `;` for host to re-parse.
 EXTERN_DECL: sequence dict {
-  'extern':@:type="extern",
-  *:body=@,
-  ";"
+  'extern':@:type="extern" space,
+  <RAW_TO_SEMI>
 }
 
 // `primitive NAME (...); <body> endprimitive [: NAME]` — UDP
@@ -4465,21 +4491,21 @@ UDP_DECL: sequence dict {
   'primitive':@:type="primitive" space,
   sv_identifier:name=@,
   ?<METHOD_PORT_LIST>:args=@,
-  ";",
-  *:body=@,
-  'endprimitive',
+  ";" newline,
+  <RAW_TO_ENDPRIMITIVE>,
   ?<END_LABEL>:end_label=@
 }
+RAW_TO_ENDPRIMITIVE ignore: sequence { *:body=@, 'endprimitive' }
 
 // `config NAME; <items> endconfig [: NAME]` — design configuration.
 CONFIG_DECL: sequence dict {
   'config':@:type="config" space,
   sv_identifier:name=@,
-  ";",
-  *:body=@,
-  'endconfig',
+  ";" newline,
+  <RAW_TO_ENDCONFIG>,
   ?<END_LABEL>:end_label=@
 }
+RAW_TO_ENDCONFIG ignore: sequence { *:body=@, 'endconfig' }
 
 // `program NAME (...); <items> endprogram [: NAME]` — program
 // blocks for testbench code. Body is essentially the same as a
@@ -4518,17 +4544,15 @@ GENVAR_DECL: sequence dict {
 // `nettype <type> <name> [with <function>];` — SV-1800-2012
 // user-defined nettypes. Body captured raw up to `;`.
 NETTYPE_DECL: sequence dict {
-  'nettype':@:type="nettype",
-  *:body=@,
-  ";"
+  'nettype':@:type="nettype" space,
+  <RAW_TO_SEMI>
 }
 
 // `randsequence (<id>) <productions> endsequence` — class
 // randomization construct. Body captured raw.
 RANDSEQUENCE_STMT: sequence dict {
-  'randsequence':@:type="randsequence",
-  *:body=@,
-  'endsequence'
+  'randsequence':@:type="randsequence" space,
+  <RAW_TO_ENDSEQUENCE>
 }
 
 // `wait fork ;` — wait for all forked threads to terminate.
@@ -4642,7 +4666,9 @@ DOT_CALL: sequence dict {
 PARAM_STATIC_CALL_STMT: sequence dict {
   sv_identifier:class=@:type="param_static_call_stmt",
   "#", "(",
-  repeat sv_balanced_arg:type_params[]=@ separator ",",
+  repeat scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+                 std.string, std.line_comment, std.block_comment
+               }:type_params[]=@ separator ",",
   ")",
   "::",
   sv_identifier:method=@,
@@ -4671,8 +4697,7 @@ VIRTUAL_INTERFACE_DECL: sequence dict {
   'virtual':@:type="virtual_interface" space,
   !'class',
   ?'interface':is_interface=true space,
-  *:body=@,
-  ";"
+  <RAW_TO_SEMI>
 }
 
 
@@ -4698,8 +4723,42 @@ VIRTUAL_INTERFACE_DECL: sequence dict {
 // terminated). Seeds every alternative, replacing what PP_FILE used to
 // supply; without it, parse_from would fall back to the SV default
 // (`whitespace`, which eats `\n`) and directive terminators would vanish.
-PP_CONSTRUCT ignore linespace line_comment: choice {
+PP_CONSTRUCT ignore: choice {
+  <PP_DIRECTIVE>,
+  <PP_MACRO_USE>,
+  <STRING>,
+  <PP_COMMENT>
+}
+
+// String + comment PASSTHROUGH tokens. The driver tries PP_CONSTRUCT at
+// every byte; when a `"` or `//`/`/*` starts here, STRING / PP_COMMENT
+// match and their type (`string`/`comment`) is not a directive, so the
+// driver copies the matched span through verbatim. This is what stops a
+// backtick INSIDE a string or comment from being taken as a directive —
+// the grammar recognises the string/comment extent, exactly as the driver
+// used to do by hand. `std.string`/`std.line_comment`/`std.block_comment`
+// are the `use:`-declared stdlib parsers already used throughout.
+PP_COMMENT: choice {
+  sequence dict { std.line_comment:type="comment" },
+  sequence dict { std.block_comment:type="comment" }
+}
+
+// Sigil + keyword. The sigil `\`` is FACTORED OUT here — declared ONCE
+// (empty `ignore:` so NO whitespace is allowed between the sigil and the
+// keyword; SV forbids `\` ifdef`). A transparent `sequence` flows the
+// matched keyword-directive's dict straight up (like PARAMS).
+PP_DIRECTIVE ignore: sequence { "`", <PP_DIRECTIVE_KW> }
+
+// The nine keyword directives (sigil factored into PP_DIRECTIVE above, so
+// each keyword literal is backtick-free). `ignore linespace line_comment`
+// seeds each tail's inter-token policy (horizontal whitespace + trailing
+// `//`). Macro use keeps its OWN sigil in PP_MACRO_USE — it can't be
+// factored because <PP_MACRO_USE> is referenced standalone inside
+// macro-body / macro-arg segment scopes, where there is no prefix to
+// supply the backtick.
+PP_DIRECTIVE_KW ignore linespace line_comment: choice {
   <PP_DEFINE>,
+  <PP_UNDEFINEALL>,
   <PP_UNDEF>,
   <PP_INCLUDE>,
   <PP_IFDEF>,
@@ -4708,21 +4767,27 @@ PP_CONSTRUCT ignore linespace line_comment: choice {
   <PP_ELSIF>,
   <PP_ELSE>,
   <PP_ENDIF>,
-  <PP_MACRO_USE>
+  <PP_LINE>,
+  <PP_PASSTHROUGH>
 }
 
-PP_IFDEF ignore linespace: sequence dict {
-  "`ifdef":type="ifdef" space,
-  identifier:cond=@
+// Each directive consumes its own line-tail in the grammar: the `ignore
+// linespace line_comment` skips trailing horizontal space + `//` comment,
+// and `?"\n"` eats the terminating newline (optional so a directive at EOF
+// still matches). This replaces the C++ skip_line_tail — the grammar, not
+// the driver, owns directive line-termination.
+PP_IFDEF ignore linespace line_comment: sequence dict {
+  "ifdef":type="ifdef" space,
+  identifier:cond=@, ?"\n"
 }
 
-PP_IFNDEF ignore linespace: sequence dict {
-  "`ifndef":type="ifndef" space,
-  identifier:cond=@
+PP_IFNDEF ignore linespace line_comment: sequence dict {
+  "ifndef":type="ifndef" space,
+  identifier:cond=@, ?"\n"
 }
 
-PP_ENDIF: sequence dict { "`endif":type="endif" }
-PP_ELSE:  sequence dict { "`else":type="else" }
+PP_ENDIF ignore linespace line_comment: sequence dict { "endif":type="endif", ?"\n" }
+PP_ELSE  ignore linespace line_comment: sequence dict { "else":type="else", ?"\n" }
 
 // `\`if`/`\`elsif` take an expression condition — captured as the rest of
 // the line (raw `*`, to the newline) and subparsed to the SV expression
@@ -4730,14 +4795,17 @@ PP_ELSE:  sequence dict { "`else":type="else" }
 // names a macro (definedness); the driver picks the interpretation from
 // the enclosing conditional. A cond PP_COND can't parse is undecidable,
 // never a hard parse failure.
+// Design (c): `*:cond` in an `ignore linespace` rule trims the leading
+// space after the directive and the trailing space before the newline,
+// keeping internal spaces — so cond is `FOO && BAR`, clean, no crutch.
 PP_IF ignore linespace: sequence dict {
-  "`if":type="pp_if" space,
+  "if":type="pp_if" space,
   *:cond=@,
   "\n"
 }
 
 PP_ELSIF ignore linespace: sequence dict {
-  "`elsif":type="elsif" space,
+  "elsif":type="elsif" space,
   *:cond=@,
   "\n"
 }
@@ -4750,14 +4818,54 @@ PP_ELSIF ignore linespace: sequence dict {
 // doesn't inherit it in a parse_from entry.
 PP_COND ignore whitespace line_comment block_comment: choice { <COND_EXPR> }
 
-PP_UNDEF ignore linespace: sequence dict {
-  "`undef":type="undef" space,
-  identifier:name=@
+// Lazy subparse target for `\`elsif NAME` when it names a macro (an `\`ifdef`
+// chain). `\`elsif` captures its cond RAW (`*:cond`) because it's dual-purpose
+// — an expression in an `\`if` chain, a macro name in an `\`ifdef` chain — so
+// the driver decides at runtime which it is and, for the name case, subparses
+// the raw cond through this rule ON DEMAND (defined_ident), the same way it
+// subparses through PP_COND for the expression case. Keeps the identifier
+// charset in the grammar, not hardcoded in the driver.
+PP_MACRO_NAME ignore linespace: sequence dict { identifier:name=@ }
+
+PP_UNDEF ignore linespace line_comment: sequence dict {
+  "undef":type="undef" space,
+  identifier:name=@, ?"\n"
 }
 
-PP_INCLUDE ignore linespace: sequence dict {
-  "`include":type="include" space,
-  std.string:path=@
+PP_INCLUDE ignore linespace line_comment: sequence dict {
+  "include":type="include" space,
+  std.string:path=@, ?"\n"
+}
+
+// `\`undefineall` — clear the ENTIRE macro table (IEEE 1800-2017 §22.5.2).
+// Must precede PP_UNDEF in the choice: "undef" is a prefix of "undefineall".
+PP_UNDEFINEALL ignore linespace line_comment: sequence dict {
+  "undefineall":type="undefineall", ?"\n"
+}
+
+// `\`line N "file" level` — renumber subsequent source lines (§22.11). Sets
+// the preprocessor's logical line/file, which the predefined `\`__LINE__` /
+// `\`__FILE__` macros then report. `level` is 0/1/2 (enter/leave include).
+PP_LINE ignore linespace line_comment: sequence dict {
+  "line":type="line" space,
+  std.int:line=@ space,
+  std.string:file=@ space,
+  std.int:level=@, ?"\n"
+}
+
+// Compiler directives the preprocessor does NOT act on — it must pass them
+// through verbatim to the parser REGARDLESS of the on_undefined policy (they
+// are directives, not macros). Recognised here with type="passthrough" so
+// the driver's "non-directive token → emit raw span" branch copies them out,
+// instead of their falling through the undefined-macro path (which would
+// drop them under on_undefined=Empty or throw under Error). §22.
+PP_PASSTHROUGH ignore linespace line_comment: sequence dict {
+  <PP_CDIR_KW>:type="passthrough"
+}
+PP_CDIR_KW: choice {
+  "timescale", "resetall", "default_nettype", "celldefine", "endcelldefine",
+  "begin_keywords", "end_keywords", "unconnected_drive",
+  "nounconnected_drive", "pragma"
 }
 
 // `\`define NAME [(p1, …)] body`. The name + optional params sits
@@ -4772,7 +4880,7 @@ PP_INCLUDE ignore linespace: sequence dict {
 // explicit INNER so scope's byte-scanner consumes it instead of
 // treating the trailing `\n` as the body's terminator.
 PP_DEFINE: sequence dict {
-  "`define":type="define" space,
+  "define":type="define" space,
   <DECL>:decl=@ space,
   <DEFINE_BODY>:body=@,
   "\n"
@@ -4799,8 +4907,15 @@ PP_DEFINE: sequence dict {
 // paste, stringify) are NOT segmented here — that's deferred to first
 // expansion via MACRO_BODY, so a macro that's defined-but-never-used
 // never pays for segmenting its body.
-DEFINE_BODY ignore linespace: scope array {
-  <LINE_CONT>
+// `ignore line_comment block_comment` — the scope DISCARDS comments as it
+// captures (engine consume-and-discard), so `// …` / `/* … */` in a macro
+// body is dropped by the grammar, not C++ string-scanning. Discard is
+// tried before the `<LINE_CONT>` inner, so `// cmt \<newline>` correctly
+// eats the `\` (comment to physical line end). `<STRING>` makes string
+// literals atomic so a `//` inside `"…"` is NOT taken as a comment. NOT
+// linespace: inter-token whitespace in the body is CONTENT, kept.
+DEFINE_BODY ignore line_comment_cont block_comment: scope array {
+  <LINE_CONT>, <STRING>
 }
 
 // Expansion-time: segment a stored (continuation-joined, comment-
@@ -4810,9 +4925,21 @@ DEFINE_BODY ignore linespace: scope array {
 // INNER: the stored body is already line-joined, so none remain.
 MACRO_BODY ignore linespace: sequence dict {
   scope array {
-    <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
+    <STRINGIFY>, <TOKEN_PASTE>, <PP_BODY_DIRECTIVE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
   }:segments=@,
   "\n"
+}
+
+// Decide-while-parsing: `\`else`/`\`endif` are DIRECTIVES (a fixed keyword
+// vocabulary, no table needed), and they take NO arguments. Recognized
+// BEFORE the generic <PP_MACRO_USE> so a following `(...)` — e.g.
+// `\`endif (!(x))` — is NOT swallowed as directive "args" (which would be
+// dropped at render). Emits the same `{type:"macro_use", name}` shape the
+// renderer's conditional handling already expects. `\`ifdef`/`\`ifndef` are
+// safe via PP_MACRO_USE (their cond identifier breaks the arg capture).
+PP_BODY_DIRECTIVE: sequence dict {
+  "`":type="macro_use",
+  choice { 'endif':@, 'else':@ }:name=@
 }
 
 // `\`\`` — token paste operator (IEEE 1800-2017 §22.5.1). Adjacent
@@ -4862,10 +4989,15 @@ DECL ignore: sequence dict {
 // the next top-level `,` or `)` — `sv_balanced_arg` is exactly
 // this scanner, so the default value captures cleanly even when
 // it itself contains balanced parens (`ARGS_ = ()`, `X = (a+b)`).
-PARAMS ignore linespace: sequence array {
+// Empty ignore so `(` MUST be adjacent to the macro name — a space makes
+// the define object-like (LRM §22.5.1: `\`define FOO (x)` is object-like,
+// body `(x)`). Internal whitespace is handled by PARAM_LIST's linespace.
+PARAMS ignore: sequence {
   "(",
-  repeat <PARAM_FORMAL> separator ",",
-  ")"
+  <PARAM_LIST>
+}
+PARAM_LIST ignore linespace: sequence array {
+  repeat <PARAM_FORMAL> separator ",", ")"
 }
 
 PARAM_FORMAL: sequence dict {
@@ -4874,7 +5006,8 @@ PARAM_FORMAL: sequence dict {
 }
 
 PARAM_FORMAL_DEFAULT: sequence dict {
-  "=", sv_balanced_arg:value=@
+  "=", scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+               std.string, std.line_comment, std.block_comment }:value=@
 }
 
 // `\`NAME[(args)]` use site. No explicit ignore — inherit from
@@ -4911,10 +5044,87 @@ PP_MACRO_USE ignore: sequence dict {
 // that (see handle/render). `ignore linespace` applies between structural
 // items (around `,`, before `)`); whitespace INSIDE an arg is preserved
 // by the scanner.
-MACRO_ARGS ignore linespace: sequence array {
-  "(",
-  repeat sv_balanced_arg separator ",",
+// `ignore whitespace` (not just linespace): a macro call may span
+// physical lines (`\`M("a",\n  b)`), and a macro arg is a token sequence
+// (LRM §22.5.1) — so inter-arg whitespace INCLUDING newlines is skipped
+// by the grammar between `(` / `,` / `)` and each MACRO_ARG. Without
+// this a leading call-site newline leaks into the arg and, inside a
+// `\`"…\`"` stringify, forms an illegal multi-line string literal.
+MACRO_ARGS ignore whitespace: sequence array {
+  ?linespace, "(",
+  repeat <MACRO_ARG> separator ",",
   ")"
+}
+
+// One macro argument as a grammar SCOPE producing a typed segment AST
+// (replaces the sv_balanced_arg C++ terminal). The arg is segmented like
+// a macro body — STRING/PARAM_REF/PP_MACRO_USE/STRINGIFY/TOKEN_PASTE —
+// PLUS `group` segments for balanced ()/{}/[]. A group is ATOMIC for
+// SPLITTING (its inner `,`/`)` can't end the arg) but its `items` are
+// segmented, so substitution RECURSES into it to reach param refs. This
+// lets args stay AST end-to-end (no re-parse per nesting level); a
+// string literal is atomic so formals inside it are never substituted,
+// and a `,` inside a string/comment/bracket never splits the arg. Split
+// stops at the top-level `,`/`)` (MACRO_ARGS siblings).
+// `ignore line_comment block_comment` — comments in an arg are DISCARDED
+// by the engine (consume-and-discard), not captured, so nothing has to
+// strip them downstream (a `//` in a single-line expansion would
+// otherwise swallow the rest of the line). Args aren't continuation-
+// joined, so plain line_comment (not _cont) is right here.
+MACRO_ARG ignore line_comment block_comment: scope array {
+  <ARG_GROUP_PAREN>, <ARG_GROUP_BRACE>, <ARG_GROUP_BRACKET>,
+  <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
+}
+
+// Recursive balanced-group segments — each stops at its OWN closing
+// bracket and recurses (via its ITEMS rule) into the full arg-segment
+// set, so nested content is one atomic segment whose `items` remain
+// substitutable. Each ITEMS rule carries `ignore line_comment
+// block_comment` so comments inside a group are discarded too — that's
+// what lets the render-side `//` strip go away.
+ARG_GROUP_PAREN: sequence dict {
+  "(":type="group_paren", <ARG_ITEMS_P>:items=@, ")"
+}
+ARG_GROUP_BRACE: sequence dict {
+  "{":type="group_brace", <ARG_ITEMS_B>:items=@, "}"
+}
+ARG_GROUP_BRACKET: sequence dict {
+  "[":type="group_bracket", <ARG_ITEMS_K>:items=@, "]"
+}
+ARG_ITEMS_P ignore line_comment block_comment: scope array {
+  <ARG_GROUP_PAREN>, <ARG_GROUP_BRACE>, <ARG_GROUP_BRACKET>,
+  <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
+}
+ARG_ITEMS_B ignore line_comment block_comment: scope array {
+  <ARG_GROUP_PAREN>, <ARG_GROUP_BRACE>, <ARG_GROUP_BRACKET>,
+  <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
+}
+ARG_ITEMS_K ignore line_comment block_comment: scope array {
+  <ARG_GROUP_PAREN>, <ARG_GROUP_BRACE>, <ARG_GROUP_BRACKET>,
+  <STRINGIFY>, <TOKEN_PASTE>, <PP_MACRO_USE>, <STRING>, <PARAM_REF>
+}
+
+// STRING-mode balanced brackets — capture raw text (host re-parses it)
+// for the non-macro-arg sites (port lists, assert bodies, param
+// defaults, type params). Same atomic-bracket splitting as the AST
+// groups above, but they don't need a substitutable AST, only text.
+ARG_PARENS: sequence {
+  "(",
+  scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+          std.string, std.line_comment, std.block_comment },
+  ")"
+}
+ARG_BRACES: sequence {
+  "{",
+  scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+          std.string, std.line_comment, std.block_comment },
+  "}"
+}
+ARG_BRACKETS: sequence {
+  "[",
+  scope { <ARG_PARENS>, <ARG_BRACES>, <ARG_BRACKETS>,
+          std.string, std.line_comment, std.block_comment },
+  "]"
 }
 
 STRING: sequence dict {

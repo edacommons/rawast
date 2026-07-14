@@ -47,31 +47,6 @@ enum class Container {
     Dict,
 };
 
-// Preprocessor semantic role for a grammar rule, set via the `:#role="..."`
-// engine-reserved binding. Annotates the rule with the conceptual operation
-// the preprocessor walker should perform when it encounters a value
-// produced by this rule. `None` (the default) means the rule has no
-// preprocessor semantics and is treated as ordinary structural data.
-//
-// String-form names used in `:#role="..."` are the lowercased variant of
-// each enumerator. See preprocessor.hpp for the string ↔ enum helpers.
-enum class PpRole {
-    None,
-    Define,
-    Undef,
-    Ifdef,
-    Ifndef,
-    If,
-    Elsif,
-    Else,
-    Endif,
-    Include,
-    MacroUse,
-    Paste,
-    Stringify,
-    Text,
-};
-
 // Strong-typed handle into the Engine's node arena.
 // Stable across arena growth (unlike list/vector iterators).
 class NodeId {
@@ -239,12 +214,15 @@ public:
     // no subparse. Set by the .rawast `:#subparse=<RULE>` binding.
     NodeId subparse_start;
 
-    // Preprocessor semantic role for this rule, set by `:#role="..."`.
-    // None (the default) means no preprocessor semantics. When the
-    // Preprocessor walker visits a value produced by this node, it
-    // dispatches on this role to apply the corresponding operation
-    // (register a macro, expand a use, branch on an ifdef, etc.).
-    PpRole pp_role = PpRole::None;
+    // Line-directive bindings. When set on a Parse-kind node, after the
+    // terminal parser succeeds the engine feeds the produced value back
+    // into the stream reader's cursor: `sets_reader_line` re-syncs the
+    // line counter (int value), `sets_reader_file` the current file
+    // (string value). Set by the .rawast `:#linenum=@` / `:#filename=@`
+    // bindings. Lets a grammar own `\`line`-style directive handling
+    // without any host/C++ special-casing.
+    bool sets_reader_line = false;
+    bool sets_reader_file = false;
 
     std::vector<NodeId> children;
 };

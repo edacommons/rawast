@@ -134,9 +134,16 @@ std::shared_ptr<ArrayValue> body_of(const ValuePtr& ast) {
 std::shared_ptr<ArrayValue> body_segments_of(Grammar& g, const ValuePtr& ast) {
     auto raw = body_of(ast);
     REQUIRE(raw);
+    // DEFINE_BODY captures text runs + {type:"string"} segments (its
+    // <STRING> inner makes strings atomic so a `//` inside one isn't a
+    // comment). Reconstruct the raw body text — re-quoting strings.
     std::string text;
-    for (auto& seg : raw->data())
-        if (auto s = as_string(seg)) text += s->data();
+    for (auto& seg : raw->data()) {
+        if (auto s = as_string(seg)) { text += s->data(); continue; }
+        if (auto d = std::dynamic_pointer_cast<DictValue>(seg))
+            if (str_field(d, "type") == "string")
+                text += "\"" + str_field(d, "value") + "\"";
+    }
     auto stream = Stream::from_string(text + "\n");
     ValuePool pool;
     auto r = g.parse_from(stream, pool, g.rule_id("MACRO_BODY"),
@@ -147,6 +154,45 @@ std::shared_ptr<ArrayValue> body_segments_of(Grammar& g, const ValuePtr& ast) {
     auto it = d->data().find("segments");
     REQUIRE(it != d->data().end());
     return std::dynamic_pointer_cast<ArrayValue>(it->second);
+}
+
+// A macro arg is now a SEGMENT-LIST (MACRO_ARG scope array), not a flat
+// StringValue. Render it back to its source text for shape assertions.
+std::string arg_text(const ValuePtr& seg) {
+    if (!seg) return {};
+    if (auto arr = std::dynamic_pointer_cast<ArrayValue>(seg)) {
+        std::string out;
+        for (auto& s : arr->data()) out += arg_text(s);
+        return out;
+    }
+    if (auto s = as_string(seg)) return s->data();
+    auto d = std::dynamic_pointer_cast<DictValue>(seg);
+    if (!d) return {};
+    auto ty = str_field(d, "type");
+    if (ty == "ref") return str_field(d, "value");
+    if (ty == "string") return "\"" + str_field(d, "value") + "\"";
+    if (ty == "group_paren" || ty == "group_brace" || ty == "group_bracket") {
+        const char* o = ty == "group_brace" ? "{" : ty == "group_bracket" ? "[" : "(";
+        const char* c = ty == "group_brace" ? "}" : ty == "group_bracket" ? "]" : ")";
+        std::string r = o;
+        auto it = d->data().find("items");
+        if (it != d->data().end()) r += arg_text(it->second);
+        return r + c;
+    }
+    if (ty == "macro_use") {
+        std::string r = "`" + str_field(d, "name");
+        if (auto a = d->data().find("args"); a != d->data().end())
+            if (auto arr = std::dynamic_pointer_cast<ArrayValue>(a->second)) {
+                r += "(";
+                for (std::size_t i = 0; i < arr->data().size(); ++i) {
+                    if (i) r += ",";
+                    r += arg_text(arr->data()[i]);
+                }
+                r += ")";
+            }
+        return r;
+    }
+    return {};
 }
 
 } // namespace
@@ -400,7 +446,7 @@ TEST_CASE("sv_pp define: body MACRO_USE with one argument") {
     auto args = std::dynamic_pointer_cast<ArrayValue>(seg->data()["args"]);
     REQUIRE(args);
     REQUIRE(args->data().size() == 1);
-    CHECK(as_string(args->data()[0])->data() == "x");
+    CHECK(arg_text(args->data()[0]) == "x");
 }
 
 TEST_CASE("sv_pp define: body MACRO_USE with multiple arguments") {
@@ -414,19 +460,20 @@ TEST_CASE("sv_pp define: body MACRO_USE with multiple arguments") {
     auto args = std::dynamic_pointer_cast<ArrayValue>(seg->data()["args"]);
     REQUIRE(args);
     REQUIRE(args->data().size() == 3);
-    CHECK(as_string(args->data()[0])->data() == "x");
-    CHECK(as_string(args->data()[1])->data() == "y");
-    CHECK(as_string(args->data()[2])->data() == "z");
+    CHECK(arg_text(args->data()[0]) == "x");
+    CHECK(arg_text(args->data()[1]) == "y");
+    CHECK(arg_text(args->data()[2]) == "z");
 }
 
-TEST_CASE("sv_pp define: body MACRO_USE does NOT bind space-separated args at parse time") {
+TEST_CASE("sv_pp define: body MACRO_USE binds space-separated args at parse time") {
     auto g = load_grammar();
-    // Whether a SPACE-separated `(...)` is arguments is table-dependent
-    // (function-like vs object-like), which the grammar can't know — so
-    // parse-time captures only an IMMEDIATE `(args)`. `\`OTHER (x)` parses
-    // as macro_use OTHER with NO args; the ` (x)` is separate body
-    // content. The expander binds it at expansion time when NAME is known
-    // function-like (see the process() test below).
+    // The grammar CAPTURES `\`NAME (args)` — MACRO_ARGS consumes an optional
+    // leading `?linespace` before `(`, so a space before the paren still
+    // binds the args. Whether those args are USED (function-like) or the
+    // parens re-emitted as text (object-like) is the table-dependent
+    // DECISION, made at expansion (see the process() tests). The capture is
+    // the grammar's job; a `\`A `B` (no paren) still keeps its space because
+    // the optional linespace backtracks when no `(` follows.
     auto ast = parse(g, "`define A `OTHER (x)\n");
     auto body = body_segments_of(g, ast);
     REQUIRE(body);
@@ -435,7 +482,10 @@ TEST_CASE("sv_pp define: body MACRO_USE does NOT bind space-separated args at pa
     REQUIRE(seg0);
     CHECK(str_field(seg0, "type") == "macro_use");
     CHECK(str_field(seg0, "name") == "OTHER");
-    CHECK(seg0->data().find("args") == seg0->data().end());  // no args bound
+    auto args = std::dynamic_pointer_cast<ArrayValue>(seg0->data()["args"]);
+    REQUIRE(args);
+    REQUIRE(args->data().size() == 1);
+    CHECK(arg_text(args->data()[0]) == "x");
 }
 
 TEST_CASE("sv_pp define: expansion binds space-separated args for a function-like macro") {
@@ -511,8 +561,8 @@ TEST_CASE("sv_pp MACRO_ARGS: numeric literal args") {
     auto ast = parse(g, "`define A `OTHER(5, 10)\n");
     auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
-    CHECK(as_string(args->data()[0])->data() == "5");
-    CHECK(as_string(args->data()[1])->data() == "10");
+    CHECK(arg_text(args->data()[0]) == "5");
+    CHECK(arg_text(args->data()[1]) == "10");
 }
 
 TEST_CASE("sv_pp MACRO_ARGS: string literal arg") {
@@ -523,7 +573,7 @@ TEST_CASE("sv_pp MACRO_ARGS: string literal arg") {
     // The arg span captures the string literal verbatim; the embedded
     // `,` inside the quotes does NOT split the args list (sv_balanced_arg
     // skips the whole `"…"` so the inner `,` isn't a top-level separator).
-    CHECK(as_string(args->data()[0])->data() == "\"hello, world\"");
+    CHECK(arg_text(args->data()[0]) == "\"hello, world\"");
 }
 
 TEST_CASE("sv_pp MACRO_ARGS: expression arg with operators") {
@@ -531,8 +581,8 @@ TEST_CASE("sv_pp MACRO_ARGS: expression arg with operators") {
     auto ast = parse(g, "`define A `OTHER(a + 1, b * 2)\n");
     auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
-    CHECK(as_string(args->data()[0])->data() == "a + 1");
-    CHECK(as_string(args->data()[1])->data() == "b * 2");
+    CHECK(arg_text(args->data()[0]) == "a + 1");
+    CHECK(arg_text(args->data()[1]) == "b * 2");
 }
 
 TEST_CASE("sv_pp MACRO_ARGS: nested parens — `,` inside `()` doesn't split") {
@@ -540,8 +590,8 @@ TEST_CASE("sv_pp MACRO_ARGS: nested parens — `,` inside `()` doesn't split") {
     auto ast = parse(g, "`define A `OTHER((a, b), c)\n");
     auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
-    CHECK(as_string(args->data()[0])->data() == "(a, b)");
-    CHECK(as_string(args->data()[1])->data() == "c");
+    CHECK(arg_text(args->data()[0]) == "(a, b)");
+    CHECK(arg_text(args->data()[1]) == "c");
 }
 
 TEST_CASE("sv_pp MACRO_ARGS: nested function call arg") {
@@ -549,8 +599,8 @@ TEST_CASE("sv_pp MACRO_ARGS: nested function call arg") {
     auto ast = parse(g, "`define A `OTHER(foo(1, 2), 3)\n");
     auto args = macro_use_args(g, ast);
     REQUIRE(args->data().size() == 2);
-    CHECK(as_string(args->data()[0])->data() == "foo(1, 2)");
-    CHECK(as_string(args->data()[1])->data() == "3");
+    CHECK(arg_text(args->data()[0]) == "foo(1, 2)");
+    CHECK(arg_text(args->data()[1]) == "3");
 }
 
 // PARAM_FORMAL_DEFAULT shares the `sv_balanced_arg` scanner with
@@ -806,6 +856,8 @@ TEST_CASE("Preprocessor::process: include callback nullopt → built-in fallback
     PpOptions opts;
     opts.include_source = [](const std::string&, const std::string&)
         -> std::optional<PpIncludeSource> { return std::nullopt; };
+    // This case tests the WARN path specifically; the default is now Error.
+    opts.on_missing_include = PpOnMissingInclude::Warn;
     Preprocessor pp(g, opts);
     pp.process("`include \"does_not_exist.svh\"\n");
     // Built-in fallback runs, finds nothing, warns. The macro
@@ -1154,6 +1206,59 @@ TEST_CASE("built-in eval: integer comparison `\\`if W > 16`") {
     Preprocessor pp(g);
     pp.process("`define W 32\n`if W > 16\n`define BIG 1\n`endif\n");
     CHECK(pp.is_defined("BIG"));
+}
+
+TEST_CASE("built-in eval: a condition folds macros through the ONE expansion") {
+    auto g = load_grammar();
+    // Nested macro in a bare-ident condition (W -> `\`X -> 16): resolved via
+    // the same expansion mechanism as body text, not a shallow body read.
+    {
+        Preprocessor pp(g);
+        pp.process("`define X 16\n`define W `X\n"
+                   "`if W > 8\n`define TAKEN 1\n`endif\n");
+        CHECK(pp.is_defined("TAKEN"));
+    }
+    // A backtick macro USE in the condition itself is expanded before eval.
+    {
+        Preprocessor pp(g);
+        pp.process("`define W 16\n`if `W > 8\n`define TAKEN 1\n`endif\n");
+        CHECK(pp.is_defined("TAKEN"));
+    }
+}
+
+// End-to-end: the full SV expression surface folds in `\`if — the same
+// COND_EXPR the parser uses, evaluated by default_pp_expr_eval. Each
+// takes the first branch iff the constant condition is non-zero.
+TEST_CASE("built-in eval: shift / bitwise / ternary / sized literals in `\\`if") {
+    auto g = load_grammar();
+    auto takes = [&](const std::string& cond) {
+        Preprocessor pp(g);
+        pp.process("`if " + cond + "\n`define TAKEN 1\n`endif\n");
+        return pp.is_defined("TAKEN");
+    };
+    // Shifts.
+    CHECK(takes("1 << 3"));
+    CHECK_FALSE(takes("0 << 3"));
+    CHECK(takes("16 >> 2"));
+    CHECK_FALSE(takes("1 >> 3"));
+    // Bitwise.
+    CHECK(takes("6 & 2"));
+    CHECK_FALSE(takes("6 & 1"));
+    CHECK(takes("5 | 0"));
+    CHECK_FALSE(takes("6 ^ 6"));
+    CHECK(takes("~0"));
+    // Ternary selects the branch, then takes its truthiness.
+    CHECK_FALSE(takes("1 ? 0 : 1"));
+    CHECK(takes("0 ? 0 : 1"));
+    CHECK(takes("2 ? 5 : 0"));
+    // Sized / based literals, incl. signed sign-extension and truncation.
+    CHECK(takes("8'hFF"));
+    CHECK_FALSE(takes("8'h00"));
+    CHECK(takes("4'sd8 < 0"));       // signed 4-bit 8 == -8
+    CHECK_FALSE(takes("4'h10 != 0")); // truncates to 4 bits → 0
+    // Composed.
+    CHECK(takes("(1 << 4) | 1"));
+    CHECK(takes("(2 << 2) == 8"));
 }
 
 // ─── Top-level macro expansion ──────────────────────────────────────

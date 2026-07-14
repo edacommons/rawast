@@ -101,7 +101,11 @@ private:
     bool is_backtrack_;
     bool has_mark_ = false;
     bool has_neg_mark_ = false;
-    std::vector<NodeId> children_;
+    // Points at the node's children (a verbatim 1:1 view — read-only for the
+    // Frame's lifetime). The Node outlives the Frame, so a pointer avoids
+    // copying the vector into every frame (that copy was the dominant parse
+    // allocation). child_idx_ is the separate iteration cursor.
+    const std::vector<NodeId>* children_ = nullptr;
     std::size_t child_idx_ = 0;
     std::uint32_t iter_count_ = 0;
     std::uint32_t min_ = 0;
