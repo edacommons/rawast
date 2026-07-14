@@ -1835,13 +1835,14 @@ DEF_TECHNOLOGY_CMD: sequence dict {
 // Repeatable in DEF; each HISTORY lands in `items[]` as a typed
 // `History` dict in source order, mirroring how every other DEF
 // body section (UNITS / DIEAREA / ROW / COMPONENTS) is captured.
-// No `space` postfix on the HISTORY keyword: the `*` raw-consume
-// bypasses ignore-set whitespace skipping and captures the byte
-// immediately after `HISTORY`, including the leading space. On
-// save the captured text starts with that space, so a postfix
-// would emit a doubled space. The trailing `;` consumes the
-// terminator; everything between lands in `text` verbatim.
-DEF_HISTORY_CMD: sequence dict {
+// `ignore:` (empty) on this rule: since `*` raw-consume now respects
+// the rule's ignore set (stopping at a key OR an ignore-match), an
+// inherited whitespace ignore would trim the leading space after
+// `HISTORY` and the trailing space before `;`. An empty ignore keeps
+// the `*` capturing every byte between `HISTORY` and `;` verbatim.
+// No `space` postfix on the HISTORY keyword: the capture already
+// starts with the leading space, so a postfix would double it on save.
+DEF_HISTORY_CMD ignore: sequence dict {
   "HISTORY":type="History",
   *:text=@,
   ";" newline
