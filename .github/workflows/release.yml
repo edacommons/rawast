@@ -111,6 +111,11 @@ jobs:
           # 32-bit and musl targets triple the matrix for platforms the
           # corpus has never been run on; the sdist covers them.
           CIBW_SKIP: "*-win32 *_i686 *-musllinux*"
+          # std::to_chars for floating point exists from macOS 13.3; the
+          # default deployment target predates it and the availability
+          # guard refuses. Wheels require 13.3+; older Macs build the
+          # sdist, which is what they did before wheels existed.
+          CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=13.3
           # Import-and-parse is the smoke test: a wheel that ships but
           # cannot load a bundled grammar is worse than no wheel.
           CIBW_TEST_COMMAND: >-
