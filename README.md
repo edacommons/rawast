@@ -10,7 +10,7 @@ Three properties make this work: it's a structural parser driven by an external 
 
 The planned `.jast` container builds on this: grammar + parsed tree, serialised together in a binary file. "Parse once" — every later consumer reads the value tree directly, never re-parses text, and can still emit the text form because the grammar travels with the data. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-EDA is the first proving ground because the files are large, the formats are many, and every tool currently reimplements its own reader and writer. The PoC parses 100% of a 3,132-file production corpus across four formats (GDSII / LEF / DEF / Tcl); funding is being sought to turn the PoC into shippable infrastructure.
+EDA is the first proving ground because the files are large, the formats are many, and every tool currently reimplements its own reader and writer. The PoC parses 100% of a 3,132-file production corpus across four formats (GDSII / LEF / DEF / Tcl). [`docs/ROADMAP.md`](docs/ROADMAP.md) is the path to 1.0.
 
 ## Install
 

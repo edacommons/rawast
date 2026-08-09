@@ -57,7 +57,7 @@ Plus:
 
 The work on M1–M4 is the basis of the NLnet NGI0 Commons funding application. Status (as of mid-2026): submitted; funding decisions ramping. See `PROPOSAL_v2.md` (local-only) for the detailed proposal.
 
-Sponsorship via GitHub Sponsors at https://github.com/sponsors/lanserge is the most direct way to help right now — the M1–M4 timeline scales with how much of Serge's time can be spent on this vs other commitments.
+Sponsorship via GitHub Sponsors at https://github.com/sponsors/lanserge is the most direct way to accelerate M1–M4. Each milestone is a `sponsorable`-labelled issue you can subscribe to.
 
 ## See also
 

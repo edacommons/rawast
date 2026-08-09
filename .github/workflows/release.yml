@@ -5,11 +5,16 @@
 # with `git tag -a v0.1.0 -m "..." && git push --tags`. The workflow does
 # NOT auto-publish on every main push — explicit tag is the gate.
 #
-# **What it builds.** Only the source distribution (sdist) for now. Users
-# install via `pip install rawast` and pip compiles the C++20→17 extension
-# locally against their toolchain. Pre-built wheels (cibuildwheel) can
-# follow as a separate workflow when there's enough adoption to justify
-# the matrix.
+# **What it builds.** The sdist plus pre-built wheels (cibuildwheel) for
+# CPython 3.10-3.14 on Linux x86_64, macOS x86_64/arm64 and Windows
+# AMD64 -- `pip install rawast` lands a binary in seconds instead of a
+# local C++ compile. (Linux aarch64 needs qemu-emulated builds and is
+# deferred; the abi3 one-wheel-per-platform collapse is M3 scope in
+# docs/ROADMAP.md.) The wheels live in THIS file because PyPI's trusted
+# publisher is bound to the workflow filename.
+#
+# **Dry runs.** `workflow_dispatch` builds everything and publishes
+# nothing -- validate the wheel matrix without spending a tag.
 #
 # **Trusted publishing setup (one-time, on PyPI).** Before the first
 # release run, log in to https://pypi.org → project / pending project
@@ -29,6 +34,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 jobs:
   build-sdist:
@@ -86,9 +92,46 @@ jobs:
           path: dist/*.tar.gz
           retention-days: 14
 
+  build-wheels:
+    name: Wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-13 is the last x86_64 macOS runner; macos-14+ are arm64.
+        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+          # 32-bit and musl targets triple the matrix for platforms the
+          # corpus has never been run on; the sdist covers them.
+          CIBW_SKIP: "*-win32 *_i686 *-musllinux*"
+          # Import-and-parse is the smoke test: a wheel that ships but
+          # cannot load a bundled grammar is worse than no wheel.
+          CIBW_TEST_COMMAND: >-
+            python -c "import rawast;
+            g = rawast.Grammar('json');
+            assert g.parse_string('{\"ok\": [1, 2]}') == {'ok': [1, 2]};
+            print('wheel OK')"
+
+      - name: Upload wheels as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          retention-days: 14
+
   publish:
     name: Publish to PyPI
-    needs: build-sdist
+    # A dispatch run is a dry run: build and test everything, publish
+    # nothing. Only a tag push reaches PyPI.
+    if: github.event_name == 'push'
+    needs: [build-sdist, build-wheels]
     runs-on: ubuntu-latest
     environment:
       # Bind to a named environment on the repo so OIDC tokens carry
@@ -102,10 +145,11 @@ jobs:
       # secrets means no key to rotate or accidentally leak.
       id-token: write
     steps:
-      - name: Download sdist artifact
+      - name: Download all distribution artifacts
         uses: actions/download-artifact@v4
         with:
-          name: sdist
+          pattern: "*"
+          merge-multiple: true
           path: dist
 
       - name: Publish to PyPI via OIDC
