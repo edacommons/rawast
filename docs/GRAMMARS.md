@@ -65,7 +65,7 @@ Plus every real-world variant surfaced by a local 436-DEF corpus chase: NEW cont
 
 **Corpus:**
 - `parse → save → reparse` is **435 / 435 structurally equivalent** on a 435-file local DEF corpus.
-- One remaining file (a 100 MB+ ChipFlow output) parses and round-trips cleanly but is skipped from the automated runner for speed.
+- One remaining file (a 100 MB+ production-flow output) parses and round-trips cleanly but is skipped from the automated runner for speed.
 - Synthetic full-spec fixture (`python/tests/data/def_spec_coverage.def`) exercises every documented section + every real-world variant from the corpus chase.
 
 ### Parser group
