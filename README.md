@@ -134,7 +134,8 @@ SPEF ([#16](https://github.com/edacommons/rawast/issues/16)),
 SDC ([#17](https://github.com/edacommons/rawast/issues/17)),
 OASIS ([#18](https://github.com/edacommons/rawast/issues/18)),
 SPICE ([#19](https://github.com/edacommons/rawast/issues/19)),
-EDIF ([#20](https://github.com/edacommons/rawast/issues/20)). "Done" is
+EDIF ([#20](https://github.com/edacommons/rawast/issues/20)),
+Verilog-2001 ([#5](https://github.com/edacommons/rawast/issues/5)). "Done" is
 objective: the grammar lands as data, a real-file corpus parses 100%, and
 re-emission round-trips byte-exact — and an adopting organisation's own
 corpus can prove it privately: your files prove it, your name ships on it,
