@@ -146,4 +146,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Author
 
-Serge Rabyking · [LinkedIn](https://linkedin.com/in/serge-rabyking-b556ab89)
+Serge Rabyking · [serge.rabyking.com](https://serge.rabyking.com)
