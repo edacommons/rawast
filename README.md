@@ -3,6 +3,7 @@
 [![CI](https://github.com/edacommons/rawast/actions/workflows/ci.yml/badge.svg)](https://github.com/edacommons/rawast/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/rawast)](https://pypi.org/project/rawast/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/site-rawast.org-3e63dd)](https://rawast.org)
 
 Most parsers do too much. They build a semantic model of the file when all you need is its **structure** — scopes, lists, fields. The meaning belongs to the application reading the parsed data, not to the parser itself. But the lex+yacc tradition forces both: tokenize first, then reconstruct everything with a state machine. Covering a full format that way is enormous work — and almost never finished.
 
