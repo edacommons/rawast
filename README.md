@@ -128,6 +128,18 @@ examples/            small worked examples (parse → modify → save, etc.)
 
 The work outlined in [`docs/ROADMAP.md`](docs/ROADMAP.md) is the basis of the NLnet NGI0 Commons funding application. Sponsorship via GitHub Sponsors at https://github.com/sponsors/lanserge is the most direct way to help.
 
+Beyond the roadmap milestones, **adopt a format**: a sponsorship puts one
+more format into the engine as a grammar — Liberty ([#15](https://github.com/edacommons/rawast/issues/15)),
+SPEF ([#16](https://github.com/edacommons/rawast/issues/16)),
+SDC ([#17](https://github.com/edacommons/rawast/issues/17)),
+OASIS ([#18](https://github.com/edacommons/rawast/issues/18)),
+SPICE ([#19](https://github.com/edacommons/rawast/issues/19)),
+EDIF ([#20](https://github.com/edacommons/rawast/issues/20)). "Done" is
+objective: the grammar lands as data, a real-file corpus parses 100%, and
+re-emission round-trips byte-exact — and an adopting organisation's own
+corpus can prove it privately: your files prove it, your name ships on it,
+your files stay yours.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
